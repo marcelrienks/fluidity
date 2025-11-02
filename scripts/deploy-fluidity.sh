@@ -377,9 +377,15 @@ bash "$BUILD_SCRIPT"
 # Ensure S3 bucket exists
 echo ""
 echo "=== Preparing Lambda Artifacts Bucket ==="
-if aws s3 ls "s3://$LAMBDA_S3_BUCKET" --region "$REGION" 2>&1 | grep -q 'NoSuchBucket'; then
+BUCKET_CHECK=$(aws s3 ls "s3://$LAMBDA_S3_BUCKET" --region "$REGION" 2>&1)
+if echo "$BUCKET_CHECK" | grep -q 'NoSuchBucket'; then
     echo "Creating S3 bucket: $LAMBDA_S3_BUCKET"
     aws s3 mb "s3://$LAMBDA_S3_BUCKET" --region "$REGION"
+    if [[ $? -ne 0 ]]; then
+        echo "[ERROR] Failed to create S3 bucket"
+        exit 1
+    fi
+    echo "[OK] S3 bucket created successfully"
 else
     echo "S3 bucket exists: $LAMBDA_S3_BUCKET"
 fi

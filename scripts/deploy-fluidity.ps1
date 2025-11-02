@@ -436,10 +436,15 @@ if (-not (Test-Path $BuildScript)) {
 
 # Ensure S3 bucket exists
 Write-Host "`n=== Preparing Lambda Artifacts Bucket ===" -ForegroundColor Green
-$BucketExists = aws s3 ls "s3://$LambdaS3Bucket" --region $Region 2>&1
+$BucketCheck = aws s3 ls "s3://$LambdaS3Bucket" --region $Region 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Creating S3 bucket: $LambdaS3Bucket" -ForegroundColor Yellow
     aws s3 mb "s3://$LambdaS3Bucket" --region $Region
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Failed to create S3 bucket" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "[OK] S3 bucket created successfully" -ForegroundColor Green
 }
 else {
     Write-Host "S3 bucket exists: $LambdaS3Bucket" -ForegroundColor Gray

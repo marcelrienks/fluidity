@@ -99,15 +99,15 @@ Parameters:
   CertPem:
     Type: String
     NoEcho: true
-    Description: Server certificate PEM (plain text from manage-certs.sh)
+    Description: Server certificate PEM (JSON-encoded string from deployment script)
   KeyPem:
     Type: String
     NoEcho: true
-    Description: Server private key PEM (plain text from manage-certs.sh)
+    Description: Server private key PEM (JSON-encoded string from deployment script)
   CaPem:
     Type: String
     NoEcho: true
-    Description: CA certificate PEM (plain text from manage-certs.sh)
+    Description: CA certificate PEM (JSON-encoded string from deployment script)
 
 Resources:
   # ============================================================================
@@ -120,7 +120,11 @@ Resources:
       Name: !Sub '${AWS::StackName}-certificates'
       Description: TLS certificates for Fluidity server
       SecretString: !Sub |
-        {"cert_pem":${CertPem},"key_pem":${KeyPem},"ca_pem":${CaPem}}
+        {
+          "cert_pem": ${CertPem},
+          "key_pem": ${KeyPem},
+          "ca_pem": ${CaPem}
+        }
   
   # ============================================================================
   # LOGGING
