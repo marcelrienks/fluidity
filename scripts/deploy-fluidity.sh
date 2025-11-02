@@ -358,6 +358,42 @@ fi
 
 echo "[OK] All required parameters validated successfully"
 
+# Set Lambda S3 bucket name
+LAMBDA_S3_BUCKET="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
+LAMBDA_S3_KEY_PREFIX="fluidity/"
+
+# Build and upload Lambda functions
+echo ""
+echo "=== Building Lambda Functions ==="
+BUILD_SCRIPT="$SCRIPT_DIR/build-lambdas.sh"
+if [[ ! -f "$BUILD_SCRIPT" ]]; then
+    echo "[ERROR] Build script not found: $BUILD_SCRIPT"
+    exit 1
+fi
+
+# Build Lambdas
+bash "$BUILD_SCRIPT"
+
+# Ensure S3 bucket exists
+echo ""
+echo "=== Preparing Lambda Artifacts Bucket ==="
+if aws s3 ls "s3://$LAMBDA_S3_BUCKET" --region "$REGION" 2>&1 | grep -q 'NoSuchBucket'; then
+    echo "Creating S3 bucket: $LAMBDA_S3_BUCKET"
+    aws s3 mb "s3://$LAMBDA_S3_BUCKET" --region "$REGION"
+else
+    echo "S3 bucket exists: $LAMBDA_S3_BUCKET"
+fi
+
+# Upload Lambda packages to S3
+echo ""
+echo "=== Uploading Lambda Packages to S3 ==="
+LAMBDA_BUILD_DIR="$(dirname "$SCRIPT_DIR")/build/lambdas"
+for func in wake sleep kill; do
+    echo "Uploading ${func}.zip..."
+    aws s3 cp "$LAMBDA_BUILD_DIR/${func}.zip" "s3://$LAMBDA_S3_BUCKET/${LAMBDA_S3_KEY_PREFIX}${func}.zip" --region "$REGION"
+done
+echo "[OK] Lambda packages uploaded"
+
 # Load TLS certificates for CloudFormation
 echo "Loading TLS certificates..."
 
@@ -457,6 +493,89 @@ get_stack_status() {
         --output text 2>/dev/null || echo "DOES_NOT_EXIST"
 }
 
+wait_for_stack() {
+    local stack_name="$1"
+    local operation="$2"  # 'create' or 'update'
+    
+    echo "Monitoring stack events (Ctrl+C to stop monitoring, stack will continue)..."
+    echo ""
+    
+    local last_event_time=""
+    local status=""
+    local final_statuses=""
+    
+    if [[ "$operation" == "create" ]]; then
+        final_statuses="CREATE_COMPLETE|CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED"
+    else
+        final_statuses="UPDATE_COMPLETE|UPDATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED"
+    fi
+    
+    while true; do
+        # Get current stack status
+        status=$(get_stack_status "$stack_name")
+        
+        # Check if we've reached a final state
+        if echo "$status" | grep -qE "$final_statuses"; then
+            echo ""
+            if echo "$status" | grep -q "COMPLETE"; then
+                echo "[OK] Stack $operation completed: $status"
+                return 0
+            else
+                echo "[ERROR] Stack $operation failed: $status"
+                return 1
+            fi
+        fi
+        
+        # Get latest events (only new ones)
+        local events
+        if [[ -z "$last_event_time" ]]; then
+            # First iteration - get last 5 events
+            events=$(aws cloudformation describe-stack-events \
+                --stack-name "$stack_name" \
+                --region "$REGION" \
+                --max-items 5 \
+                --query 'StackEvents[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+                --output text 2>/dev/null | tail -r 2>/dev/null || tac 2>/dev/null || awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
+        else
+            # Subsequent iterations - get events newer than last seen
+            events=$(aws cloudformation describe-stack-events \
+                --stack-name "$stack_name" \
+                --region "$REGION" \
+                --query "StackEvents[?Timestamp>\`$last_event_time\`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
+                --output text 2>/dev/null | tail -r 2>/dev/null || tac 2>/dev/null || awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
+        fi
+        
+        # Display new events
+        if [[ -n "$events" ]]; then
+            while IFS=$'\t' read -r timestamp resource status reason; do
+                # Update last seen timestamp
+                last_event_time="$timestamp"
+                
+                # Format and display event
+                local short_time=$(echo "$timestamp" | cut -d'T' -f2 | cut -d'.' -f1)
+                local display_reason=""
+                if [[ -n "$reason" ]] && [[ "$reason" != "None" ]] && [[ "$reason" != "-" ]]; then
+                    display_reason=" - $reason"
+                fi
+                
+                # Color code based on status
+                if echo "$status" | grep -q "FAILED"; then
+                    echo "[$short_time] ❌ $resource: $status$display_reason"
+                elif echo "$status" | grep -q "COMPLETE"; then
+                    echo "[$short_time] ✓ $resource: $status"
+                elif echo "$status" | grep -q "IN_PROGRESS"; then
+                    echo "[$short_time] ⏳ $resource: $status"
+                else
+                    echo "[$short_time] ℹ️  $resource: $status$display_reason"
+                fi
+            done <<< "$events"
+        fi
+        
+        # Wait before next poll
+        sleep 3
+    done
+}
+
 deploy_stack() {
     local stack_name="$1"
     local template="$2"
@@ -498,19 +617,28 @@ deploy_stack() {
 EOF
         params_arg="file://$params_file"
     elif [[ "$stack_type" == "lambda" ]]; then
-        # Lambda stack parameters (command-line is fine, no large values)
-        params_arg="ParameterKey=ECSClusterName,ParameterValue=$CLUSTER_NAME \
-ParameterKey=ECSServiceName,ParameterValue=$SERVICE_NAME \
-ParameterKey=IdleThresholdMinutes,ParameterValue=$IDLE_THRESHOLD_MINUTES \
-ParameterKey=LookbackPeriodMinutes,ParameterValue=$LOOKBACK_PERIOD_MINUTES \
-ParameterKey=SleepCheckIntervalMinutes,ParameterValue=$SLEEP_CHECK_INTERVAL_MINUTES \
-ParameterKey=DailyKillTime,ParameterValue=$DAILY_KILL_TIME \
-ParameterKey=WakeLambdaTimeout,ParameterValue=$WAKE_LAMBDA_TIMEOUT \
-ParameterKey=SleepLambdaTimeout,ParameterValue=$SLEEP_LAMBDA_TIMEOUT \
-ParameterKey=KillLambdaTimeout,ParameterValue=$KILL_LAMBDA_TIMEOUT \
-ParameterKey=APIThrottleBurstLimit,ParameterValue=$API_THROTTLE_BURST_LIMIT \
-ParameterKey=APIThrottleRateLimit,ParameterValue=$API_THROTTLE_RATE_LIMIT \
-ParameterKey=APIQuotaLimit,ParameterValue=$API_QUOTA_LIMIT"
+        # Lambda stack parameters - use JSON file for consistency
+        params_file="/tmp/fluidity-lambda-params-$$.json"
+        
+        cat > "$params_file" << EOF
+[
+  {"ParameterKey": "LambdaS3Bucket", "ParameterValue": "$LAMBDA_S3_BUCKET"},
+  {"ParameterKey": "LambdaS3KeyPrefix", "ParameterValue": "$LAMBDA_S3_KEY_PREFIX"},
+  {"ParameterKey": "ECSClusterName", "ParameterValue": "$CLUSTER_NAME"},
+  {"ParameterKey": "ECSServiceName", "ParameterValue": "$SERVICE_NAME"},
+  {"ParameterKey": "IdleThresholdMinutes", "ParameterValue": "$IDLE_THRESHOLD_MINUTES"},
+  {"ParameterKey": "LookbackPeriodMinutes", "ParameterValue": "$LOOKBACK_PERIOD_MINUTES"},
+  {"ParameterKey": "SleepCheckIntervalMinutes", "ParameterValue": "$SLEEP_CHECK_INTERVAL_MINUTES"},
+  {"ParameterKey": "DailyKillTime", "ParameterValue": "$DAILY_KILL_TIME"},
+  {"ParameterKey": "WakeLambdaTimeout", "ParameterValue": "$WAKE_LAMBDA_TIMEOUT"},
+  {"ParameterKey": "SleepLambdaTimeout", "ParameterValue": "$SLEEP_LAMBDA_TIMEOUT"},
+  {"ParameterKey": "KillLambdaTimeout", "ParameterValue": "$KILL_LAMBDA_TIMEOUT"},
+  {"ParameterKey": "APIThrottleBurstLimit", "ParameterValue": "$API_THROTTLE_BURST_LIMIT"},
+  {"ParameterKey": "APIThrottleRateLimit", "ParameterValue": "$API_THROTTLE_RATE_LIMIT"},
+  {"ParameterKey": "APIQuotaLimit", "ParameterValue": "$API_QUOTA_LIMIT"}
+]
+EOF
+        params_arg="file://$params_file"
     fi
     
     if [[ "$status" == "DOES_NOT_EXIST" ]]; then
@@ -527,8 +655,7 @@ ParameterKey=APIQuotaLimit,ParameterValue=$API_QUOTA_LIMIT"
                 "Key=ManagedBy,Value=CloudFormation" \
             --output text
         
-        echo "Waiting for stack creation..."
-        aws cloudformation wait stack-create-complete --stack-name "$stack_name" --region "$REGION"
+        wait_for_stack "$stack_name" "create"
         
         # Clean up temp file if Fargate
         if [[ -n "$params_file" ]] && [[ -f "$params_file" ]]; then
@@ -558,8 +685,7 @@ ParameterKey=APIQuotaLimit,ParameterValue=$API_QUOTA_LIMIT"
             fi
             echo "[OK] Stack is already up to date (no changes)"
         else
-            echo "Waiting for stack update..."
-            aws cloudformation wait stack-update-complete --stack-name "$stack_name" --region "$REGION"
+            wait_for_stack "$stack_name" "update"
             
             # Clean up temp file
             if [[ -n "$params_file" ]] && [[ -f "$params_file" ]]; then
@@ -638,11 +764,27 @@ case "$ACTION" in
         deploy_stack "$LAMBDA_STACK_NAME" "$LAMBDA_TEMPLATE" "lambda"
         
         echo ""
-        echo "=== Applying Stack Policy ==="
-        aws cloudformation set-stack-policy \
-            --stack-name "$FARGATE_STACK_NAME" \
-            --stack-policy-body "file://$STACK_POLICY"
-        echo "[OK] Stack policy applied"
+        echo "=== Applying Stack Policies ==="
+        
+        # Apply Fargate stack policy
+        FARGATE_STACK_POLICY="$CLOUDFORMATION_DIR/stack-policy-fargate.json"
+        if [[ -f "$FARGATE_STACK_POLICY" ]]; then
+            echo "Applying policy to Fargate stack..."
+            aws cloudformation set-stack-policy \
+                --stack-name "$FARGATE_STACK_NAME" \
+                --stack-policy-body "file://$FARGATE_STACK_POLICY"
+            echo "[OK] Fargate stack policy applied"
+        fi
+        
+        # Apply Lambda stack policy
+        LAMBDA_STACK_POLICY="$CLOUDFORMATION_DIR/stack-policy-lambda.json"
+        if [[ -f "$LAMBDA_STACK_POLICY" ]]; then
+            echo "Applying policy to Lambda stack..."
+            aws cloudformation set-stack-policy \
+                --stack-name "$LAMBDA_STACK_NAME" \
+                --stack-policy-body "file://$LAMBDA_STACK_POLICY"
+            echo "[OK] Lambda stack policy applied"
+        fi
         
         get_stack_outputs "$FARGATE_STACK_NAME"
         get_stack_outputs "$LAMBDA_STACK_NAME"
@@ -661,16 +803,41 @@ case "$ACTION" in
         echo "=== Deleting $STACK_NAME ==="
         
         # Remove stack policies first (they prevent deletion)
+        echo "Removing stack policies..."
         aws cloudformation delete-stack-policy \
-            --stack-name "$FARGATE_STACK_NAME" 2>/dev/null || true
+            --stack-name "$FARGATE_STACK_NAME" --region "$REGION" 2>/dev/null || true
+        aws cloudformation delete-stack-policy \
+            --stack-name "$LAMBDA_STACK_NAME" --region "$REGION" 2>/dev/null || true
         
-        aws cloudformation delete-stack --stack-name "$FARGATE_STACK_NAME"
-        aws cloudformation delete-stack --stack-name "$LAMBDA_STACK_NAME"
+        # Delete CloudFormation stacks
+        echo "Deleting CloudFormation stacks..."
+        aws cloudformation delete-stack --stack-name "$FARGATE_STACK_NAME" --region "$REGION"
+        aws cloudformation delete-stack --stack-name "$LAMBDA_STACK_NAME" --region "$REGION"
         
         echo "Waiting for stacks to be deleted..."
-        aws cloudformation wait stack-delete-complete --stack-name "$FARGATE_STACK_NAME"
-        aws cloudformation wait stack-delete-complete --stack-name "$LAMBDA_STACK_NAME"
+        aws cloudformation wait stack-delete-complete --stack-name "$FARGATE_STACK_NAME" --region "$REGION"
+        aws cloudformation wait stack-delete-complete --stack-name "$LAMBDA_STACK_NAME" --region "$REGION"
         echo "[OK] Stacks deleted"
+        
+        # Clean up Lambda S3 bucket
+        echo ""
+        echo "=== Cleaning Up Lambda Artifacts ==="
+        LAMBDA_S3_BUCKET="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
+        
+        # Check if bucket exists
+        if aws s3 ls "s3://$LAMBDA_S3_BUCKET" --region "$REGION" 2>/dev/null; then
+            echo "Emptying S3 bucket: $LAMBDA_S3_BUCKET"
+            aws s3 rm "s3://$LAMBDA_S3_BUCKET" --recursive --region "$REGION"
+            
+            echo "Deleting S3 bucket: $LAMBDA_S3_BUCKET"
+            aws s3 rb "s3://$LAMBDA_S3_BUCKET" --region "$REGION"
+            echo "[OK] Lambda artifacts bucket deleted"
+        else
+            echo "S3 bucket does not exist or already deleted"
+        fi
+        
+        echo ""
+        echo "[OK] All resources deleted successfully"
         ;;
     status)
         echo ""

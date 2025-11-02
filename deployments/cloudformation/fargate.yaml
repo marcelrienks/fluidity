@@ -114,17 +114,13 @@ Resources:
   # CERTIFICATE MANAGEMENT
   # ============================================================================
   
-  CertificateSecret:
+  CertificatesSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: fluidity/certificates
-      Description: mTLS certificates for Fluidity server and agent
+      Name: !Sub '${AWS::StackName}-certificates'
+      Description: TLS certificates for Fluidity server
       SecretString: !Sub |
-        {
-          "cert_pem": "${CertPem}",
-          "key_pem": "${KeyPem}",
-          "ca_pem": "${CaPem}"
-        }
+        {"cert_pem":${CertPem},"key_pem":${KeyPem},"ca_pem":${CaPem}}
   
   # ============================================================================
   # LOGGING
@@ -161,7 +157,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref CertificateSecret
+                Resource: !Ref CertificatesSecret
       Path: '/'
 
   TaskRole:
@@ -225,11 +221,11 @@ Resources:
               Protocol: tcp
           Secrets:
             - Name: CERT_PEM
-              ValueFrom: !Sub '${CertificateSecret}:cert_pem::'
+              ValueFrom: !Sub '${CertificatesSecret}:cert_pem::'
             - Name: KEY_PEM
-              ValueFrom: !Sub '${CertificateSecret}:key_pem::'
+              ValueFrom: !Sub '${CertificatesSecret}:key_pem::'
             - Name: CA_PEM
-              ValueFrom: !Sub '${CertificateSecret}:ca_pem::'
+              ValueFrom: !Sub '${CertificatesSecret}:ca_pem::'
           Environment:
             - Name: USE_SECRETS_MANAGER
               Value: 'true'
@@ -307,7 +303,7 @@ Outputs:
   
   CertificateSecretArn:
     Description: ARN of the Secrets Manager secret containing certificates
-    Value: !Ref CertificateSecret
+    Value: !Ref CertificatesSecret
     Export:
       Name: !Sub '${AWS::StackName}-CertificateSecretArn'
   

@@ -1,0 +1,20 @@
+{
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "Update:Delete",
+      "Resource": [
+        "LogicalResourceId/Service",
+        "LogicalResourceId/TaskDefinition",
+        "LogicalResourceId/Cluster"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "Update:*",
+      "Resource": "*"
+    }
+  ]
+}

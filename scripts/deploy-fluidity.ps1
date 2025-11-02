@@ -418,6 +418,42 @@ if (-not $ContainerImage) {
 
 Write-Host "[OK] All required parameters validated successfully" -ForegroundColor Green
 
+# Set Lambda S3 bucket name
+$LambdaS3Bucket = "fluidity-lambda-artifacts-$AccountId-$Region"
+$LambdaS3KeyPrefix = "fluidity/"
+
+# Build and upload Lambda functions
+Write-Host "`n=== Building Lambda Functions ===" -ForegroundColor Green
+$BuildScript = Join-Path $ScriptDir "build-lambdas.ps1"
+
+if (-not (Test-Path $BuildScript)) {
+    Write-Host "[ERROR] Build script not found: $BuildScript" -ForegroundColor Red
+    exit 1
+}
+
+# Build Lambdas
+& $BuildScript
+
+# Ensure S3 bucket exists
+Write-Host "`n=== Preparing Lambda Artifacts Bucket ===" -ForegroundColor Green
+$BucketExists = aws s3 ls "s3://$LambdaS3Bucket" --region $Region 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Creating S3 bucket: $LambdaS3Bucket" -ForegroundColor Yellow
+    aws s3 mb "s3://$LambdaS3Bucket" --region $Region
+}
+else {
+    Write-Host "S3 bucket exists: $LambdaS3Bucket" -ForegroundColor Gray
+}
+
+# Upload Lambda packages to S3
+Write-Host "`n=== Uploading Lambda Packages to S3 ===" -ForegroundColor Green
+$LambdaBuildDir = Join-Path (Split-Path -Parent $ScriptDir) "build\lambdas"
+foreach ($func in @("wake", "sleep", "kill")) {
+    Write-Host "Uploading ${func}.zip..." -ForegroundColor Yellow
+    aws s3 cp (Join-Path $LambdaBuildDir "${func}.zip") "s3://$LambdaS3Bucket/${LambdaS3KeyPrefix}${func}.zip" --region $Region
+}
+Write-Host "[OK] Lambda packages uploaded" -ForegroundColor Green
+
 # Skip the parameters file logic since we're using command-line/auto-detected params
 if ($false) {
     # Use parameters file
@@ -487,6 +523,108 @@ function Get-StackStatus {
     return $Status
 }
 
+function Wait-ForStack {
+    param(
+        [string]$Stack,
+        [string]$Operation  # 'create' or 'update'
+    )
+    
+    Write-Host "Monitoring stack events (Ctrl+C to stop monitoring, stack will continue)..." -ForegroundColor Yellow
+    Write-Host ""
+    
+    $lastEventTime = $null
+    $finalStatuses = @()
+    
+    if ($Operation -eq 'create') {
+        $finalStatuses = @('CREATE_COMPLETE', 'CREATE_FAILED', 'ROLLBACK_COMPLETE', 'ROLLBACK_FAILED')
+    }
+    else {
+        $finalStatuses = @('UPDATE_COMPLETE', 'UPDATE_FAILED', 'UPDATE_ROLLBACK_COMPLETE', 'UPDATE_ROLLBACK_FAILED')
+    }
+    
+    while ($true) {
+        # Get current stack status
+        $status = Get-StackStatus $Stack
+        
+        # Check if we've reached a final state
+        if ($finalStatuses -contains $status) {
+            Write-Host ""
+            if ($status -match 'COMPLETE$') {
+                Write-Host "[OK] Stack $Operation completed: $status" -ForegroundColor Green
+                return $true
+            }
+            else {
+                Write-Host "[ERROR] Stack $Operation failed: $status" -ForegroundColor Red
+                return $false
+            }
+        }
+        
+        # Get latest events
+        if ($null -eq $lastEventTime) {
+            # First iteration - get last 5 events
+            $events = aws cloudformation describe-stack-events `
+                --stack-name $Stack `
+                --region $Region `
+                --max-items 5 `
+                --query 'StackEvents[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' `
+                --output json 2>$null | ConvertFrom-Json
+            
+            if ($events) {
+                [array]::Reverse($events)
+            }
+        }
+        else {
+            # Subsequent iterations - get events newer than last seen
+            $events = aws cloudformation describe-stack-events `
+                --stack-name $Stack `
+                --region $Region `
+                --query "StackEvents[?Timestamp>\`$lastEventTime\`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" `
+                --output json 2>$null | ConvertFrom-Json
+            
+            if ($events) {
+                [array]::Reverse($events)
+            }
+        }
+        
+        # Display new events
+        if ($events) {
+            foreach ($event in $events) {
+                $timestamp = $event[0]
+                $resource = $event[1]
+                $eventStatus = $event[2]
+                $reason = $event[3]
+                
+                # Update last seen timestamp
+                $lastEventTime = $timestamp
+                
+                # Format and display event
+                $shortTime = ([DateTime]$timestamp).ToString('HH:mm:ss')
+                $displayReason = ""
+                if ($reason -and $reason -ne 'None' -and $reason -ne '-') {
+                    $displayReason = " - $reason"
+                }
+                
+                # Color code based on status
+                if ($eventStatus -match 'FAILED') {
+                    Write-Host "[$shortTime] ❌ $resource`: $eventStatus$displayReason" -ForegroundColor Red
+                }
+                elseif ($eventStatus -match 'COMPLETE') {
+                    Write-Host "[$shortTime] ✓ $resource`: $eventStatus" -ForegroundColor Green
+                }
+                elseif ($eventStatus -match 'IN_PROGRESS') {
+                    Write-Host "[$shortTime] ⏳ $resource`: $eventStatus" -ForegroundColor Yellow
+                }
+                else {
+                    Write-Host "[$shortTime] ℹ️  $resource`: $eventStatus$displayReason" -ForegroundColor Gray
+                }
+            }
+        }
+        
+        # Wait before next poll
+        Start-Sleep -Seconds 3
+    }
+}
+
 function Deploy-Stack {
     param(
         [string]$Stack,
@@ -533,110 +671,79 @@ function Deploy-Stack {
         $ParametersArg = "file://$TempParamsFile"
     }
     elseif ($StackType -eq 'lambda') {
-        # Lambda stack parameters (command-line is fine, no large values)
-        $ParamsArg = @(
-            "ParameterKey=ECSClusterName,ParameterValue=$ClusterName",
-            "ParameterKey=ECSServiceName,ParameterValue=$ServiceName",
-            "ParameterKey=IdleThresholdMinutes,ParameterValue=$IdleThresholdMinutes",
-            "ParameterKey=LookbackPeriodMinutes,ParameterValue=$LookbackPeriodMinutes",
-            "ParameterKey=SleepCheckIntervalMinutes,ParameterValue=$SleepCheckIntervalMinutes",
-            "ParameterKey=DailyKillTime,ParameterValue=$DailyKillTime",
-            "ParameterKey=WakeLambdaTimeout,ParameterValue=$WakeLambdaTimeout",
-            "ParameterKey=SleepLambdaTimeout,ParameterValue=$SleepLambdaTimeout",
-            "ParameterKey=KillLambdaTimeout,ParameterValue=$KillLambdaTimeout",
-            "ParameterKey=APIThrottleBurstLimit,ParameterValue=$APIThrottleBurstLimit",
-            "ParameterKey=APIThrottleRateLimit,ParameterValue=$APIThrottleRateLimit",
-            "ParameterKey=APIQuotaLimit,ParameterValue=$APIQuotaLimit"
+        # Lambda stack parameters - use JSON file for consistency
+        $ParamsJson = @(
+            @{ParameterKey='LambdaS3Bucket'; ParameterValue=$LambdaS3Bucket},
+            @{ParameterKey='LambdaS3KeyPrefix'; ParameterValue=$LambdaS3KeyPrefix},
+            @{ParameterKey='ECSClusterName'; ParameterValue=$ClusterName},
+            @{ParameterKey='ECSServiceName'; ParameterValue=$ServiceName},
+            @{ParameterKey='IdleThresholdMinutes'; ParameterValue=$IdleThresholdMinutes},
+            @{ParameterKey='LookbackPeriodMinutes'; ParameterValue=$LookbackPeriodMinutes},
+            @{ParameterKey='SleepCheckIntervalMinutes'; ParameterValue=$SleepCheckIntervalMinutes},
+            @{ParameterKey='DailyKillTime'; ParameterValue=$DailyKillTime},
+            @{ParameterKey='WakeLambdaTimeout'; ParameterValue=$WakeLambdaTimeout},
+            @{ParameterKey='SleepLambdaTimeout'; ParameterValue=$SleepLambdaTimeout},
+            @{ParameterKey='KillLambdaTimeout'; ParameterValue=$KillLambdaTimeout},
+            @{ParameterKey='APIThrottleBurstLimit'; ParameterValue=$APIThrottleBurstLimit},
+            @{ParameterKey='APIThrottleRateLimit'; ParameterValue=$APIThrottleRateLimit},
+            @{ParameterKey='APIQuotaLimit'; ParameterValue=$APIQuotaLimit}
         )
-        $ParametersArg = $null  # Will use command-line for lambda
+        
+        $TempParamsFile = Join-Path $env:TEMP "fluidity-lambda-params-$((Get-Date).Ticks).json"
+        $ParamsJson | ConvertTo-Json -Depth 10 | Out-File -FilePath $TempParamsFile -Encoding ASCII -NoNewline
+        $ParametersArg = "file://$TempParamsFile"
     }
     
     if ($Status -eq 'DOES_NOT_EXIST') {
         Write-Host "Creating new stack: $Stack" -ForegroundColor Yellow
         
-        if ($StackType -eq 'fargate') {
-            # Use parameters file for Fargate (contains large certificate values)
-            aws cloudformation create-stack `
-                --stack-name $Stack `
-                --template-body file://$Template `
-                --parameters $ParametersArg `
-                --capabilities $Capabilities `
-                --region $Region `
-                --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=CloudFormation
-        }
-        else {
-            # Use command-line parameters for Lambda (smaller values)
-            $AwsParams = @(
-                'cloudformation', 'create-stack',
-                '--stack-name', $Stack,
-                '--template-body', "file://$Template",
-                '--parameters'
-            )
-            $AwsParams += $ParamsArg
-            $AwsParams += @(
-                '--capabilities', $Capabilities,
-                '--region', $Region,
-                '--tags', 'Key=Application,Value=Fluidity', 'Key=ManagedBy,Value=CloudFormation'
-            )
-            
-            & aws $AwsParams
-        }
+        # Both stacks now use parameters file
+        aws cloudformation create-stack `
+            --stack-name $Stack `
+            --template-body file://$Template `
+            --parameters $ParametersArg `
+            --capabilities $Capabilities `
+            --region $Region `
+            --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=CloudFormation
         
-        Write-Host "Waiting for stack creation..." -ForegroundColor Yellow
-        aws cloudformation wait stack-create-complete --stack-name $Stack --region $Region
+        $success = Wait-ForStack $Stack 'create'
         
-        # Clean up temp file if Fargate
-        if ($StackType -eq 'fargate' -and (Test-Path $TempParamsFile)) {
+        # Clean up temp file
+        if (Test-Path $TempParamsFile) {
             Remove-Item $TempParamsFile -Force
         }
         
-        Write-Host "[OK] Stack created successfully" -ForegroundColor Green
+        if (-not $success) {
+            throw "Stack creation failed"
+        }
     }
     else {
         Write-Host "Updating existing stack: $Stack (Current status: $Status)" -ForegroundColor Yellow
         
         try {
-            if ($StackType -eq 'fargate') {
-                # Use parameters file for Fargate
-                aws cloudformation update-stack `
-                    --stack-name $Stack `
-                    --template-body file://$Template `
-                    --parameters $ParametersArg `
-                    --capabilities $Capabilities `
-                    --region $Region `
-                    --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=CloudFormation | Out-Null
-            }
-            else {
-                # Use command-line parameters for Lambda
-                $AwsParams = @(
-                    'cloudformation', 'update-stack',
-                    '--stack-name', $Stack,
-                    '--template-body', "file://$Template",
-                    '--parameters'
-                )
-                $AwsParams += $ParamsArg
-                $AwsParams += @(
-                    '--capabilities', $Capabilities,
-                    '--region', $Region,
-                    '--tags', 'Key=Application,Value=Fluidity', 'Key=ManagedBy,Value=CloudFormation'
-                )
-                
-                & aws $AwsParams | Out-Null
-            }
+            # Both stacks now use parameters file
+            aws cloudformation update-stack `
+                --stack-name $Stack `
+                --template-body file://$Template `
+                --parameters $ParametersArg `
+                --capabilities $Capabilities `
+                --region $Region `
+                --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=CloudFormation | Out-Null
             
-            Write-Host "Waiting for stack update..." -ForegroundColor Yellow
-            aws cloudformation wait stack-update-complete --stack-name $Stack --region $Region
+            $success = Wait-ForStack $Stack 'update'
             
-            # Clean up temp file if Fargate
-            if ($StackType -eq 'fargate' -and (Test-Path $TempParamsFile)) {
+            # Clean up temp file
+            if (Test-Path $TempParamsFile) {
                 Remove-Item $TempParamsFile -Force
             }
             
-            Write-Host "[OK] Stack updated successfully" -ForegroundColor Green
+            if (-not $success) {
+                throw "Stack update failed"
+            }
         }
         catch {
             # Clean up temp file on error
-            if ($StackType -eq 'fargate' -and (Test-Path $TempParamsFile)) {
+            if (Test-Path $TempParamsFile) {
                 Remove-Item $TempParamsFile -Force
             }
             
@@ -712,11 +819,29 @@ try {
         'deploy' {
             Deploy-Stack $FargateStackName $FargateTemplate 'fargate'
             Deploy-Stack $LambdaStackName $LambdaTemplate 'lambda'
-            Write-Host "`n=== Applying Stack Policy ===" -ForegroundColor Green
-            aws cloudformation set-stack-policy `
-                --stack-name $FargateStackName `
-                --stack-policy-body file://$StackPolicy | Out-Null
-            Write-Host "[OK] Stack policy applied" -ForegroundColor Green
+            
+            Write-Host "`n=== Applying Stack Policies ===" -ForegroundColor Green
+            
+            # Apply Fargate stack policy
+            $FargateStackPolicy = Join-Path $CloudFormationDir "stack-policy-fargate.json"
+            if (Test-Path $FargateStackPolicy) {
+                Write-Host "Applying policy to Fargate stack..." -ForegroundColor Yellow
+                aws cloudformation set-stack-policy `
+                    --stack-name $FargateStackName `
+                    --stack-policy-body file://$FargateStackPolicy
+                Write-Host "[OK] Fargate stack policy applied" -ForegroundColor Green
+            }
+            
+            # Apply Lambda stack policy
+            $LambdaStackPolicy = Join-Path $CloudFormationDir "stack-policy-lambda.json"
+            if (Test-Path $LambdaStackPolicy) {
+                Write-Host "Applying policy to Lambda stack..." -ForegroundColor Yellow
+                aws cloudformation set-stack-policy `
+                    --stack-name $LambdaStackName `
+                    --stack-policy-body file://$LambdaStackPolicy
+                Write-Host "[OK] Lambda stack policy applied" -ForegroundColor Green
+            }
+            
             Get-StackOutputs $FargateStackName
             Get-StackOutputs $LambdaStackName
         }
@@ -732,19 +857,55 @@ try {
             Write-Host "`n=== Deleting $StackName ===" -ForegroundColor Red
             
             # Remove stack policies first (they prevent deletion)
+            Write-Host "Removing stack policies..." -ForegroundColor Yellow
             try {
                 aws cloudformation delete-stack-policy `
-                    --stack-name $FargateStackName 2>&1 | Out-Null
+                    --stack-name $FargateStackName --region $Region 2>&1 | Out-Null
+            }
+            catch { }
+            try {
+                aws cloudformation delete-stack-policy `
+                    --stack-name $LambdaStackName --region $Region 2>&1 | Out-Null
             }
             catch { }
             
-            aws cloudformation delete-stack --stack-name $FargateStackName
-            aws cloudformation delete-stack --stack-name $LambdaStackName
+            # Delete CloudFormation stacks
+            Write-Host "Deleting CloudFormation stacks..." -ForegroundColor Yellow
+            aws cloudformation delete-stack --stack-name $FargateStackName --region $Region
+            aws cloudformation delete-stack --stack-name $LambdaStackName --region $Region
             
             Write-Host "Waiting for stacks to be deleted..." -ForegroundColor Yellow
-            aws cloudformation wait stack-delete-complete --stack-name $FargateStackName
-            aws cloudformation wait stack-delete-complete --stack-name $LambdaStackName
+            aws cloudformation wait stack-delete-complete --stack-name $FargateStackName --region $Region
+            aws cloudformation wait stack-delete-complete --stack-name $LambdaStackName --region $Region
             Write-Host "[OK] Stacks deleted" -ForegroundColor Green
+            
+            # Clean up Lambda S3 bucket
+            Write-Host "`n=== Cleaning Up Lambda Artifacts ===" -ForegroundColor Yellow
+            $LambdaS3Bucket = "fluidity-lambda-artifacts-$AccountId-$Region"
+            
+            # Check if bucket exists
+            $BucketExists = $false
+            try {
+                aws s3 ls "s3://$LambdaS3Bucket" --region $Region 2>&1 | Out-Null
+                $BucketExists = $LASTEXITCODE -eq 0
+            }
+            catch {
+                $BucketExists = $false
+            }
+            
+            if ($BucketExists) {
+                Write-Host "Emptying S3 bucket: $LambdaS3Bucket" -ForegroundColor Yellow
+                aws s3 rm "s3://$LambdaS3Bucket" --recursive --region $Region
+                
+                Write-Host "Deleting S3 bucket: $LambdaS3Bucket" -ForegroundColor Yellow
+                aws s3 rb "s3://$LambdaS3Bucket" --region $Region
+                Write-Host "[OK] Lambda artifacts bucket deleted" -ForegroundColor Green
+            }
+            else {
+                Write-Host "S3 bucket does not exist or already deleted" -ForegroundColor Gray
+            }
+            
+            Write-Host "`n[OK] All resources deleted successfully" -ForegroundColor Green
         }
         'status' {
             Write-Host "`n=== Stack Status ===" -ForegroundColor Green

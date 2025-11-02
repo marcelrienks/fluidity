@@ -2,6 +2,16 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Fluidity Lambda Control Plane - Wake/Sleep/Kill functions for ECS lifecycle management'
 
 Parameters:
+  LambdaS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment packages
+    Default: ''
+  
+  LambdaS3KeyPrefix:
+    Type: String
+    Description: S3 key prefix for Lambda packages
+    Default: 'fluidity/'
+  
   ECSClusterName:
     Type: String
     Description: Name of the ECS cluster running the Fluidity server
@@ -227,23 +237,14 @@ Resources:
       Role: !GetAtt WakeLambdaExecutionRole.Arn
       Timeout: !Ref WakeLambdaTimeout
       MemorySize: 128
-      ReservedConcurrentExecutions: !Ref WakeLambdaReservedConcurrency
       Environment:
         Variables:
           ECS_CLUSTER_NAME: !Ref ECSClusterName
           ECS_SERVICE_NAME: !Ref ECSServiceName
           LOG_LEVEL: info
       Code:
-        ZipFile: |
-          # Placeholder - replace with actual Lambda deployment package
-          # Build with: GOOS=linux GOARCH=amd64 go build -o bootstrap cmd/lambdas/wake/main.go
-          # Package: zip wake.zip bootstrap
-          # Upload to S3 and update Code section:
-          # Code:
-          #   S3Bucket: your-lambda-artifacts-bucket
-          #   S3Key: fluidity/wake.zip
-          package main
-          func main() {}
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Sub '${LambdaS3KeyPrefix}wake.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -262,7 +263,6 @@ Resources:
       Role: !GetAtt SleepLambdaExecutionRole.Arn
       Timeout: !Ref SleepLambdaTimeout
       MemorySize: 128
-      ReservedConcurrentExecutions: !Ref SleepLambdaReservedConcurrency
       Environment:
         Variables:
           ECS_CLUSTER_NAME: !Ref ECSClusterName
@@ -271,10 +271,8 @@ Resources:
           LOOKBACK_PERIOD_MINS: !Ref LookbackPeriodMinutes
           LOG_LEVEL: info
       Code:
-        ZipFile: |
-          # Placeholder - replace with actual Lambda deployment package
-          package main
-          func main() {}
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Sub '${LambdaS3KeyPrefix}sleep.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -293,17 +291,14 @@ Resources:
       Role: !GetAtt KillLambdaExecutionRole.Arn
       Timeout: !Ref KillLambdaTimeout
       MemorySize: 128
-      ReservedConcurrentExecutions: !Ref KillLambdaReservedConcurrency
       Environment:
         Variables:
           ECS_CLUSTER_NAME: !Ref ECSClusterName
           ECS_SERVICE_NAME: !Ref ECSServiceName
           LOG_LEVEL: info
       Code:
-        ZipFile: |
-          # Placeholder - replace with actual Lambda deployment package
-          package main
-          func main() {}
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Sub '${LambdaS3KeyPrefix}kill.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -374,7 +369,6 @@ Resources:
           Id: SleepLambdaTarget
           RetryPolicy:
             MaximumRetryAttempts: 2
-            MaximumEventAge: 3600
   
   KillScheduleRule:
     Type: AWS::Events::Rule
@@ -388,7 +382,6 @@ Resources:
           Id: KillLambdaTarget
           RetryPolicy:
             MaximumRetryAttempts: 2
-            MaximumEventAge: 3600
   
   # ============================================================
   # Lambda Permissions for EventBridge
