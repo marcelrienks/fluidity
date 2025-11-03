@@ -40,14 +40,17 @@ Fluidity tunnels HTTP/HTTPS/WebSocket traffic through restrictive firewalls usin
 # 1. Generate certificates locally
 ./scripts/manage-certs.sh
 
-# 2. Push Docker image to ECR
-make -f Makefile.<platform> push-server
+# 2. Build and push Docker image to ECR
+./scripts/build-core.sh --server --linux
+docker tag fluidity-server:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
+docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 
 # 3. Deploy to AWS (certificates passed as parameters)
 ./scripts/deploy-fluidity.sh fargate deploy
 
-# 4. Run agent locally (uses certificates from ./certs/)
-make -f Makefile.<platform> run-agent-local
+# 4. Build and run agent locally (uses certificates from ./certs/)
+./scripts/build-core.sh --agent
+./build/fluidity-agent -config configs/agent.yaml
 
 # 5. Set browser proxy to localhost:8080
 
@@ -55,7 +58,7 @@ make -f Makefile.<platform> run-agent-local
 curl -x http://127.0.0.1:8080 http://example.com
 ```
 
-**Note:** Windows users should use WSL (Windows Subsystem for Linux) to run bash scripts and make commands.
+**Note:** Windows users should use WSL (Windows Subsystem for Linux) to run all bash scripts.
 
 ## Architecture
 **→ Full details:** [Architecture Documentation](docs/architecture.md)
@@ -78,15 +81,15 @@ Fluidity supports multiple deployment options for different use cases:
 
 **Recommended Production Setup:**
 1. Generate certificates locally (`./scripts/manage-certs.sh`)
-2. Push Docker image to ECR (`make -f Makefile.<platform> push-server`)
-3. Deploy Fargate server via CloudFormation - certificates passed as parameters (`./scripts/deploy-fluidity.sh fargate deploy`)
+2. Build and push Docker image to ECR
+3. Deploy Fargate server via CloudFormation - certificates passed as parameters (`./scripts/deploy-fluidity.sh deploy`)
 4. Deploy Lambda control plane for on-demand operation (`./scripts/deploy-fluidity.sh lambda deploy`)
 5. Run agent locally with certificates from ./certs/
 6. Total cost: ~$0.11-0.21/month with on-demand lifecycle management
 
 **Platform Notes:**
-- Linux/macOS: Use `Makefile.linux` or `Makefile.macos`
-- Windows: Use WSL (Windows Subsystem for Linux) with `Makefile.linux`
+- All platforms use the same build scripts
+- Windows users must use WSL (Windows Subsystem for Linux)
 
 ### Development
 Local development and testing options for building and contributing to Fluidity.
@@ -96,12 +99,15 @@ Run both server and agent on your local machine.
 
 **Quick Setup:**
 ```bash
-# 1. Run locally
-make -f Makefile.<platform> run-server-local  # Terminal 1
-make -f Makefile.<platform> run-agent-local   # Terminal 2
+# 1. Build binaries
+./scripts/build-core.sh
 
-# 2. Test
-make -f Makefile.<platform> test
+# 2. Run locally
+./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
+./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
+
+# 3. Test
+go test ./... -v
 ```
 
 **Best for:** Development, testing, debugging  
@@ -113,13 +119,16 @@ Build and run containerized images locally with Docker Desktop.
 
 **Commands:**
 ```bash
-# Build images
-make -f Makefile.<platform> build-server
-make -f Makefile.<platform> build-agent
+# Build Linux binaries
+./scripts/build-core.sh --linux
+
+# Build Docker images
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker build -f deployments/agent/Dockerfile -t fluidity-agent .
 
 # Run containers
-make -f Makefile.<platform> run-server
-make -f Makefile.<platform> run-agent
+docker run --rm -p 8443:8443 -v $(pwd)/certs:/root/certs:ro fluidity-server
+docker run --rm -p 8080:8080 -v $(pwd)/certs:/root/certs:ro fluidity-agent
 ```
 
 **Details:** Alpine Linux base, ~44MB per image, includes TLS certificates  
@@ -151,11 +160,14 @@ The agent runs locally on your machine and connects to the cloud-hosted server.
 # 1. Generate certificates (if not already done)
 ./scripts/manage-certs.sh
 
-# 2. Configure agent
+# 2. Build agent
+./scripts/build-core.sh --agent
+
+# 3. Configure agent
 # Edit configs/agent.yaml with Fargate server public IP
 
-# 3. Run agent
-make -f Makefile.<platform> run-agent-local
+# 4. Run agent
+./build/fluidity-agent -config configs/agent.yaml
 ```
 
 **Configuration:**
@@ -195,8 +207,11 @@ aws cloudformation create-stack \
 
 **Manual Deployment:**
 ```bash
-# 1. Push image to ECR
-make -f Makefile.<platform> push-server
+# 1. Build and push Docker image to ECR
+./scripts/build-core.sh --server --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker tag fluidity-server:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
+docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 
 # 2. Create task definition (AWS Console or CLI)
 # 3. Start service
@@ -316,10 +331,11 @@ Three-tier testing strategy ensuring code quality and reliability.
 **Run Tests:**
 ```bash
 # All tests
-make -f Makefile.<platform> test
+go test ./... -v
 
 # With coverage
-make -f Makefile.<platform> coverage
+go test ./... -coverprofile=coverage.out
+go tool cover -html=coverage.out
 
 # Specific package
 go test -v ./internal/core/agent/...

@@ -30,18 +30,23 @@
 
 **1. Generate certificates:**
 ```bash
-./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
+./scripts/manage-certs.sh
 ```
 
 **2. Build:**
 ```bash
-make -f Makefile.<platform> build      # platform: macos, linux (use linux in WSL on Windows)
+./scripts/build-core.sh                # Build both server and agent
+# Or build individually:
+./scripts/build-core.sh --server       # Build only server
+./scripts/build-core.sh --agent        # Build only agent
+# Or build for Linux (Docker/deployment):
+./scripts/build-core.sh --linux
 ```
 
 **3. Run:**
 ```bash
-make -f Makefile.<platform> run-server-local  # Terminal 1
-make -f Makefile.<platform> run-agent-local   # Terminal 2
+./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
+./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 ```
 
 **4. Test:**
@@ -156,8 +161,13 @@ See [Testing Guide](testing.md) for details.
 
 **Test changes:**
 ```bash
-./scripts/test-local.sh              # Quick local test
-./scripts/test-docker.sh             # Docker validation
+# Run tests
+go test ./... -v
+
+# Build and run locally
+./scripts/build-core.sh
+./build/fluidity-server -config configs/server.local.yaml
+./build/fluidity-agent -config configs/agent.local.yaml
 ```
 
 ### Debugging

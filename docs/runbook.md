@@ -127,10 +127,14 @@ aws ce get-cost-and-usage \
 
 ```bash
 # Generate new certificates
-./scripts/manage-certs.sh --save-to-secrets
+./scripts/manage-certs.sh
 
-# Rebuild and push image
-make -f Makefile.<platform> docker-build-server
+# Build Linux binary and Docker image
+./scripts/build-core.sh --server --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+
+# Tag and push to ECR
+docker tag fluidity-server:latest <ecr-uri>
 docker push <ecr-uri>
 
 # Update service (forces new deployment)

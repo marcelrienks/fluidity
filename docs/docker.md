@@ -1,128 +1,117 @@
-# Docker Guide# Docker Build and Deployment Guide
+# Docker Build and Deployment Guide
 
+Docker-specific build process, networking, and troubleshooting for Fluidity.
 
+---
 
-## Build ProcessDocker-specific build process, networking, and troubleshooting for Fluidity.
+## Build Process
 
+### Simplified Single-Stage Build
 
+Fluidity compiles Go binaries **locally** and copies them into Alpine containers.
 
-Fluidity uses single-stage Docker builds with pre-compiled binaries.---
-
-
-
-### Why Single-Stage?## Build Process
-
-
-
-1. **Corporate Firewall Bypass**: Multi-stage builds fail when Docker Hub is blocked### Simplified Single-Stage Build
-
-2. **Faster Builds**: ~2 seconds vs ~10+ seconds
-
-3. **Platform Independent**: Works on Windows, macOS, LinuxFluidity compiles Go binaries **locally** and copies them into Alpine containers.
-
-
-
-### Build Commands```
-
+```
 Host Machine (Any OS)         Docker Container (Linux)
+─────────────────────         ────────────────────────
+Go source + modules      →    Pre-built static binary
+Static Linux binary      →    Alpine Linux (~5MB)
+                              curl utility (~3MB)
+                              Total: ~44MB
+```
 
-```bash─────────────────────         ────────────────────────
+### Build Commands
 
-make -f Makefile.<platform> docker-build-serverGo source + modules      →    Pre-built static binary
+```bash
+# Build Linux binaries
+./scripts/build-core.sh --linux
 
-make -f Makefile.<platform> docker-build-agentStatic Linux binary      →    Alpine Linux (~5MB)
-
-# platform: win, macos, or linux                              curl utility (~3MB)
-
-```                              Total: ~44MB
-
+# Build Docker images
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker build -f deployments/agent/Dockerfile -t fluidity-agent .
 ```
 
 **Build flags:**
 
-```bash### Why This Approach?
-
+```bash
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0  # Static Linux binary
+```
 
-```**1. Corporate Firewall Bypass**
+**Image sizes:** ~44MB each (21MB Alpine + 23MB binary)
 
+### Why This Approach?
 
+**1. Corporate Firewall Bypass**
 
-**Image sizes:** ~44MB each (21MB Alpine + 23MB binary)Multi-stage builds fail in corporate environments:
-
+Multi-stage builds fail in corporate environments:
 - Docker Hub blocked (403 Forbidden)
-
-## Dockerfile Structure- HTTPS traffic intercepted
-
+- HTTPS traffic intercepted
 - Go module proxies unreachable
 
-```dockerfile
+Solution: Build locally before Docker starts (no network calls during build).
 
-FROM alpine/curl:latest        # ~8MB baseSolution: Build locally before Docker starts (no network calls during build).
-
-
-
-WORKDIR /app**2. Faster Builds**
-
-
-
-COPY build/fluidity-server .   # Pre-built binary- Multi-stage: ~10+ seconds (download modules, compile)
-
+**2. Faster Builds**
+- Multi-stage: ~10+ seconds (download modules, compile)
 - Single-stage: ~2 seconds (copy pre-built binary)
-
-RUN mkdir -p ./config ./certs
 
 **3. Platform Independence**
 
-EXPOSE 8443
-
 Works identically on Windows, macOS, and Linux via cross-compilation.
 
+## Dockerfile Structure
+
+```dockerfile
+FROM alpine/curl:latest        # ~8MB base with curl
+
+WORKDIR /app
+
+COPY build/fluidity-server .   # Pre-built binary (~35MB)
+
+RUN mkdir -p ./config ./certs  # Volume mount directories
+
+COPY configs/server.yaml ./config/
+
+EXPOSE 8443
+
 CMD ["./fluidity-server", "--config", "./config/server.yaml"]
+```
 
-```### Build Commands
+## Building Images
 
+### All Platforms
 
+```bash
+# Build Linux binaries
+./scripts/build-core.sh --linux
 
-## Docker Desktop NetworkingAll Makefiles ensure Linux binary is built first:
+# Build Docker images
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker build -f deployments/agent/Dockerfile -t fluidity-agent .
+```
 
+**Windows users:** All commands must be run in WSL.
 
+## Docker Desktop Networking
 
-**For agent-server communication on same machine:**```bash
+**For agent-server communication on same machine:**
 
-# macOS/Linux
+Use `host.docker.internal` in configs (automatically included in certificate SANs).
 
-Use `host.docker.internal` in configs (automatically included in certificate SANs).make -f Makefile.macos docker-build-server
-
-make -f Makefile.macos docker-build-agent
-
-**Agent config (`agent.docker.yaml`):**```
+**Agent config (`agent.docker.yaml`):**
 
 ```yaml
-
-server_ip: "host.docker.internal"  # For Docker Desktop```powershell
-
-```# Windows
-
-make -f Makefile.win docker-build-server
-
-## Running Containersmake -f Makefile.win docker-build-agent
-
+server_ip: "host.docker.internal"  # For Docker Desktop
 ```
+
+## Running Containers
 
 ### Server
 
-```bash### Build Flags
-
+```bash
 docker run --rm \
-
-  -v "$(pwd)/certs:/root/certs:ro" \```bash
-
-  -v "$(pwd)/configs/server.docker.yaml:/root/config/server.yaml:ro" \GOOS=linux            # Target Linux OS
-
-  -p 8443:8443 \GOARCH=amd64          # x86-64 architecture
-
-  fluidity-serverCGO_ENABLED=0         # Static linking (no C dependencies)
+  -v "$(pwd)/certs:/root/certs:ro" \
+  -v "$(pwd)/configs/server.docker.yaml:/root/config/server.yaml:ro" \
+  -p 8443:8443 \
+  fluidity-server
 
 ``````
 
@@ -184,15 +173,11 @@ netstat -ano | findstr :8080
 
 - Ensure certificates include `host.docker.internal` in SANs
 
-- Regenerate with `./scripts/manage-certs.sh`**Solution:** Certificate generation scripts include `host.docker.internal` in SAN list by default.
+- Regenerate with `./scripts/manage-certs.sh`
 
-
-
-**Cannot pull base image:****Certificate SANs:**
-
-- Use `scratch` build: `make -f Makefile.<platform> docker-build-server-scratch````
-
-- Or use cached Alpine imageDNS.1 = fluidity-server
+**Cannot pull base image:**
+- Build locally first with `./scripts/build-core.sh --linux`
+- Or use cached Alpine image
 
 DNS.2 = localhost
 
@@ -306,9 +291,10 @@ docker logs <container-id>
 ### Recommended Testing Approach
 
 **For development:** Use local binaries (faster, simpler):
-```powershell
-make -f Makefile.win run-server-local
-make -f Makefile.win run-agent-local
+```bash
+./scripts/build-core.sh
+./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
+./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 ```
 
 **For Docker verification:** Use containers with `host.docker.internal` configs (pre-deployment check).
@@ -446,8 +432,9 @@ ERROR: failed to solve: failed to create LLB definition: 403 Forbidden
 **Cause:** Corporate firewall blocking Docker Hub
 
 **Solution:** Use simplified build (already implemented):
-```powershell
-make -f Makefile.win docker-build-server  # Builds locally first
+```bash
+./scripts/build-core.sh --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
 ```
 
 ### TLS certificate verification failed

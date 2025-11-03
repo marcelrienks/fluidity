@@ -59,27 +59,24 @@ Run server and agent binaries directly on your machine.
 ./scripts/manage-certs.sh
 ```
 
-**2. Start server** (Terminal 1):
+**2. Build binaries:**
 ```bash
-# macOS
-make -f Makefile.macos run-server-local
-
-# Linux (including WSL on Windows)
-make -f Makefile.linux run-server-local
+./scripts/build-core.sh                # Build both server and agent
 ```
 
-**3. Start agent** (Terminal 2):
+**3. Start server** (Terminal 1):
 ```bash
-# macOS
-make -f Makefile.macos run-agent-local
-
-# Linux (including WSL on Windows)
-make -f Makefile.linux run-agent-local
+./build/fluidity-server -config configs/server.local.yaml
 ```
 
-**4. Configure browser proxy:** `127.0.0.1:8080`
+**4. Start agent** (Terminal 2):
+```bash
+./build/fluidity-agent -config configs/agent.local.yaml
+```
 
-**5. Test:**
+**5. Configure browser proxy:** `127.0.0.1:8080`
+
+**6. Test:**
 ```bash
 curl -x http://127.0.0.1:8080 http://example.com -I
 curl -x http://127.0.0.1:8080 https://example.com -I
@@ -104,20 +101,19 @@ Test containerized deployment locally before cloud deployment.
 ./scripts/manage-certs.sh
 ```
 
-**2. Build images:**
+**2. Build Linux binaries:**
 ```bash
-# macOS
-make -f Makefile.macos docker-build-server
-make -f Makefile.macos docker-build-agent
-
-# Linux (including WSL on Windows)
-make -f Makefile.linux docker-build-server
-make -f Makefile.linux docker-build-agent
+./scripts/build-core.sh --linux        # Build static Linux binaries
 ```
 
-**3. Run server:**
+**3. Build Docker images:**
 ```bash
-# macOS/Linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker build -f deployments/agent/Dockerfile -t fluidity-agent .
+```
+
+**4. Run server:**
+```bash
 docker run --rm \
   -v "$(pwd)/certs:/root/certs:ro" \
   -v "$(pwd)/configs/server.docker.yaml:/root/config/server.yaml:ro" \
@@ -125,7 +121,7 @@ docker run --rm \
   fluidity-server
 ```
 
-**4. Run agent** (new terminal):
+**5. Run agent** (new terminal):
 ```bash
 docker run --rm \
   -v "$(pwd)/certs:/root/certs:ro" \
@@ -134,7 +130,7 @@ docker run --rm \
   fluidity-agent
 ```
 
-**5. Test** (same as Option A)
+**6. Test** (same as Option A)
 
 **Why use this option:**
 - Verify containers work before cloud deployment
@@ -170,15 +166,9 @@ aws ecr create-repository \
 
 **Build and push:**
 ```bash
-# macOS
-make -f Makefile.macos push-server
+# Build Linux binary
+./scripts/build-core.sh --server --linux
 
-# Linux (including WSL on Windows)
-make -f Makefile.linux push-server
-```
-
-Or manually:
-```bash
 # Get ECR login
 aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
@@ -334,9 +324,10 @@ key_file: "./certs/client.key"
 ca_file: "./certs/ca.crt"
 ```
 
-Start agent:
+Build and start agent:
 ```bash
-make -f Makefile.<platform> run-agent-local
+./scripts/build-core.sh --agent
+./build/fluidity-agent -config configs/agent.yaml
 ```
 
 #### Step 8: Test
@@ -392,7 +383,10 @@ metrics_interval: "60s"
 
 Rebuild and push server image:
 ```bash
-make -f Makefile.<platform> push-server
+./scripts/build-core.sh --server --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker tag fluidity-server:latest <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
+docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 ```
 
 Update ECS service to use new image:
@@ -442,9 +436,10 @@ connection_retry_interval: "5s"
 
 #### Step 5: Test Automated Lifecycle
 
-**Start agent:**
+**Build and start agent:**
 ```bash
-make -f Makefile.<platform> run-agent-local
+./scripts/build-core.sh --agent
+./build/fluidity-agent -config configs/agent.yaml
 ```
 
 Agent will:

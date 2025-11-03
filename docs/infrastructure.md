@@ -18,33 +18,24 @@ Complete guide to deploying and managing Fluidity using AWS CloudFormation.
 
 - **Fargate Stack**: ECS cluster, service, and task definition
 
-## Quick Deploy- **Lambda Stack**: Control plane (Wake/Sleep/Kill), API Gateway, EventBridge
+## Quick Start
 
+### 1. Build and Push Docker Image
 
+```bash
+# Build Linux binary
+./scripts/build-core.sh --server --linux
 
-### 1. Push Image to ECR## Quick Start
+# Build Docker image
+docker build -f deployments/server/Dockerfile -t fluidity-server .
 
-
-
-```bash### 1. Build and Push Docker Image
-
-make -f Makefile.<platform> docker-build-server
-
-docker tag fluidity-server:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest```bash
-
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.commake -f Makefile.linux docker-build-server
-
-docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latestdocker tag fluidity-server:latest YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/fluidity-server:latest
-
-```aws ecr get-login-password --region YOUR_REGION | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com
-
+# Tag and push to ECR
+docker tag fluidity-server:latest YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/fluidity-server:latest
+aws ecr get-login-password --region YOUR_REGION | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com
 docker push YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/fluidity-server:latest
+```
 
-### 2. Configure Parameters```
-
-
-
-Edit `deployments/cloudformation/params.json`:### 2. Configure Parameters
+### 2. Configure Parameters
 
 - Set `VpcId` and `PublicSubnets`
 
@@ -547,10 +538,10 @@ aws ecr create-repository --repository-name fluidity-server --region us-east-1
 # Get ECR login
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com
 
-# Build image with certificates baked in
+# Build Linux binary and Docker image
 # IMPORTANT: Certificates must be in the certs/ directory before building
-cd deployments
-make -f ../Makefile.<platform> docker-build-server  # windows, linux, or macos
+./scripts/build-core.sh --server --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
 
 # Tag for ECR
 docker tag fluidity-server:latest 123456789012.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
@@ -578,7 +569,8 @@ The Docker image must include TLS certificates at `/root/certs/`. The simplest a
 
 3. Rebuild and push:
    ```bash
-   make -f Makefile.<platform> docker-build-server
+   ./scripts/build-core.sh --server --linux
+   docker build -f deployments/server/Dockerfile -t fluidity-server .
    docker tag fluidity-server:latest <ECR_URI>
    docker push <ECR_URI>
    ```
