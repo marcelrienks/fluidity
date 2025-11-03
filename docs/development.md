@@ -1,5 +1,31 @@
 # Development Guide
 
+## Prerequisites
+
+**Install required tools:**
+
+**Windows:**
+- Install WSL: `wsl --install` (required for all development)
+- Run in WSL: `bash scripts/setup-prereq-ubuntu.sh`
+- All commands below must be run in WSL
+
+**Linux:**
+- Ubuntu/Debian: `bash scripts/setup-prereq-ubuntu.sh`
+- Arch Linux: `bash scripts/setup-prereq-arch.sh`
+
+**macOS:**
+- Run: `bash scripts/setup-prereq-mac.sh`
+
+**What gets installed:**
+- Go 1.21+
+- Make
+- Docker
+- OpenSSL
+- Node.js 18+ and npm
+- Required npm packages (ws, https-proxy-agent)
+
+---
+
 ## Quick Setup
 
 **1. Generate certificates:**

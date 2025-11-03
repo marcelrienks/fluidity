@@ -2,6 +2,10 @@
 
 Daily operations and troubleshooting for production Fluidity deployments.
 
+**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
+
+---
+
 ## Daily Operations
 
 ### Start Server

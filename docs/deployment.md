@@ -13,7 +13,21 @@ Before deploying, ensure you have:
 - **OpenSSL** (for certificate generation)
 - **AWS CLI v2** (for cloud deployment)
 - **jq** (for JSON parsing in scripts)
-- **WSL (Windows only)** - Windows users should use WSL for running bash scripts and make commands
+- **Node.js 18+ and npm** (for testing)
+
+**Platform-Specific Setup:**
+
+**Windows (WSL Required):**
+- Install WSL if not already installed: `wsl --install`
+- Run setup script in WSL: `wsl bash scripts/setup-prereq-ubuntu.sh`
+- All bash scripts and make commands must be run in WSL
+
+**Linux:**
+- Ubuntu/Debian: `bash scripts/setup-prereq-ubuntu.sh`
+- Arch Linux: `bash scripts/setup-prereq-arch.sh`
+
+**macOS:**
+- Run: `bash scripts/setup-prereq-mac.sh`
 
 ---
 

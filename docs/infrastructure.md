@@ -1,12 +1,12 @@
-# Infrastructure as Code# Infrastructure as Code
+# Infrastructure as Code
 
+Complete guide to deploying and managing Fluidity using AWS CloudFormation.
 
+**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
 
-Deploy and manage Fluidity using AWS CloudFormation.Complete guide to deploying and managing Fluidity using AWS CloudFormation.
+---
 
-
-
-## Overview## Overview
+## Overview
 
 
 

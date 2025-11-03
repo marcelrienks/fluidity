@@ -13,6 +13,27 @@ Fluidity tunnels HTTP/HTTPS/WebSocket traffic through restrictive firewalls usin
 **Size**: ~44MB Alpine containers  
 **Security**: mTLS with private CA
 
+## Prerequisites
+
+**Required:**
+- Go 1.21+
+- Make
+- OpenSSL
+- Docker Desktop (for container deployments)
+- AWS CLI v2 (for cloud deployments)
+- Node.js 18+ and npm (for testing)
+
+**For Windows users:**
+- WSL (Windows Subsystem for Linux) is **required** - all bash scripts and make commands must be run in WSL
+- Run the setup script in WSL: `bash scripts/setup-prereq-ubuntu.sh`
+
+**For Linux users:**
+- Ubuntu/Debian: `bash scripts/setup-prereq-ubuntu.sh`
+- Arch Linux: `bash scripts/setup-prereq-arch.sh`
+
+**For macOS users:**
+- Run: `bash scripts/setup-prereq-mac.sh`
+
 ## Quick Start
 
 ```bash

@@ -2,6 +2,10 @@
 
 Three Lambda functions manage Fluidity server lifecycle.
 
+**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
+
+---
+
 ## Functions
 
 ### Wake Lambda

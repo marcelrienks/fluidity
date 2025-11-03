@@ -1,6 +1,14 @@
 # AWS Fargate Deployment
 
-Deploy Fluidity server to AWS ECS using Fargate.
+# AWS Fargate Deployment
+
+Deploy Fluidity server on AWS ECS Fargate with CloudFormation automation.
+
+**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
+
+---
+
+## Overview
 
 ## Architecture
 
