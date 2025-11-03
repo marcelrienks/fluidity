@@ -389,7 +389,7 @@ PASS
 
 ## End-to-End (E2E) Tests
 
-**Location:** `scripts/test-*.ps1`, `scripts/test-*.sh`  
+**Location:** `scripts/test-*.sh`  
 **Count:** 6 scenarios (3 protocols × 2 environments)  
 **Coverage:** Full system validation  
 **Execution:** 30-120 seconds
@@ -408,24 +408,14 @@ PASS
 
 ### Running E2E Tests
 
+**Local binaries:**
 ```bash
-# Local binaries
-./scripts/test-local.sh
-```
-
-```powershell
-# Windows
-.\scripts\test-local.ps1
+./scripts/test-local.sh              # All platforms (use WSL on Windows)
 ```
 
 **Docker containers:**
 ```bash
-./scripts/test-docker.sh
-```
-
-```powershell
-# Windows
-.\scripts\test-docker.ps1
+./scripts/test-docker.sh             # All platforms (use WSL on Windows)
 ```
 
 **Expected output:**
@@ -642,12 +632,7 @@ go test ./internal/integration/... -parallel 1 -v
 ```bash
 # Integration tests auto-generate certificates
 # For E2E tests, regenerate:
-./scripts/generate-certs.sh
-```
-
-```powershell
-# Windows
-.\scripts\generate-certs.ps1
+./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
 ```
 
 ### Flaky Tests
@@ -672,14 +657,11 @@ go test ./internal/integration -run TestTunnelConnection -count 10 -v
 # Check for orphaned processes
 ps aux | grep fluidity
 
-# Kill manually
+# Kill manually (Linux/macOS)
 killall fluidity-server fluidity-agent
-```
 
-```powershell
-# Windows
-Get-Process | Where-Object {$_.ProcessName -like "*fluidity*"}
-Stop-Process -Name "fluidity-*" -Force
+# Kill manually (WSL/Linux on Windows)
+pkill -f fluidity
 ```
 
 ### Docker Tests Fail to Build

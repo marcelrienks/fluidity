@@ -4,13 +4,12 @@
 
 **1. Generate certificates:**
 ```bash
-./scripts/manage-certs.sh              # Linux/macOS
-.\scripts\manage-certs.ps1             # Windows
+./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
 ```
 
 **2. Build:**
 ```bash
-make -f Makefile.<platform> build      # platform: win, macos, linux
+make -f Makefile.<platform> build      # platform: macos, linux (use linux in WSL on Windows)
 ```
 
 **3. Run:**
@@ -112,8 +111,7 @@ go test ./internal/integration/... -v
 
 **E2E tests:**
 ```bash
-./scripts/test-local.sh               # Linux/macOS
-.\scripts\test-local.ps1              # Windows
+./scripts/test-local.sh               # All platforms (use WSL on Windows)
 ```
 
 See [Testing Guide](testing.md) for details.

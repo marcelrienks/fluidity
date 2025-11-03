@@ -565,7 +565,7 @@ The Docker image must include TLS certificates at `/root/certs/`. The simplest a
 
 1. Generate certificates locally:
    ```bash
-   ./scripts/manage-certs.sh  # or manage-certs.ps1 on Windows
+   ./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
    ```
 
 2. Modify `deployments/server/Dockerfile` to copy certificates:

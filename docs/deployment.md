@@ -13,6 +13,7 @@ Before deploying, ensure you have:
 - **OpenSSL** (for certificate generation)
 - **AWS CLI v2** (for cloud deployment)
 - **jq** (for JSON parsing in scripts)
+- **WSL (Windows only)** - Windows users should use WSL for running bash scripts and make commands
 
 ---
 
@@ -21,11 +22,7 @@ Before deploying, ensure you have:
 **All deployment options require certificates to be generated first.**
 
 ```bash
-# macOS/Linux
-./scripts/manage-certs.sh
-
-# Windows PowerShell
-.\scripts\manage-certs.ps1
+./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
 ```
 
 This creates certificates in `./certs/`:
@@ -53,11 +50,8 @@ Run server and agent binaries directly on your machine.
 # macOS
 make -f Makefile.macos run-server-local
 
-# Linux
+# Linux (including WSL on Windows)
 make -f Makefile.linux run-server-local
-
-# Windows
-make -f Makefile.win run-server-local
 ```
 
 **3. Start agent** (Terminal 2):
@@ -65,24 +59,16 @@ make -f Makefile.win run-server-local
 # macOS
 make -f Makefile.macos run-agent-local
 
-# Linux  
+# Linux (including WSL on Windows)
 make -f Makefile.linux run-agent-local
-
-# Windows
-make -f Makefile.win run-agent-local
 ```
 
 **4. Configure browser proxy:** `127.0.0.1:8080`
 
 **5. Test:**
 ```bash
-# macOS/Linux
 curl -x http://127.0.0.1:8080 http://example.com -I
 curl -x http://127.0.0.1:8080 https://example.com -I
-
-# Windows
-curl.exe -x http://127.0.0.1:8080 http://example.com -I
-curl.exe -x http://127.0.0.1:8080 https://example.com -I --ssl-no-revoke
 ```
 
 **Why use this option:**
@@ -110,13 +96,9 @@ Test containerized deployment locally before cloud deployment.
 make -f Makefile.macos docker-build-server
 make -f Makefile.macos docker-build-agent
 
-# Linux
+# Linux (including WSL on Windows)
 make -f Makefile.linux docker-build-server
 make -f Makefile.linux docker-build-agent
-
-# Windows
-make -f Makefile.win docker-build-server
-make -f Makefile.win docker-build-agent
 ```
 
 **3. Run server:**
@@ -129,31 +111,12 @@ docker run --rm \
   fluidity-server
 ```
 
-```powershell
-# Windows PowerShell
-docker run --rm `
-  -v ${PWD}\certs:/root/certs:ro `
-  -v ${PWD}\configs\server.docker.yaml:/root/config/server.yaml:ro `
-  -p 8443:8443 `
-  fluidity-server
-```
-
 **4. Run agent** (new terminal):
 ```bash
-# macOS/Linux
 docker run --rm \
   -v "$(pwd)/certs:/root/certs:ro" \
   -v "$(pwd)/configs/agent.docker.yaml:/root/config/agent.yaml:ro" \
   -p 8080:8080 \
-  fluidity-agent
-```
-
-```powershell
-# Windows PowerShell
-docker run --rm `
-  -v ${PWD}\certs:/root/certs:ro `
-  -v ${PWD}\configs\agent.docker.yaml:/root/config/agent.yaml:ro `
-  -p 8080:8080 `
   fluidity-agent
 ```
 
@@ -177,11 +140,7 @@ Deploy server to AWS using Infrastructure as Code with automated certificate man
 #### Step 1: Generate Certificates
 
 ```bash
-# macOS/Linux
-./scripts/manage-certs.sh
-
-# Windows PowerShell
-.\scripts\manage-certs.ps1
+./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
 ```
 
 This creates certificates in `./certs/` directory. **These files are required** - the deployment script reads them and passes them to CloudFormation as parameters.
@@ -200,11 +159,8 @@ aws ecr create-repository \
 # macOS
 make -f Makefile.macos push-server
 
-# Linux
+# Linux (including WSL on Windows)
 make -f Makefile.linux push-server
-
-# Windows
-make -f Makefile.win push-server
 ```
 
 Or manually:
@@ -230,27 +186,17 @@ You have **two options** for providing configuration parameters:
 Provide parameters directly via command-line arguments - no file editing required:
 
 ```bash
-# macOS/Linux
 ./scripts/deploy-fluidity.sh -a deploy \
   --account-id 123456789012 \
   --region us-east-1 \
   --vpc-id vpc-0abc123def456789a \
   --public-subnets subnet-0123456789abcdef0,subnet-0fedcba9876543210 \
   --allowed-cidr 203.0.113.45/32
-
-# Windows PowerShell
-.\scripts\deploy-fluidity.ps1 -Action deploy `
-  -AccountId 123456789012 `
-  -Region us-east-1 `
-  -VpcId vpc-0abc123def456789a `
-  -PublicSubnets subnet-0123456789abcdef0,subnet-0fedcba9876543210 `
-  -AllowedIngressCidr 203.0.113.45/32
 ```
 
 **Get Parameter Values:**
 
 ```bash
-# Bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION="us-east-1"  # Your preferred region
 VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
@@ -265,18 +211,6 @@ MY_IP=$(curl -s ifconfig.me)/32
   --public-subnets $SUBNETS \
   --allowed-cidr $MY_IP
 ```
-
-```powershell
-# PowerShell
-$ACCOUNT_ID = aws sts get-caller-identity --query Account --output text
-$REGION = "us-east-1"  # Your preferred region
-$VPC_ID = aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text
-$SUBNETS = (aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID Name=map-public-ip-on-launch,Values=true --query 'Subnets[*].SubnetId' --output text) -replace '\s+', ','
-$MY_IP = (Invoke-WebRequest -Uri 'https://ifconfig.me' -UseBasicParsing).Content.Trim() + '/32'
-
-# Deploy with variables
-.\scripts\deploy-fluidity.ps1 -Action deploy `
-  -AccountId $ACCOUNT_ID `
   -Region $REGION `
   -VpcId $VPC_ID `
   -PublicSubnets $SUBNETS `
@@ -288,7 +222,6 @@ $MY_IP = (Invoke-WebRequest -Uri 'https://ifconfig.me' -UseBasicParsing).Content
 All optional parameters have defaults. Override them if needed:
 
 ```bash
-# Bash example with optional parameters
 ./scripts/deploy-fluidity.sh -a deploy \
   --account-id $ACCOUNT_ID \
   --region $REGION \
@@ -300,21 +233,6 @@ All optional parameters have defaults. Override them if needed:
   --cpu 512 \
   --memory 1024 \
   --desired-count 1
-```
-
-```powershell
-# PowerShell example with optional parameters
-.\scripts\deploy-fluidity.ps1 -Action deploy `
-  -AccountId $ACCOUNT_ID `
-  -Region $REGION `
-  -VpcId $VPC_ID `
-  -PublicSubnets $SUBNETS `
-  -AllowedIngressCidr $MY_IP `
-  -ClusterName my-cluster `
-  -ServiceName my-service `
-  -Cpu 512 `
-  -Memory 1024 `
-  -DesiredCount 1
 ```
 
 ##### Option 3B: Parameters File (Legacy)
@@ -333,11 +251,7 @@ Edit `deployments/cloudformation/params.json` and replace all values surrounded 
 Then deploy:
 
 ```bash
-# macOS/Linux
 ./scripts/deploy-fluidity.sh -a deploy
-
-# Windows PowerShell
-.\scripts\deploy-fluidity.ps1 -Action deploy
 ```
 #### Step 4: Deployment Actions
 
@@ -345,29 +259,17 @@ Once deployed, manage your stack using these commands:
 
 **Check stack status:**
 ```bash
-# Bash
 ./scripts/deploy-fluidity.sh -a status
-
-# PowerShell
-.\scripts\deploy-fluidity.ps1 -Action status
 ```
 
 **View stack outputs:**
 ```bash
-# Bash
 ./scripts/deploy-fluidity.sh -a outputs
-
-# PowerShell
-.\scripts\deploy-fluidity.ps1 -Action outputs
 ```
 
 **Delete stack:**
 ```bash
-# Bash
 ./scripts/deploy-fluidity.sh -a delete -f
-
-# PowerShell
-.\scripts\deploy-fluidity.ps1 -Action delete -Force
 ```
 
 #### Step 5: Start the Server

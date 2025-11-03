@@ -233,14 +233,6 @@ Resources:
           Environment:
             - Name: USE_SECRETS_MANAGER
               Value: 'true'
-          HealthCheck:
-            Command:
-              - CMD-SHELL
-              - curl -f http://localhost:8443/ || exit 1
-            Interval: 30
-            Timeout: 5
-            Retries: 3
-            StartPeriod: 60
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -250,12 +242,21 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
+    DependsOn:
+      - Cluster
+      - TaskDefinition
     Properties:
       Cluster: !Ref Cluster
       ServiceName: !Ref ServiceName
       LaunchType: FARGATE
       DesiredCount: !Ref DesiredCount
       TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: false
       NetworkConfiguration:
         AwsvpcConfiguration:
           Subnets: !Ref PublicSubnets

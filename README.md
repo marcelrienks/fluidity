@@ -34,6 +34,8 @@ make -f Makefile.<platform> run-agent-local
 curl -x http://127.0.0.1:8080 http://example.com
 ```
 
+**Note:** Windows users should use WSL (Windows Subsystem for Linux) to run bash scripts and make commands.
+
 ## Architecture
 **→ Full details:** [Architecture Documentation](docs/architecture.md)
 Fluidity uses a **client-server architecture** with mTLS authentication for secure tunneling through restrictive firewalls.
@@ -60,6 +62,10 @@ Fluidity supports multiple deployment options for different use cases:
 4. Deploy Lambda control plane for on-demand operation (`./scripts/deploy-fluidity.sh lambda deploy`)
 5. Run agent locally with certificates from ./certs/
 6. Total cost: ~$0.11-0.21/month with on-demand lifecycle management
+
+**Platform Notes:**
+- Linux/macOS: Use `Makefile.linux` or `Makefile.macos`
+- Windows: Use WSL (Windows Subsystem for Linux) with `Makefile.linux`
 
 ### Development
 Local development and testing options for building and contributing to Fluidity.

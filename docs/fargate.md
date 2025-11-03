@@ -34,8 +34,7 @@ docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 
 ```bash
 cd scripts
-./deploy-fluidity.sh -e prod -a deploy  # Linux/macOS
-.\deploy-fluidity.ps1 -Environment prod -Action deploy  # Windows
+./deploy-fluidity.sh -e prod -a deploy  # All platforms (use WSL on Windows)
 ```
 
 Or manually create:
