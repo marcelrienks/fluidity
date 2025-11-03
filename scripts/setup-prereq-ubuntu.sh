@@ -42,18 +42,65 @@ echo -e "${GREEN}  ✓ Package lists updated${NC}"
 echo ""
 
 # 2. Check/Install Go
-echo -e "${YELLOW}[2/6] Checking Go (1.21+)...${NC}"
+echo -e "${YELLOW}[2/6] Checking Go (1.24.3 to match toolchain)...${NC}"
+GO_REQUIRED_VERSION="1.24.3"
+GO_INSTALL_NEEDED=false
+
 if command_exists go; then
-    GO_VERSION=$(go version)
-    echo -e "${GREEN}  ✓ Go is installed: $GO_VERSION${NC}"
+    GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+    echo -e "${CYAN}  Found Go version: $GO_VERSION${NC}"
+    
+    # Compare versions (simple string comparison works for most cases)
+    if [ "$GO_VERSION" != "$GO_REQUIRED_VERSION" ]; then
+        echo -e "${YELLOW}  ⚠ Go version mismatch. Required: $GO_REQUIRED_VERSION, Installed: $GO_VERSION${NC}"
+        GO_INSTALL_NEEDED=true
+    else
+        echo -e "${GREEN}  ✓ Go $GO_VERSION matches required version${NC}"
+    fi
 else
     echo -e "${RED}  ✗ Go is not installed${NC}"
-    echo -e "${YELLOW}  Installing Go...${NC}"
-    $SUDO apt-get install -y golang-go
-    if command_exists go; then
-        echo -e "${GREEN}  ✓ Go installed successfully${NC}"
+    GO_INSTALL_NEEDED=true
+fi
+
+if [ "$GO_INSTALL_NEEDED" = true ]; then
+    echo -e "${YELLOW}  Installing Go $GO_REQUIRED_VERSION...${NC}"
+    
+    # Remove old Go installation if it exists
+    if [ -d "/usr/local/go" ]; then
+        echo -e "${YELLOW}  Removing old Go installation...${NC}"
+        $SUDO rm -rf /usr/local/go
+    fi
+    
+    # Download and install specific Go version
+    GO_TARBALL="go${GO_REQUIRED_VERSION}.linux-amd64.tar.gz"
+    GO_URL="https://go.dev/dl/${GO_TARBALL}"
+    
+    echo -e "${YELLOW}  Downloading Go $GO_REQUIRED_VERSION from $GO_URL...${NC}"
+    if wget -q "$GO_URL" -O "/tmp/$GO_TARBALL"; then
+        echo -e "${GREEN}  ✓ Downloaded Go tarball${NC}"
+        
+        echo -e "${YELLOW}  Extracting to /usr/local/go...${NC}"
+        $SUDO tar -C /usr/local -xzf "/tmp/$GO_TARBALL"
+        rm "/tmp/$GO_TARBALL"
+        
+        # Add to PATH if not already there
+        if ! grep -q "/usr/local/go/bin" ~/.bashrc 2>/dev/null; then
+            echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+            echo -e "${YELLOW}  Added /usr/local/go/bin to ~/.bashrc${NC}"
+        fi
+        
+        # Export for current session
+        export PATH=$PATH:/usr/local/go/bin
+        
+        if command_exists go; then
+            GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+            echo -e "${GREEN}  ✓ Go $GO_VERSION installed successfully${NC}"
+        else
+            echo -e "${RED}  ✗ Go installation failed. Please install manually from https://go.dev/dl/${NC}"
+            HAS_ERRORS=true
+        fi
     else
-        echo -e "${RED}  ✗ Go installation failed. Please install manually.${NC}"
+        echo -e "${RED}  ✗ Failed to download Go. Please install manually from https://go.dev/dl/${NC}"
         HAS_ERRORS=true
     fi
 fi
