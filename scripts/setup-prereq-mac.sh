@@ -148,9 +148,9 @@ fi
 echo ""
 
 # 4. Check/Install Docker
-echo -e "${YELLOW}[4/6] Checking Docker...${NC}"
+echo -e "${YELLOW}[4/7] Checking Docker...${NC}"
 if command_exists docker; then
-    DOCKER_VERSION=$(docker --version)
+    DOCKER_VERSION=$(docker --version 2>&1) || DOCKER_VERSION="unknown"
     echo -e "${GREEN}  ✓ Docker is installed: $DOCKER_VERSION${NC}"
 else
     echo -e "${RED}  ✗ Docker is not installed${NC}"
@@ -169,7 +169,7 @@ fi
 echo ""
 
 # 5. Check/Install OpenSSL
-echo -e "${YELLOW}[5/6] Checking OpenSSL...${NC}"
+echo -e "${YELLOW}[5/7] Checking OpenSSL...${NC}"
 if command_exists openssl; then
     OPENSSL_VERSION=$(openssl version)
     echo -e "${GREEN}  ✓ OpenSSL is installed: $OPENSSL_VERSION${NC}"
@@ -187,8 +187,25 @@ else
 fi
 echo ""
 
-# 6. Check/Install Node.js, npm, and npm packages
-echo -e "${YELLOW}[6/6] Checking Node.js (18+), npm, and npm packages...${NC}"
+# 6. Check/Install zip
+echo -e "${YELLOW}[6/7] Checking zip...${NC}"
+if command_exists zip; then
+    ZIP_VERSION=$(zip --version | head -n 2 | tail -n 1)
+    echo -e "${GREEN}  ✓ zip is installed: $ZIP_VERSION${NC}"
+else
+    echo -e "${RED}  ✗ zip is not installed${NC}"
+    echo -e "${YELLOW}  Installing zip via Homebrew...${NC}"
+    if brew install zip; then
+        echo -e "${GREEN}  ✓ zip installed successfully${NC}"
+    else
+        echo -e "${RED}  ✗ zip installation failed${NC}"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 7. Check/Install Node.js, npm, and npm packages
+echo -e "${YELLOW}[7/7] Checking Node.js (18+), npm, and npm packages...${NC}"
 NODE_INSTALLED=false
 NPM_INSTALLED=false
 if command_exists node; then

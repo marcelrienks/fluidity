@@ -124,31 +124,53 @@ fi
 echo ""
 
 # 4. Check/Install Docker
-echo -e "${YELLOW}[4/6] Checking Docker...${NC}"
+echo -e "${YELLOW}[4/7] Checking Docker...${NC}"
+
+# Check if running in WSL
+IS_WSL=false
+if grep -qEi "(Microsoft|WSL)" /proc/version 2>/dev/null ; then
+    IS_WSL=true
+fi
+
 if command_exists docker; then
-    DOCKER_VERSION=$(docker --version)
+    DOCKER_VERSION=$(docker --version 2>&1) || DOCKER_VERSION="unknown"
     echo -e "${GREEN}  ✓ Docker is installed: $DOCKER_VERSION${NC}"
+    if [ "$IS_WSL" = true ]; then
+        echo -e "${CYAN}  Note: Using Docker Desktop for Windows via WSL integration${NC}"
+    fi
 else
-    echo -e "${RED}  ✗ Docker is not installed${NC}"
-    echo -e "${YELLOW}  Installing Docker...${NC}"
-    $SUDO apt-get install -y docker.io docker-compose
-    if command_exists docker; then
-        echo -e "${GREEN}  ✓ Docker installed successfully${NC}"
-        $SUDO systemctl start docker
-        $SUDO systemctl enable docker
-        if ! is_root; then
-            $SUDO usermod -aG docker $USER
-            echo -e "${YELLOW}  ⚠ Added $USER to docker group. Please log out and back in for changes to take effect.${NC}"
-        fi
+    if [ "$IS_WSL" = true ]; then
+        echo -e "${YELLOW}  ✗ Docker is not installed in WSL${NC}"
+        echo -e "${CYAN}  Note: For WSL, use Docker Desktop for Windows instead of installing Docker in WSL${NC}"
+        echo -e "${CYAN}  1. Install Docker Desktop on Windows from https://www.docker.com/products/docker-desktop${NC}"
+        echo -e "${CYAN}  2. In Docker Desktop settings, enable 'WSL 2 based engine'${NC}"
+        echo -e "${CYAN}  3. Enable integration with your WSL distro in Settings → Resources → WSL Integration${NC}"
+        echo -e "${CYAN}  4. Restart WSL terminal after enabling integration${NC}"
+        echo -e "${YELLOW}  Skipping Docker installation in WSL...${NC}"
     else
-        echo -e "${RED}  ✗ Docker installation failed${NC}"
-        HAS_ERRORS=true
+        echo -e "${RED}  ✗ Docker is not installed${NC}"
+        echo -e "${YELLOW}  Installing Docker...${NC}"
+        $SUDO apt-get install -y docker.io docker-compose
+        if command_exists docker; then
+            echo -e "${GREEN}  ✓ Docker installed successfully${NC}"
+            if command_exists systemctl; then
+                $SUDO systemctl start docker 2>/dev/null || echo -e "${YELLOW}  Note: Could not start Docker service (systemctl not available)${NC}"
+                $SUDO systemctl enable docker 2>/dev/null || true
+            fi
+            if ! is_root; then
+                $SUDO usermod -aG docker $USER
+                echo -e "${YELLOW}  ⚠ Added $USER to docker group. Please log out and back in for changes to take effect.${NC}"
+            fi
+        else
+            echo -e "${RED}  ✗ Docker installation failed${NC}"
+            HAS_ERRORS=true
+        fi
     fi
 fi
 echo ""
 
-# 5. Check/Install OpenSSL
-echo -e "${YELLOW}[5/6] Checking OpenSSL...${NC}"
+# 5. Check/Install OpenSSL and zip
+echo -e "${YELLOW}[5/7] Checking OpenSSL...${NC}"
 if command_exists openssl; then
     OPENSSL_VERSION=$(openssl version)
     echo -e "${GREEN}  ✓ OpenSSL is installed: $OPENSSL_VERSION${NC}"
@@ -165,8 +187,26 @@ else
 fi
 echo ""
 
-# 6. Check/Install Node.js, npm, and required npm packages
-echo -e "${YELLOW}[6/6] Checking Node.js (18+), npm, and npm packages...${NC}"
+# 6. Check/Install zip
+echo -e "${YELLOW}[6/7] Checking zip...${NC}"
+if command_exists zip; then
+    ZIP_VERSION=$(zip --version | head -n 2 | tail -n 1)
+    echo -e "${GREEN}  ✓ zip is installed: $ZIP_VERSION${NC}"
+else
+    echo -e "${RED}  ✗ zip is not installed${NC}"
+    echo -e "${YELLOW}  Installing zip...${NC}"
+    $SUDO apt-get install -y zip unzip
+    if command_exists zip; then
+        echo -e "${GREEN}  ✓ zip installed successfully${NC}"
+    else
+        echo -e "${RED}  ✗ zip installation failed${NC}"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 7. Check/Install Node.js, npm, and required npm packages
+echo -e "${YELLOW}[7/7] Checking Node.js (18+), npm, and npm packages...${NC}"
 NODE_INSTALLED=false
 NPM_INSTALLED=false
 if command_exists node; then
