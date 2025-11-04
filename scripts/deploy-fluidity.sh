@@ -163,9 +163,15 @@ LAMBDA_TEMPLATE="$CLOUDFORMATION_DIR/lambda.yaml"
 echo "Loading certificates..."
 CERTS_DIR="$(dirname "$SCRIPT_DIR")/certs"
 if [[ ! -f "$CERTS_DIR/server.crt" ]] || [[ ! -f "$CERTS_DIR/server.key" ]] || [[ ! -f "$CERTS_DIR/ca.crt" ]]; then
-    echo "Error: Certificates not found in $CERTS_DIR"
-    echo "Run: ./scripts/manage-certs.sh"
-    exit 1
+    echo "Certificates not found in $CERTS_DIR"
+    echo "Generating certificates automatically..."
+    if bash "$SCRIPT_DIR/manage-certs.sh"; then
+        echo "✓ Certificates generated successfully"
+    else
+        echo "Error: Certificate generation failed"
+        echo "Run: ./scripts/manage-certs.sh"
+        exit 1
+    fi
 fi
 
 CERT_PEM=$(cat "$CERTS_DIR/server.crt" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')

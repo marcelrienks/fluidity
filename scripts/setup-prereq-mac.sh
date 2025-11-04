@@ -24,7 +24,7 @@ command_exists() {
 }
 
 # 1. Check/Install Homebrew
-echo -e "${YELLOW}[1/6] Checking Homebrew...${NC}"
+echo -e "${YELLOW}[1/9] Checking Homebrew...${NC}"
 if command_exists brew; then
     BREW_VERSION=$(brew --version | head -n 1)
     echo -e "${GREEN}  ✓ Homebrew is installed: $BREW_VERSION${NC}"
@@ -47,7 +47,7 @@ fi
 echo ""
 
 # 2. Check/Install Go
-echo -e "${YELLOW}[2/6] Checking Go (1.24.3 to match toolchain)...${NC}"
+echo -e "${YELLOW}[2/9] Checking Go (1.24.3 to match toolchain)...${NC}"
 GO_REQUIRED_VERSION="1.24.3"
 GO_INSTALL_NEEDED=false
 
@@ -124,7 +124,7 @@ fi
 echo ""
 
 # 3. Check/Install Make
-echo -e "${YELLOW}[3/6] Checking Make...${NC}"
+echo -e "${YELLOW}[3/9] Checking Make...${NC}"
 if command_exists make; then
     MAKE_VERSION=$(make --version | head -n 1)
     echo -e "${GREEN}  ✓ Make is installed: $MAKE_VERSION${NC}"
@@ -148,7 +148,7 @@ fi
 echo ""
 
 # 4. Check/Install Docker
-echo -e "${YELLOW}[4/7] Checking Docker...${NC}"
+echo -e "${YELLOW}[4/9] Checking Docker...${NC}"
 if command_exists docker; then
     DOCKER_VERSION=$(docker --version 2>&1) || DOCKER_VERSION="unknown"
     echo -e "${GREEN}  ✓ Docker is installed: $DOCKER_VERSION${NC}"
@@ -169,7 +169,7 @@ fi
 echo ""
 
 # 5. Check/Install OpenSSL
-echo -e "${YELLOW}[5/7] Checking OpenSSL...${NC}"
+echo -e "${YELLOW}[5/9] Checking OpenSSL...${NC}"
 if command_exists openssl; then
     OPENSSL_VERSION=$(openssl version)
     echo -e "${GREEN}  ✓ OpenSSL is installed: $OPENSSL_VERSION${NC}"
@@ -188,7 +188,7 @@ fi
 echo ""
 
 # 6. Check/Install zip
-echo -e "${YELLOW}[6/7] Checking zip...${NC}"
+echo -e "${YELLOW}[6/9] Checking zip...${NC}"
 if command_exists zip; then
     ZIP_VERSION=$(zip --version | head -n 2 | tail -n 1)
     echo -e "${GREEN}  ✓ zip is installed: $ZIP_VERSION${NC}"
@@ -204,8 +204,80 @@ else
 fi
 echo ""
 
-# 7. Check/Install Node.js, npm, and npm packages
-echo -e "${YELLOW}[7/7] Checking Node.js (18+), npm, and npm packages...${NC}"
+# 7. Check/Install jq
+echo -e "${YELLOW}[7/9] Checking jq...${NC}"
+if command_exists jq; then
+    JQ_VERSION=$(jq --version)
+    echo -e "${GREEN}  ✓ jq is installed: $JQ_VERSION${NC}"
+else
+    echo -e "${RED}  ✗ jq is not installed${NC}"
+    echo -e "${YELLOW}  Installing jq via Homebrew...${NC}"
+    if brew install jq; then
+        echo -e "${GREEN}  ✓ jq installed successfully${NC}"
+    else
+        echo -e "${RED}  ✗ jq installation failed${NC}"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 8. Check/Install AWS CLI
+echo -e "${YELLOW}[8/9] Checking AWS CLI v2...${NC}"
+if command_exists aws; then
+    AWS_VERSION=$(aws --version 2>&1)
+    echo -e "${GREEN}  ✓ AWS CLI is installed: $AWS_VERSION${NC}"
+else
+    echo -e "${RED}  ✗ AWS CLI is not installed${NC}"
+    echo -e "${YELLOW}  Installing AWS CLI v2 via Homebrew...${NC}"
+    
+    if command_exists brew; then
+        if brew install awscli; then
+            if command_exists aws; then
+                AWS_VERSION=$(aws --version 2>&1)
+                echo -e "${GREEN}  ✓ AWS CLI installed successfully: $AWS_VERSION${NC}"
+            else
+                echo -e "${RED}  ✗ AWS CLI installation failed${NC}"
+                echo -e "${YELLOW}  Please install manually from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html${NC}"
+                HAS_ERRORS=true
+            fi
+        else
+            echo -e "${RED}  ✗ Homebrew installation of AWS CLI failed${NC}"
+            echo -e "${YELLOW}  Trying manual installation...${NC}"
+            
+            # Determine architecture
+            ARCH=$(uname -m)
+            if [[ "$ARCH" == "arm64" ]]; then
+                AWS_PKG_URL="https://awscli.amazonaws.com/AWSCLIV2-arm64.pkg"
+            else
+                AWS_PKG_URL="https://awscli.amazonaws.com/AWSCLIV2.pkg"
+            fi
+            
+            if curl -s "$AWS_PKG_URL" -o "/tmp/AWSCLIV2.pkg"; then
+                echo -e "${GREEN}  ✓ Downloaded AWS CLI installer${NC}"
+                sudo installer -pkg /tmp/AWSCLIV2.pkg -target /
+                rm /tmp/AWSCLIV2.pkg
+                
+                if command_exists aws; then
+                    AWS_VERSION=$(aws --version 2>&1)
+                    echo -e "${GREEN}  ✓ AWS CLI installed successfully: $AWS_VERSION${NC}"
+                else
+                    echo -e "${RED}  ✗ AWS CLI installation failed${NC}"
+                    HAS_ERRORS=true
+                fi
+            else
+                echo -e "${RED}  ✗ Failed to download AWS CLI installer${NC}"
+                HAS_ERRORS=true
+            fi
+        fi
+    else
+        echo -e "${RED}  ✗ Homebrew not available for AWS CLI installation${NC}"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 9. Check/Install Node.js, npm, and npm packages
+echo -e "${YELLOW}[9/9] Checking Node.js (18+), npm, and npm packages...${NC}"
 NODE_INSTALLED=false
 NPM_INSTALLED=false
 if command_exists node; then

@@ -28,21 +28,36 @@ is_root() {
     [ "$(id -u)" -eq 0 ]
 }
 
+# Check if running interactively (can accept input)
+is_interactive() {
+    [[ -t 0 ]]
+}
+
 SUDO=""
 if ! is_root; then
-    SUDO="sudo"
-    echo -e "${YELLOW}Note: Some commands will require sudo password.${NC}"
-    echo ""
+    if is_interactive; then
+        SUDO="sudo"
+        echo -e "${YELLOW}Note: Some commands will require sudo password.${NC}"
+        echo ""
+    else
+        echo -e "${RED}Error: This script requires sudo privileges but is not running interactively.${NC}"
+        echo -e "${YELLOW}Please run this script directly in a terminal:${NC}"
+        echo -e "${CYAN}  bash ./scripts/setup-prereq-ubuntu.sh${NC}"
+        echo ""
+        echo -e "${YELLOW}Or run with elevated privileges:${NC}"
+        echo -e "${CYAN}  sudo bash ./scripts/setup-prereq-ubuntu.sh${NC}"
+        exit 1
+    fi
 fi
 
 # 1. Update package manager
-echo -e "${YELLOW}[1/6] Updating package manager...${NC}"
+echo -e "${YELLOW}[1/9] Updating package manager...${NC}"
 $SUDO apt-get update
 echo -e "${GREEN}  ✓ Package lists updated${NC}"
 echo ""
 
 # 2. Check/Install Go
-echo -e "${YELLOW}[2/6] Checking Go (1.24.3 to match toolchain)...${NC}"
+echo -e "${YELLOW}[2/9] Checking Go (1.24.3 to match toolchain)...${NC}"
 GO_REQUIRED_VERSION="1.24.3"
 GO_INSTALL_NEEDED=false
 
@@ -107,7 +122,7 @@ fi
 echo ""
 
 # 3. Check/Install Make
-echo -e "${YELLOW}[3/6] Checking Make...${NC}"
+echo -e "${YELLOW}[3/9] Checking Make...${NC}"
 if command_exists make; then
     MAKE_VERSION=$(make --version | head -n 1)
     echo -e "${GREEN}  ✓ Make is installed: $MAKE_VERSION${NC}"
@@ -124,7 +139,7 @@ fi
 echo ""
 
 # 4. Check/Install Docker
-echo -e "${YELLOW}[4/7] Checking Docker...${NC}"
+echo -e "${YELLOW}[4/9] Checking Docker...${NC}"
 
 # Check if running in WSL
 IS_WSL=false
@@ -169,8 +184,8 @@ else
 fi
 echo ""
 
-# 5. Check/Install OpenSSL and zip
-echo -e "${YELLOW}[5/7] Checking OpenSSL...${NC}"
+# 5. Check/Install OpenSSL
+echo -e "${YELLOW}[5/9] Checking OpenSSL...${NC}"
 if command_exists openssl; then
     OPENSSL_VERSION=$(openssl version)
     echo -e "${GREEN}  ✓ OpenSSL is installed: $OPENSSL_VERSION${NC}"
@@ -187,14 +202,14 @@ else
 fi
 echo ""
 
-# 6. Check/Install zip
-echo -e "${YELLOW}[6/7] Checking zip...${NC}"
+# 6. Check/Install zip and unzip
+echo -e "${YELLOW}[6/9] Checking zip and unzip...${NC}"
 if command_exists zip; then
     ZIP_VERSION=$(zip --version | head -n 2 | tail -n 1)
     echo -e "${GREEN}  ✓ zip is installed: $ZIP_VERSION${NC}"
 else
     echo -e "${RED}  ✗ zip is not installed${NC}"
-    echo -e "${YELLOW}  Installing zip...${NC}"
+    echo -e "${YELLOW}  Installing zip and unzip...${NC}"
     $SUDO apt-get install -y zip unzip
     if command_exists zip; then
         echo -e "${GREEN}  ✓ zip installed successfully${NC}"
@@ -203,10 +218,72 @@ else
         HAS_ERRORS=true
     fi
 fi
+if command_exists unzip; then
+    echo -e "${GREEN}  ✓ unzip is installed${NC}"
+else
+    echo -e "${YELLOW}  Note: unzip required for AWS CLI installation${NC}"
+fi
 echo ""
 
-# 7. Check/Install Node.js, npm, and required npm packages
-echo -e "${YELLOW}[7/7] Checking Node.js (18+), npm, and npm packages...${NC}"
+# 7. Check/Install jq
+echo -e "${YELLOW}[7/9] Checking jq...${NC}"
+if command_exists jq; then
+    JQ_VERSION=$(jq --version)
+    echo -e "${GREEN}  ✓ jq is installed: $JQ_VERSION${NC}"
+else
+    echo -e "${RED}  ✗ jq is not installed${NC}"
+    echo -e "${YELLOW}  Installing jq...${NC}"
+    $SUDO apt-get install -y jq
+    if command_exists jq; then
+        echo -e "${GREEN}  ✓ jq installed successfully${NC}"
+    else
+        echo -e "${RED}  ✗ jq installation failed${NC}"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 8. Check/Install AWS CLI
+echo -e "${YELLOW}[8/9] Checking AWS CLI v2...${NC}"
+if command_exists aws; then
+    AWS_VERSION=$(aws --version 2>&1)
+    echo -e "${GREEN}  ✓ AWS CLI is installed: $AWS_VERSION${NC}"
+else
+    echo -e "${RED}  ✗ AWS CLI is not installed${NC}"
+    echo -e "${YELLOW}  Installing AWS CLI v2...${NC}"
+    
+    # Download AWS CLI v2 installer
+    if curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"; then
+        echo -e "${GREEN}  ✓ Downloaded AWS CLI installer${NC}"
+        
+        # Unzip and install
+        if command_exists unzip; then
+            unzip -q /tmp/awscliv2.zip -d /tmp
+            $SUDO /tmp/aws/install
+            rm -rf /tmp/awscliv2.zip /tmp/aws
+            
+            if command_exists aws; then
+                AWS_VERSION=$(aws --version 2>&1)
+                echo -e "${GREEN}  ✓ AWS CLI installed successfully: $AWS_VERSION${NC}"
+            else
+                echo -e "${RED}  ✗ AWS CLI installation failed${NC}"
+                echo -e "${YELLOW}  Please install manually from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html${NC}"
+                HAS_ERRORS=true
+            fi
+        else
+            echo -e "${RED}  ✗ unzip command not found (required for AWS CLI installation)${NC}"
+            HAS_ERRORS=true
+        fi
+    else
+        echo -e "${RED}  ✗ Failed to download AWS CLI installer${NC}"
+        echo -e "${YELLOW}  Please install manually from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html${NC}"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 9. Check/Install Node.js, npm, and required npm packages
+echo -e "${YELLOW}[9/9] Checking Node.js (18+), npm, and npm packages...${NC}"
 NODE_INSTALLED=false
 NPM_INSTALLED=false
 if command_exists node; then
