@@ -76,7 +76,7 @@ Run server and agent binaries directly on your machine.
 
 **5. Configure browser proxy:** `127.0.0.1:8080`
 
-**6. Test:**
+**6. Test:
 ```bash
 curl -x http://127.0.0.1:8080 http://example.com -I
 curl -x http://127.0.0.1:8080 https://example.com -I
@@ -183,7 +183,7 @@ docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 
 #### Step 3: Deploy to AWS
 
-You have **two options** for providing configuration parameters:
+By default, you can run `../scripts/deploy-fluidity.sh deploy` with no flags — the script auto-detects Region, VPC ID, public subnets, and your public IP via AWS CLI and prompts if detection fails. You also have **two options** for providing configuration parameters explicitly:
 
 ##### Option 3A: Command-Line Parameters (Recommended)
 
@@ -572,3 +572,33 @@ curl.exe -x http://127.0.0.1:8080 https://example.com --ssl-no-revoke
 - **[Lambda Functions](lambda.md)** - Control plane architecture
 - **[Infrastructure Guide](infrastructure.md)** - CloudFormation templates
 - **[Architecture](architecture.md)** - System design overview
+
+---
+
+## Post-Deployment Steps (Cloud/Lambda)
+
+After running the deployment script, you must:
+
+1. **Retrieve the API Gateway endpoint and API key:**
+   - The deploy script will print the Kill API endpoint and API Key ID.
+   - To get the API key value, run:
+     ```bash
+     aws apigateway get-api-key --api-key <API_KEY_ID> --include-value --region <REGION>
+     ```
+2. **Configure the agent:**
+   - Add the following to your agent config file (or pass as arguments):
+     ```yaml
+     kill_api_endpoint: "<Kill API Endpoint>"
+     api_key: "<API Key Value>"
+     ```
+   - Example:
+     ```yaml
+     kill_api_endpoint: "https://bt5hd4lyuf.execute-api.eu-west-1.amazonaws.com/prod/kill"
+     api_key: "AbC123..."
+     ```
+3. **Deploy the agent:**
+   - Build and run the agent as described in the agent section, ensuring it uses the correct endpoint and API key.
+
+**Note:** The agent will use these credentials to call the Kill Lambda endpoint for lifecycle management.
+
+---

@@ -11,6 +11,10 @@ Parameters:
     Type: String
     Description: S3 key prefix for Lambda packages
     Default: 'fluidity/'
+  BuildVersion:
+    Type: String
+    Description: Build version for Lambda ZIP filenames
+    Default: ''
   
   ECSClusterName:
     Type: String
@@ -244,7 +248,7 @@ Resources:
           LOG_LEVEL: info
       Code:
         S3Bucket: !Ref LambdaS3Bucket
-        S3Key: !Sub '${LambdaS3KeyPrefix}wake.zip'
+        S3Key: !Sub '${LambdaS3KeyPrefix}wake-${BuildVersion}.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -272,7 +276,7 @@ Resources:
           LOG_LEVEL: info
       Code:
         S3Bucket: !Ref LambdaS3Bucket
-        S3Key: !Sub '${LambdaS3KeyPrefix}sleep.zip'
+        S3Key: !Sub '${LambdaS3KeyPrefix}sleep-${BuildVersion}.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -298,7 +302,7 @@ Resources:
           LOG_LEVEL: info
       Code:
         S3Bucket: !Ref LambdaS3Bucket
-        S3Key: !Sub '${LambdaS3KeyPrefix}kill.zip'
+        S3Key: !Sub '${LambdaS3KeyPrefix}kill-${BuildVersion}.zip'
       Tags:
         - Key: Application
           Value: Fluidity

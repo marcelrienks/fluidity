@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build/lambdas"
 LAMBDAS_DIR="$PROJECT_ROOT/cmd/lambdas"
+BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
+echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
 
 echo "Building Lambda functions..."
 
@@ -46,20 +48,21 @@ for func in "${FUNCTIONS[@]}"; do
         exit 1
     fi
     
-    # Package as ZIP
+    # Package as ZIP with version
     echo "Packaging as ZIP..."
     cd "$OUTPUT_DIR"
-    zip -q "$BUILD_DIR/${func}.zip" bootstrap
+    ZIP_NAME="${func}-${BUILD_VERSION}.zip"
+    zip -q "$BUILD_DIR/$ZIP_NAME" bootstrap
     rm bootstrap
-    
     # Show size
-    SIZE=$(du -h "$BUILD_DIR/${func}.zip" | cut -f1)
-    echo "[OK] Created ${func}.zip ($SIZE)"
+    SIZE=$(du -h "$BUILD_DIR/$ZIP_NAME" | cut -f1)
+    echo "[OK] Created $ZIP_NAME ($SIZE)"
 done
 
 echo ""
 echo "=== Build Summary ==="
 ls -lh "$BUILD_DIR"/*.zip
+echo "Build version: $BUILD_VERSION"
 
 echo ""
 echo "[OK] All Lambda functions built successfully"

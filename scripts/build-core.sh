@@ -31,6 +31,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 CMD_DIR="$PROJECT_ROOT/cmd/core"
+BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
+echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
 
 # Colors
 RED='\033[0;31m'
@@ -127,6 +129,7 @@ if [[ "$BUILD_SERVER" == true ]]; then
     
     SERVER_DIR="$CMD_DIR/server"
     SERVER_BINARY="fluidity-server${BINARY_SUFFIX}"
+    SERVER_IMAGE_TAG="$BUILD_VERSION"
     
     if [[ ! -d "$SERVER_DIR" ]]; then
         echo -e "${RED}[ERROR] Server directory not found: $SERVER_DIR${NC}"
@@ -138,7 +141,7 @@ if [[ "$BUILD_SERVER" == true ]]; then
     BUILD_CMD="go build -ldflags='-s -w' -o $BUILD_DIR/$SERVER_BINARY ."
     
     if [[ -n "$GOOS" ]]; then
-        BUILD_CMD="GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=$CGO_ENABLED $BUILD_CMD"
+    BUILD_CMD="GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=$CGO_ENABLED $BUILD_CMD"
     fi
     
     echo "Compiling: $SERVER_BINARY"
@@ -151,6 +154,7 @@ if [[ "$BUILD_SERVER" == true ]]; then
     
     SIZE=$(du -h "$BUILD_DIR/$SERVER_BINARY" | cut -f1)
     echo -e "${GREEN}✓ Server built successfully ($SIZE)${NC}"
+    echo "Server image tag: $SERVER_IMAGE_TAG"
     echo ""
 fi
 
