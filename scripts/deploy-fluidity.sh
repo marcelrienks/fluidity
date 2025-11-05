@@ -353,20 +353,24 @@ auto_detect_parameters() {
 
     # Detect Public IP (Allowed CIDR)
     if [[ -z "$ALLOWED_CIDR" ]]; then
-        if PUBLIC_IP=$(curl -s --max-time 5 https://icanhazip.com 2>/dev/null); then
-            if [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                ALLOWED_CIDR="${PUBLIC_IP}/32"
-                log_info "Public IP auto-detected: $ALLOWED_CIDR"
-            else
-                read -p "Enter Allowed Ingress CIDR (e.g., 1.2.3.4/32): " ALLOWED_CIDR
-                [[ -z "$ALLOWED_CIDR" ]] && {
-                    log_error_start
-                    echo "Allowed Ingress CIDR is required"
-                    log_error_end
-                    exit 1
-                }
+        PUBLIC_IP=""
+        
+        # Try multiple IP detection services with fallbacks
+        for service in "https://icanhazip.com" "https://ifconfig.me" "https://api.ipify.org" "https://ident.me"; do
+            log_debug "Attempting to get public IP from: $service"
+            if PUBLIC_IP=$(curl -s --max-time 3 "$service" 2>/dev/null); then
+                PUBLIC_IP=$(echo "$PUBLIC_IP" | tr -d '\n' | tr -d ' ')
+                if [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    ALLOWED_CIDR="${PUBLIC_IP}/32"
+                    log_info "Public IP auto-detected: $ALLOWED_CIDR"
+                    break
+                fi
             fi
-        else
+        done
+        
+        # If all services failed, prompt user
+        if [[ -z "$ALLOWED_CIDR" ]]; then
+            log_debug "Failed to auto-detect public IP from all services"
             read -p "Enter Allowed Ingress CIDR (e.g., 1.2.3.4/32): " ALLOWED_CIDR
             [[ -z "$ALLOWED_CIDR" ]] && {
                 log_error_start
@@ -493,28 +497,59 @@ build_lambda_functions() {
     log_info "Build version: $BUILD_VERSION"
     log_debug "Calling: bash $SCRIPT_DIR/build-lambdas.sh"
 
-    # Run with timeout and capture output
-    if timeout 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
-        log_success "Lambda functions built"
-        log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
-    else
-        local exit_code=$?
-        log_error_start
-        if [ $exit_code -eq 124 ]; then
-            echo "Lambda build timed out after 300s"
+    # Determine which timeout command to use (BSD timeout on macOS, GNU timeout on Linux)
+    local timeout_cmd="timeout"
+    if ! command -v timeout &> /dev/null; then
+        if command -v gtimeout &> /dev/null; then
+            timeout_cmd="gtimeout"
         else
-            echo "Lambda build failed with exit code $exit_code"
+            log_debug "timeout/gtimeout not found, running without timeout"
+            timeout_cmd=""
         fi
-        echo "Build output:"
-        cat /tmp/lambda_build_$$.log 2>/dev/null || echo "(no output captured)"
-        log_error_end
-        rm -f /tmp/lambda_build_$$.log
-        ERROR_LOG+=$'Lambda build failed\n'
-        return 1
     fi
 
-    rm -f /tmp/lambda_build_$$.log
-    log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
+    # Run with timeout and capture output
+    if [ -n "$timeout_cmd" ]; then
+        if $timeout_cmd 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
+            log_success "Lambda functions built"
+            log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
+            rm -f /tmp/lambda_build_$$.log
+            log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
+            return 0
+        else
+            local exit_code=$?
+            log_error_start
+            if [ $exit_code -eq 124 ]; then
+                echo "Lambda build timed out after 300s"
+            else
+                echo "Lambda build failed with exit code $exit_code"
+            fi
+            echo "Build output:"
+            cat /tmp/lambda_build_$$.log 2>/dev/null || echo "(no output captured)"
+            log_error_end
+            ERROR_LOG+=$'Lambda build failed\n'
+            rm -f /tmp/lambda_build_$$.log
+            return 1
+        fi
+    else
+        if bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
+            log_success "Lambda functions built"
+            log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
+            rm -f /tmp/lambda_build_$$.log
+            log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
+            return 0
+        else
+            local exit_code=$?
+            log_error_start
+            echo "Lambda build failed with exit code $exit_code"
+            echo "Build output:"
+            cat /tmp/lambda_build_$$.log 2>/dev/null || echo "(no output captured)"
+            log_error_end
+            ERROR_LOG+=$'Lambda build failed\n'
+            rm -f /tmp/lambda_build_$$.log
+            return 1
+        fi
+    fi
 }
 
 build_and_push_docker_image() {
