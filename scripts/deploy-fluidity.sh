@@ -833,7 +833,7 @@ wait_for_stack_creation() {
 # ============================================================================
 
 set_retention_policies() {
-    log_section "Step 8: Configure Retention Policies (7 days)"
+    log_section "Step 8: Configure Retention Policies"
     
     # CloudWatch Logs
     log_substep "Setting CloudWatch Logs Retention"
@@ -885,32 +885,44 @@ EOF
         fi
     fi
     
-    # S3 Lifecycle Policy
-    log_substep "Setting S3 Lifecycle Policy"
+    # S3 Lambda Artifacts Cleanup (keep only current build)
+    log_substep "Cleaning Old S3 Lambda Artifacts"
     local s3_bucket="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
     if aws s3 ls "s3://$s3_bucket" --region "$REGION" &>/dev/null 2>&1; then
-        local lifecycle_config=$(cat <<'EOF'
-{
-  "Rules": [
-    {
-      "Id": "DeleteOldLambdaArtifacts",
-      "Status": "Enabled",
-      "Prefix": "fluidity/",
-      "Expiration": {
-        "Days": 7
-      }
-    }
-  ]
-}
-EOF
-)
-        if echo "$lifecycle_config" | aws s3api put-bucket-lifecycle-configuration \
-            --bucket "$s3_bucket" \
-            --lifecycle-configuration file:///dev/stdin \
-            --region "$REGION" >/dev/null 2>&1; then
-            log_success "S3 lifecycle policy set (objects older than 7 days will be deleted)"
+        # Get current build version from latest deployment
+        local current_version
+        current_version=$(aws cloudformation describe-stacks \
+            --stack-name "$LAMBDA_STACK_NAME" \
+            --region "$REGION" \
+            --query 'Stacks[0].Parameters[?ParameterKey==`BuildVersion`].ParameterValue' \
+            --output text 2>/dev/null)
+        
+        if [[ -n "$current_version" && "$current_version" != "None" ]]; then
+            log_info "Current build version: $current_version"
+            log_info "Deleting old Lambda artifacts (keeping only $current_version)"
+            
+            # List all Lambda ZIPs and delete those not matching current version
+            local deleted_count=0
+            for func in wake sleep kill; do
+                # Get all versions of this function
+                local all_zips
+                all_zips=$(aws s3 ls "s3://$s3_bucket/fluidity/${func}-" --region "$REGION" 2>/dev/null | awk '{print $4}' || echo "")
+                
+                if [[ -n "$all_zips" ]]; then
+                    echo "$all_zips" | while read -r zip_file; do
+                        if [[ -n "$zip_file" && "$zip_file" != "${func}-${current_version}.zip" ]]; then
+                            if aws s3 rm "s3://$s3_bucket/fluidity/$zip_file" --region "$REGION" >/dev/null 2>&1; then
+                                log_debug "Deleted: $zip_file"
+                                deleted_count=$((deleted_count + 1))
+                            fi
+                        fi
+                    done
+                fi
+            done
+            
+            log_success "S3 cleanup complete (keeping only current build: $current_version)"
         else
-            log_info "Failed to set S3 lifecycle policy"
+            log_info "Could not determine current build version, skipping S3 cleanup"
         fi
     fi
     
