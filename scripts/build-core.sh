@@ -34,12 +34,39 @@ CMD_DIR="$PROJECT_ROOT/cmd/core"
 BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
 echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Logging functions (consistent with deploy-fluidity.sh)
+log_header() {
+    echo ""
+    echo "================================================================================"
+    echo "$*"
+    echo "================================================================================"
+    echo ""
+}
+
+log_section() {
+    echo ""
+    echo ">>> $*"
+}
+
+log_substep() {
+    echo "=== $*"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error() {
+    echo "[ERROR] $*" >&2
+}
+
+log_debug() {
+    echo "[DEBUG] $*" >&2
+}
 
 # Default options
 BUILD_AGENT=false
@@ -116,23 +143,21 @@ if [[ "$BUILD_LINUX" == true ]]; then
     GOOS="linux"
     GOARCH="amd64"
     CGO_ENABLED="0"
-    echo -e "${CYAN}Building for Linux (static binary)${NC}"
+    log_info "Building for Linux (static binary)"
 else
-    echo -e "${CYAN}Building for current platform${NC}"
+    log_info "Building for current platform"
 fi
-
-echo ""
 
 # Build server
 if [[ "$BUILD_SERVER" == true ]]; then
-    echo -e "${YELLOW}=== Building Server ===${NC}"
+    log_substep "Building Server"
     
     SERVER_DIR="$CMD_DIR/server"
     SERVER_BINARY="fluidity-server${BINARY_SUFFIX}"
     SERVER_IMAGE_TAG="$BUILD_VERSION"
     
     if [[ ! -d "$SERVER_DIR" ]]; then
-        echo -e "${RED}[ERROR] Server directory not found: $SERVER_DIR${NC}"
+        log_error "Server directory not found: $SERVER_DIR"
         exit 1
     fi
     
@@ -148,25 +173,24 @@ if [[ "$BUILD_SERVER" == true ]]; then
     eval $BUILD_CMD
     
     if [[ ! -f "$BUILD_DIR/$SERVER_BINARY" ]]; then
-        echo -e "${RED}[ERROR] Failed to build server${NC}"
+        log_error "Failed to build server"
         exit 1
     fi
     
     SIZE=$(du -h "$BUILD_DIR/$SERVER_BINARY" | cut -f1)
-    echo -e "${GREEN}✓ Server built successfully ($SIZE)${NC}"
-    echo "Server image tag: $SERVER_IMAGE_TAG"
-    echo ""
+    log_success "Server built successfully ($SIZE)"
+    log_info "Server image tag: $SERVER_IMAGE_TAG"
 fi
 
 # Build agent
 if [[ "$BUILD_AGENT" == true ]]; then
-    echo -e "${YELLOW}=== Building Agent ===${NC}"
+    log_substep "Building Agent"
     
     AGENT_DIR="$CMD_DIR/agent"
     AGENT_BINARY="fluidity-agent${BINARY_SUFFIX}"
     
     if [[ ! -d "$AGENT_DIR" ]]; then
-        echo -e "${RED}[ERROR] Agent directory not found: $AGENT_DIR${NC}"
+        log_error "Agent directory not found: $AGENT_DIR"
         exit 1
     fi
     
@@ -182,28 +206,26 @@ if [[ "$BUILD_AGENT" == true ]]; then
     eval $BUILD_CMD
     
     if [[ ! -f "$BUILD_DIR/$AGENT_BINARY" ]]; then
-        echo -e "${RED}[ERROR] Failed to build agent${NC}"
+        log_error "Failed to build agent"
         exit 1
     fi
     
     SIZE=$(du -h "$BUILD_DIR/$AGENT_BINARY" | cut -f1)
-    echo -e "${GREEN}✓ Agent built successfully ($SIZE)${NC}"
-    echo ""
+    log_success "Agent built successfully ($SIZE)"
 fi
 
 # Build lambdas if --all was specified
 if [[ "$BUILD_ALL" == true ]]; then
-    echo -e "${YELLOW}=== Building Lambda Functions ===${NC}"
+    log_substep "Building Lambda Functions"
     "$SCRIPT_DIR/build-lambdas.sh"
-    echo ""
 fi
 
 # Summary
-echo -e "${CYAN}=== Build Summary ===${NC}"
+log_substep "Build Summary"
 if [[ -d "$BUILD_DIR" ]]; then
     ls -lh "$BUILD_DIR" 2>/dev/null | grep -E '(fluidity-|\.zip)' || echo "No binaries found"
 fi
 
 echo ""
-echo -e "${GREEN}[OK] Build completed successfully${NC}"
-echo "Output directory: $BUILD_DIR"
+log_success "Build completed successfully"
+log_info "Output directory: $BUILD_DIR"

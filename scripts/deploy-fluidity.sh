@@ -205,28 +205,8 @@ check_prerequisites() {
     fi
     log_debug "AWS CLI found"
 
-    # Check Docker
-    if ! command -v docker &>/dev/null; then
-        log_error_start
-        echo "Docker not found"
-        echo "Install from: https://www.docker.com/products/docker-desktop"
-        log_error_end
-        exit 1
-    fi
-    log_debug "Docker found"
-
-    # Check if Docker daemon is accessible
-    if ! docker ps &>/dev/null 2>&1; then
-        log_error_start
-        echo "Docker daemon is not accessible"
-        echo "Please ensure Docker Desktop is running:"
-        echo "  - macOS/Windows: Open Docker Desktop application"
-        echo "  - Linux: Ensure Docker service is running (systemctl start docker)"
-        echo "  - Windows+WSL: Enable Docker Desktop WSL 2 integration in settings"
-        log_error_end
-        exit 1
-    fi
-    log_debug "Docker daemon is accessible"
+    # Docker check is handled by build-docker.sh script
+    # (which includes auto-start logic)
 
     # Check jq
     if ! command -v jq &>/dev/null; then
@@ -554,20 +534,8 @@ build_lambda_functions() {
 
 build_and_push_docker_image() {
     local build_version="$1"
-
-    # Build core binaries
-    log_info "Building core binaries..."
-    if ! BUILD_VERSION="$build_version" bash "$SCRIPT_DIR/build-core.sh" --linux >/dev/null 2>&1; then
-        log_error_start
-        echo "Core build failed"
-        log_error_end
-        ERROR_LOG+=$'Core build failed\n'
-        return 1
-    fi
-    log_success "Core binaries built"
-
-    # ECR setup
     local ecr_repo="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/fluidity-server"
+
     log_info "ECR repository: $ecr_repo"
 
     # Ensure ECR repo exists
@@ -577,87 +545,23 @@ build_and_push_docker_image() {
     fi
     log_debug "ECR repository verified"
 
-    # Docker build
-    log_info "Building Docker image..."
-    if ! docker build -f "$PROJECT_ROOT/deployments/server/Dockerfile" -t fluidity-server:"$build_version" "$PROJECT_ROOT" >/dev/null 2>&1; then
+    # Build and push using build-docker.sh (always targets linux/amd64 for Fargate)
+    log_info "Building and pushing Docker image for Fargate (linux/amd64)..."
+    if bash "$SCRIPT_DIR/build-docker.sh" \
+        --server \
+        --version "$build_version" \
+        --platform linux/amd64 \
+        --push \
+        --ecr-repo "$ecr_repo" \
+        --region "$REGION"; then
+        log_success "Docker image built and pushed to ECR"
+    else
         log_error_start
-        echo "Docker build failed"
+        echo "Docker build or push failed"
         log_error_end
-        ERROR_LOG+=$'Docker build failed\n'
+        ERROR_LOG+=$'Docker build/push failed\n'
         return 1
     fi
-    log_success "Docker image built"
-
-    # Docker push
-    log_info "Logging into ECR..."
-    if ! aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com" >/dev/null 2>&1; then
-        log_error_start
-        echo "ECR login failed"
-        log_error_end
-        ERROR_LOG+=$'ECR login failed\n'
-        return 1
-    fi
-
-    log_info "Tagging and pushing Docker image..."
-    docker tag fluidity-server:"$build_version" "$ecr_repo:$build_version"
-    
-    local push_output
-    push_output=$(docker push "$ecr_repo:$build_version" 2>&1)
-    local push_exit=$?
-    
-    if [ $push_exit -ne 0 ]; then
-        log_error_start
-        echo "Docker push to ECR failed"
-        echo "Push output:"
-        echo "$push_output"
-        log_error_end
-        ERROR_LOG+=$'Docker push failed\n'
-        return 1
-    fi
-    
-    # Verify the image was actually pushed (check for size in output)
-    if ! echo "$push_output" | grep -q "digest:"; then
-        log_error_start
-        echo "Docker push completed but image verification failed - no digest found"
-        echo "Push output:"
-        echo "$push_output"
-        log_error_end
-        ERROR_LOG+=$'Docker push verification failed\n'
-        return 1
-    fi
-    
-    log_success "Docker image pushed to ECR"
-    log_debug "Push output: $(echo "$push_output" | tail -1)"
-
-    # Verify image in ECR is valid (not just manifest, but actual image with proper size)
-    log_debug "Verifying image in ECR..."
-    local ecr_image_size
-    ecr_image_size=$(aws ecr describe-images \
-        --repository-name fluidity-server \
-        --image-ids imageTag="$build_version" \
-        --region "$REGION" \
-        --query 'imageDetails[0].imageSizeInBytes' \
-        --output text 2>/dev/null)
-    
-    if [[ -z "$ecr_image_size" ]] || [[ "$ecr_image_size" == "None" ]]; then
-        log_error_start
-        echo "Image size verification failed - image may not be properly pushed to ECR"
-        log_error_end
-        ERROR_LOG+=$'ECR image verification failed\n'
-        return 1
-    fi
-    
-    # Check if image is suspiciously small (< 10MB indicates manifest-only issue)
-    if (( ecr_image_size < 10485760 )); then
-        log_error_start
-        echo "Image in ECR is too small ($ecr_image_size bytes) - may be manifest-only"
-        echo "Expected size: ~40MB, got: $(( ecr_image_size / 1048576 ))MB"
-        log_error_end
-        ERROR_LOG+=$'ECR image too small - manifest-only issue\n'
-        return 1
-    fi
-    
-    log_debug "Image verified: $ecr_image_size bytes (~$(( ecr_image_size / 1048576 ))MB)"
 
     log_debug "Image URI: $ecr_repo:$build_version"
     DOCKER_IMAGE_URI="$ecr_repo:$build_version"
