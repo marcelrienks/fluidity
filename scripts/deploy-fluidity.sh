@@ -600,14 +600,64 @@ build_and_push_docker_image() {
 
     log_info "Tagging and pushing Docker image..."
     docker tag fluidity-server:"$build_version" "$ecr_repo:$build_version"
-    if ! docker push "$ecr_repo:$build_version" >/dev/null 2>&1; then
+    
+    local push_output
+    push_output=$(docker push "$ecr_repo:$build_version" 2>&1)
+    local push_exit=$?
+    
+    if [ $push_exit -ne 0 ]; then
         log_error_start
         echo "Docker push to ECR failed"
+        echo "Push output:"
+        echo "$push_output"
         log_error_end
         ERROR_LOG+=$'Docker push failed\n'
         return 1
     fi
+    
+    # Verify the image was actually pushed (check for size in output)
+    if ! echo "$push_output" | grep -q "digest:"; then
+        log_error_start
+        echo "Docker push completed but image verification failed - no digest found"
+        echo "Push output:"
+        echo "$push_output"
+        log_error_end
+        ERROR_LOG+=$'Docker push verification failed\n'
+        return 1
+    fi
+    
     log_success "Docker image pushed to ECR"
+    log_debug "Push output: $(echo "$push_output" | tail -1)"
+
+    # Verify image in ECR is valid (not just manifest, but actual image with proper size)
+    log_debug "Verifying image in ECR..."
+    local ecr_image_size
+    ecr_image_size=$(aws ecr describe-images \
+        --repository-name fluidity-server \
+        --image-ids imageTag="$build_version" \
+        --region "$REGION" \
+        --query 'imageDetails[0].imageSizeInBytes' \
+        --output text 2>/dev/null)
+    
+    if [[ -z "$ecr_image_size" ]] || [[ "$ecr_image_size" == "None" ]]; then
+        log_error_start
+        echo "Image size verification failed - image may not be properly pushed to ECR"
+        log_error_end
+        ERROR_LOG+=$'ECR image verification failed\n'
+        return 1
+    fi
+    
+    # Check if image is suspiciously small (< 10MB indicates manifest-only issue)
+    if (( ecr_image_size < 10485760 )); then
+        log_error_start
+        echo "Image in ECR is too small ($ecr_image_size bytes) - may be manifest-only"
+        echo "Expected size: ~40MB, got: $(( ecr_image_size / 1048576 ))MB"
+        log_error_end
+        ERROR_LOG+=$'ECR image too small - manifest-only issue\n'
+        return 1
+    fi
+    
+    log_debug "Image verified: $ecr_image_size bytes (~$(( ecr_image_size / 1048576 ))MB)"
 
     log_debug "Image URI: $ecr_repo:$build_version"
     DOCKER_IMAGE_URI="$ecr_repo:$build_version"
