@@ -861,12 +861,11 @@ set_retention_policies() {
   "rules": [
     {
       "rulePriority": 1,
-      "description": "Delete images older than 7 days",
+      "description": "Keep only the last 3 images (by push date)",
       "selection": {
         "tagStatus": "any",
-        "countType": "sinceImagePushed",
-        "countUnit": "days",
-        "countNumber": 7
+        "countType": "imageCountMoreThan",
+        "countNumber": 3
       },
       "action": {
         "type": "expire"
@@ -880,7 +879,7 @@ EOF
             --repository-name "$ecr_repo" \
             --lifecycle-policy-text file:///dev/stdin \
             --region "$REGION" >/dev/null 2>&1; then
-            log_success "ECR lifecycle policy set (images older than 7 days will be deleted)"
+            log_success "ECR lifecycle policy set (keeping last 3 images, deleting older)"
         else
             log_info "Failed to set ECR lifecycle policy"
         fi

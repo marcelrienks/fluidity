@@ -95,7 +95,7 @@ Parameters:
     Type: Number
     Default: 7
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
-    Description: Log retention in days
+    Description: Log retention in days (7 recommended to minimize costs)
   CertificatesSecretArn:
     Type: String
     Description: ARN of the Secrets Manager secret containing certificates (created externally)
