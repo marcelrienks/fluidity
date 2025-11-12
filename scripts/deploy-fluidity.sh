@@ -829,6 +829,96 @@ wait_for_stack_creation() {
 }
 
 # ============================================================================
+# RETENTION POLICIES
+# ============================================================================
+
+set_retention_policies() {
+    log_section "Step 8: Configure Retention Policies (7 days)"
+    
+    # CloudWatch Logs
+    log_substep "Setting CloudWatch Logs Retention"
+    local log_group="/ecs/fluidity/server"
+    if aws logs describe-log-groups --log-group-name-prefix "$log_group" --region "$REGION" &>/dev/null; then
+        log_info "Setting retention to 7 days for: $log_group"
+        if aws logs put-retention-policy \
+            --log-group-name "$log_group" \
+            --retention-in-days 7 \
+            --region "$REGION" >/dev/null 2>&1; then
+            log_success "CloudWatch Logs retention set to 7 days"
+        else
+            log_info "Failed to set log retention (may not have permissions)"
+        fi
+    else
+        log_info "Log group not found (will be created with 7-day retention on next task run)"
+    fi
+    
+    # ECR Lifecycle Policy
+    log_substep "Setting ECR Lifecycle Policy"
+    local ecr_repo="fluidity-server"
+    if aws ecr describe-repositories --repository-names "$ecr_repo" --region "$REGION" &>/dev/null 2>&1; then
+        local lifecycle_policy=$(cat <<'EOF'
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Delete images older than 7 days",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 7
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}
+EOF
+)
+        if echo "$lifecycle_policy" | aws ecr put-lifecycle-policy \
+            --repository-name "$ecr_repo" \
+            --lifecycle-policy-text file:///dev/stdin \
+            --region "$REGION" >/dev/null 2>&1; then
+            log_success "ECR lifecycle policy set (images older than 7 days will be deleted)"
+        else
+            log_info "Failed to set ECR lifecycle policy"
+        fi
+    fi
+    
+    # S3 Lifecycle Policy
+    log_substep "Setting S3 Lifecycle Policy"
+    local s3_bucket="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
+    if aws s3 ls "s3://$s3_bucket" --region "$REGION" &>/dev/null 2>&1; then
+        local lifecycle_config=$(cat <<'EOF'
+{
+  "Rules": [
+    {
+      "Id": "DeleteOldLambdaArtifacts",
+      "Status": "Enabled",
+      "Prefix": "fluidity/",
+      "Expiration": {
+        "Days": 7
+      }
+    }
+  ]
+}
+EOF
+)
+        if echo "$lifecycle_config" | aws s3api put-bucket-lifecycle-configuration \
+            --bucket "$s3_bucket" \
+            --lifecycle-configuration file:///dev/stdin \
+            --region "$REGION" >/dev/null 2>&1; then
+            log_success "S3 lifecycle policy set (objects older than 7 days will be deleted)"
+        else
+            log_info "Failed to set S3 lifecycle policy"
+        fi
+    fi
+    
+    log_success "Retention policies configured"
+}
+
+# ============================================================================
 # CLEANUP & OUTPUT
 # ============================================================================
 
@@ -916,7 +1006,7 @@ action_deploy() {
   {"ParameterKey": "AllowedIngressCidr", "ParameterValue": "$ALLOWED_CIDR"},
   {"ParameterKey": "AssignPublicIp", "ParameterValue": "ENABLED"},
   {"ParameterKey": "LogGroupName", "ParameterValue": "/ecs/fluidity/server"},
-  {"ParameterKey": "LogRetentionDays", "ParameterValue": "30"},
+  {"ParameterKey": "LogRetentionDays", "ParameterValue": "7"},
   {"ParameterKey": "CertificatesSecretArn", "ParameterValue": "$secret_arn"}
 ]
 EOF
@@ -949,6 +1039,9 @@ EOF
 ]
 EOF
     deploy_cloudformation_stack "$LAMBDA_STACK_NAME" "$LAMBDA_TEMPLATE" "$lambda_params" || return 1
+
+    # Step 8: Configure retention policies
+    set_retention_policies
 
     log_success "Deployment completed successfully"
 }
