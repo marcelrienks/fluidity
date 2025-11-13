@@ -187,9 +187,6 @@ Resources:
                 Action:
                   - cloudwatch:GetMetricData
                 Resource: '*'
-                Condition:
-                  StringEquals:
-                    cloudwatch:namespace: Fluidity
       Tags:
         - Key: Application
           Value: Fluidity
@@ -233,6 +230,7 @@ Resources:
   
   WakeLambdaFunction:
     Type: AWS::Lambda::Function
+    DependsOn: WakeLambdaLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-wake'
       Description: 'Wakes the Fluidity ECS service by setting DesiredCount to 1'
@@ -259,6 +257,7 @@ Resources:
   
   SleepLambdaFunction:
     Type: AWS::Lambda::Function
+    DependsOn: SleepLambdaLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-sleep'
       Description: 'Checks CloudWatch metrics and scales down ECS service if idle'
@@ -287,6 +286,7 @@ Resources:
   
   KillLambdaFunction:
     Type: AWS::Lambda::Function
+    DependsOn: KillLambdaLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-kill'
       Description: 'Immediately stops the Fluidity ECS service by setting DesiredCount to 0'
@@ -433,17 +433,38 @@ Resources:
       CloudWatchRoleArn: !GetAtt APIGatewayLogsRole.Arn
   
   # CloudWatch Log Groups
+  WakeLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-wake'
+      RetentionInDays: 7
+  
+  SleepLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-sleep'
+      RetentionInDays: 7
+  
+  KillLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-kill'
+      RetentionInDays: 7
+  
   APIExecutionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-execution'
-      RetentionInDays: 30
+      RetentionInDays: 7
   
   APIAccessLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-access'
-      RetentionInDays: 30
+      RetentionInDays: 7
   
   # REST API
   FluidityAPI:

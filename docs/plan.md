@@ -31,6 +31,8 @@ Development roadmap by phase.
 - [x] EventBridge schedulers
 
 **In Progress:**
+- [ ] Convert Lambda infrastructure from API Gateway to Function URLs
+- [ ] Create full deployment script (AWS deploy + agent compilation with Lambda endpoints)
 - [ ] Agent lifecycle integration (Wake/Kill API calls)
 - [ ] Server metrics emission
 - [ ] End-to-end lifecycle testing
