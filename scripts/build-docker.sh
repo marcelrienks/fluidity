@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ignore SIGHUP and SIGTERM to prevent script interruption when parent processes exit
+# Prevent script from being interrupted by terminal signals
+# Ignore SIGHUP (terminal closed) and SIGTERM (termination request)
 trap '' HUP TERM
+
+# Also handle SIGINT (Ctrl+C) to allow graceful shutdown instead of interruption
+trap 'log_error "Build interrupted"; exit 130' INT
 
 ###############################################################################
 # build-docker.sh - Build Fluidity Docker images with platform targeting
@@ -285,55 +289,62 @@ check_prerequisites() {
         
         # Wait for Docker daemon to become available (extended timeout for Windows)
         log_info "Waiting for Docker daemon to start (up to 180 seconds)..."
-        local wait_time=0
-        local max_wait=180
-        local retry_count=0
-        while [[ $wait_time -lt $max_wait ]]; do
-            # Try to connect to docker daemon with explicit timeout
-            if timeout 5 docker ps >/dev/null 2>&1; then
-                log_success "Docker daemon is now accessible"
-                break
-            fi
-            
-            # For WSL, also check if Docker socket is accessible
-            if [[ -S /var/run/docker.sock ]]; then
-                # Socket exists, try one more time with explicit socket check
+        (
+            local wait_time=0
+            local max_wait=180
+            local retry_count=0
+            while [[ $wait_time -lt $max_wait ]]; do
+                # Try to connect to docker daemon with explicit timeout
+                # Suppress all errors including I/O errors during startup
                 if timeout 5 docker ps >/dev/null 2>&1; then
+                    echo ""  # newline after progress dots
                     log_success "Docker daemon is now accessible"
                     break
                 fi
-            fi
+                
+                # For WSL, also check if Docker socket is accessible
+                if [[ -S /var/run/docker.sock ]]; then
+                    # Socket exists, try one more time with explicit socket check
+                    if timeout 5 docker ps >/dev/null 2>&1; then
+                        echo ""  # newline after progress dots
+                        log_success "Docker daemon is now accessible"
+                        break
+                    fi
+                fi
+                
+                sleep 3
+                wait_time=$((wait_time + 3))
+                retry_count=$((retry_count + 1))
+                
+                # Show progress every 15 seconds
+                if [[ $((retry_count % 5)) -eq 0 ]]; then
+                    echo ""  # newline before debug message
+                    log_debug "Still waiting for Docker daemon ($wait_time/${max_wait}s)..."
+                    printf "."
+                else
+                    printf "."
+                fi
+            done
+            echo ""
             
-            sleep 3
-            wait_time=$((wait_time + 3))
-            retry_count=$((retry_count + 1))
-            
-            # Show progress every 15 seconds
-            if [[ $((retry_count % 5)) -eq 0 ]]; then
-                log_debug "Still waiting for Docker daemon ($wait_time/${max_wait}s)..."
+            # Final check with better error messaging
+            if ! docker ps &>/dev/null 2>&1; then
+                log_error "Docker daemon failed to start within ${max_wait}s"
+                
+                # Provide WSL-specific troubleshooting
+                if grep -qi microsoft /proc/version 2>/dev/null; then
+                    echo "WSL-specific troubleshooting steps:"
+                    echo "  1. Ensure Docker Desktop is running on Windows"
+                    echo "  2. Check that WSL 2 integration is enabled in Docker Desktop settings"
+                    echo "  3. Verify WSL 2 is the default distro: wsl --set-default-version 2"
+                    echo "  4. Try manually connecting: docker ps"
+                    echo "  5. Restart WSL: wsl --shutdown"
+                    echo ""
+                fi
+                echo "Please ensure Docker Desktop is running and try again"
+                exit 1
             fi
-            # Use printf instead of echo -n to avoid potential buffering issues
-            printf "."
-        done
-        echo ""
-        
-        # Final check with better error messaging
-        if ! docker ps &>/dev/null 2>&1; then
-            log_error "Docker daemon failed to start within ${max_wait}s"
-            
-            # Provide WSL-specific troubleshooting
-            if grep -qi microsoft /proc/version 2>/dev/null; then
-                echo "WSL-specific troubleshooting steps:"
-                echo "  1. Ensure Docker Desktop is running on Windows"
-                echo "  2. Check that WSL 2 integration is enabled in Docker Desktop settings"
-                echo "  3. Verify WSL 2 is the default distro: wsl --set-default-version 2"
-                echo "  4. Try manually connecting: docker ps"
-                echo "  5. Restart WSL: wsl --shutdown"
-                echo ""
-            fi
-            echo "Please ensure Docker Desktop is running and try again"
-            exit 1
-        fi
+        )
     else
         log_debug "Docker daemon is accessible"
     fi
