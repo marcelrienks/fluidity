@@ -80,7 +80,15 @@ RESET='\033[0m'
 # LOGGING FUNCTIONS
 # ============================================================================
 
-log_section() {
+log_header() {
+    echo ""
+    echo ""
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+}
+
+log_minor() {
     echo ""
     echo ""
     echo -e "${PALE_YELLOW}$*${RESET}"
@@ -103,7 +111,7 @@ log_success() {
 }
 
 log_error() {
-    echo "[ERROR] $*" >&2
+    echo -e "${RED}[ERROR] $*${RESET}" >&2
 }
 
 # ============================================================================
@@ -111,7 +119,7 @@ log_error() {
 # ============================================================================
 
 generate_certificates() {
-    log_section "Fluidity Certificate Generation"
+    log_header "Fluidity Certificate Generation"
     
     # Create certs directory if it doesn't exist
     mkdir -p "$CERTS_DIR"
@@ -211,7 +219,7 @@ EXTEOF
 # ============================================================================
 
 save_to_secrets_manager() {
-    log_section "Saving Certificates to AWS Secrets Manager"
+    log_minor "Saving Certificates to AWS Secrets Manager"
     
     log_info "Secret name: $SECRET_NAME"
     log_info "Certificate file: $CERTS_DIR/server.crt"
@@ -304,4 +312,4 @@ if [ "$SAVE_TO_SECRETS" = true ]; then
     echo ""
 fi
 
-log_section "Certificate management complete!"
+log_header "Certificate management complete!"
