@@ -35,14 +35,14 @@ log_minor() {
     echo ""
     echo ""
     echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}==========================================${RESET}"
+    echo -e "${PALE_YELLOW}================================================================================${RESET}"
 }
 
 log_substep() {
     echo ""
     echo ""
     echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}-------------------------------------${RESET}"
+    echo -e "${PALE_GREEN}================================================================================${RESET}"
 }
 
 log_info() {
