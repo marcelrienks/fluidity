@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Ignore SIGHUP and SIGTERM to prevent script interruption when parent processes exit
+trap '' HUP TERM
+
 ###############################################################################
 # build-docker.sh - Build Fluidity Docker images with platform targeting
 #
@@ -246,17 +249,13 @@ check_prerequisites() {
             # Linux: Check if running in WSL
             if grep -qi microsoft /proc/version 2>/dev/null; then
                 log_info "WSL detected - attempting to start Docker Desktop via PowerShell"
-                if powershell.exe -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'" 2>/dev/null; then
-                    log_info "Docker Desktop start command sent"
-                    log_info "Giving Docker Desktop time to initialize..."
-                    sleep 10
-                else
-                    log_error "Failed to start Docker Desktop"
-                    echo "Please start Docker Desktop manually:"
-                    echo "  1. Open Docker Desktop application"
-                    echo "  2. Ensure WSL 2 integration is enabled in Settings"
-                    exit 1
-                fi
+                # Run PowerShell in background to avoid blocking and signal issues
+                # Use nohup to completely detach from parent process
+                nohup powershell.exe -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe' -WindowStyle Hidden" >/dev/null 2>&1 &
+                local ps_pid=$!
+                log_debug "Docker Desktop start command sent (PID: $ps_pid)"
+                log_info "Giving Docker Desktop time to initialize..."
+                sleep 10
             else
                 # Native Linux
                 log_info "Attempting to start Docker service..."
@@ -290,8 +289,8 @@ check_prerequisites() {
         local max_wait=180
         local retry_count=0
         while [[ $wait_time -lt $max_wait ]]; do
-            # Try to connect to docker daemon
-            if docker ps &>/dev/null 2>&1; then
+            # Try to connect to docker daemon with explicit timeout
+            if timeout 5 docker ps >/dev/null 2>&1; then
                 log_success "Docker daemon is now accessible"
                 break
             fi
@@ -299,7 +298,7 @@ check_prerequisites() {
             # For WSL, also check if Docker socket is accessible
             if [[ -S /var/run/docker.sock ]]; then
                 # Socket exists, try one more time with explicit socket check
-                if docker ps &>/dev/null 2>&1; then
+                if timeout 5 docker ps >/dev/null 2>&1; then
                     log_success "Docker daemon is now accessible"
                     break
                 fi
@@ -313,7 +312,8 @@ check_prerequisites() {
             if [[ $((retry_count % 5)) -eq 0 ]]; then
                 log_debug "Still waiting for Docker daemon ($wait_time/${max_wait}s)..."
             fi
-            echo -n "."
+            # Use printf instead of echo -n to avoid potential buffering issues
+            printf "."
         done
         echo ""
         
