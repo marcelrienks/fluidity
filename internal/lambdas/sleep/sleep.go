@@ -2,6 +2,7 @@ package sleep
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -30,6 +31,13 @@ type SleepResponse struct {
 	AvgActiveConnections float64 `json:"avgActiveConnections,omitempty"`
 	IdleDurationSeconds  int64   `json:"idleDurationSeconds,omitempty"`
 	Message              string  `json:"message"`
+}
+
+// FunctionURLResponse wraps the response for Lambda Function URL format
+type FunctionURLResponse struct {
+	StatusCode int               `json:"statusCode"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
 }
 
 // ECSClient interface for testing
@@ -124,8 +132,71 @@ func NewHandlerWithClients(ecsClient ECSClient, cloudWatchClient CloudWatchClien
 	}
 }
 
-// HandleRequest processes the sleep request
-func (h *Handler) HandleRequest(ctx context.Context, request SleepRequest) (*SleepResponse, error) {
+// HandleRequest processes the sleep request for Lambda Function URL
+// Event can be either direct invocation from EventBridge or Function URL format
+func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interface{}, error) {
+	var request SleepRequest
+
+	// Parse the event - could be direct JSON or wrapped in Function URL event
+	switch e := event.(type) {
+	case map[string]interface{}:
+		// Try to unmarshal as request body first
+		if body, ok := e["body"]; ok {
+			// Lambda Function URL passes raw JSON body
+			if bodyStr, ok := body.(string); ok {
+				if err := json.Unmarshal([]byte(bodyStr), &request); err != nil {
+					h.logger.Error("Failed to unmarshal body from event", err)
+					return h.errorResponse(400, "Invalid JSON in request body"), nil
+				}
+			}
+		} else {
+			// Direct JSON invocation
+			data, err := json.Marshal(e)
+			if err != nil {
+				h.logger.Error("Failed to marshal event", err)
+				return h.errorResponse(400, "Invalid request format"), nil
+			}
+			if err := json.Unmarshal(data, &request); err != nil {
+				h.logger.Error("Failed to unmarshal event", err)
+				return h.errorResponse(400, "Invalid request format"), nil
+			}
+		}
+	case string:
+		// Raw JSON string
+		if err := json.Unmarshal([]byte(e), &request); err != nil {
+			h.logger.Error("Failed to unmarshal JSON string", err)
+			return h.errorResponse(400, "Invalid JSON in request body"), nil
+		}
+	case []byte:
+		// Raw bytes
+		if err := json.Unmarshal(e, &request); err != nil {
+			h.logger.Error("Failed to unmarshal bytes", err)
+			return h.errorResponse(400, "Invalid JSON in request body"), nil
+		}
+	}
+
+	response, err := h.handleSleepRequest(ctx, request)
+	if err != nil {
+		h.logger.Error("Sleep request failed", err)
+		return h.errorResponse(500, err.Error()), nil
+	}
+
+	// Return Function URL response format
+	return h.successResponse(response), nil
+}
+
+// isFunctionURLEvent determines if the event came from Lambda Function URL vs EventBridge
+func isFunctionURLEvent(event interface{}) bool {
+	if em, ok := event.(map[string]interface{}); ok {
+		// Function URL events have a "headers" field
+		_, hasHeaders := em["headers"]
+		return hasHeaders
+	}
+	return false
+}
+
+// handleSleepRequest contains the core sleep logic
+func (h *Handler) handleSleepRequest(ctx context.Context, request SleepRequest) (*SleepResponse, error) {
 	// Allow request to override parameters (for testing)
 	clusterName := h.clusterName
 	if request.ClusterName != "" {
@@ -361,4 +432,29 @@ func (h *Handler) getMetrics(ctx context.Context, startTime, endTime time.Time) 
 	}
 
 	return avgActiveConnections, lastActivityTime, nil
+}
+
+// successResponse wraps the sleep response in Function URL format
+func (h *Handler) successResponse(data *SleepResponse) FunctionURLResponse {
+	body, _ := json.Marshal(data)
+	return FunctionURLResponse{
+		StatusCode: 200,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body: string(body),
+	}
+}
+
+// errorResponse returns an error response in Function URL format
+func (h *Handler) errorResponse(statusCode int, message string) FunctionURLResponse {
+	body := map[string]string{"error": message}
+	bodyBytes, _ := json.Marshal(body)
+	return FunctionURLResponse{
+		StatusCode: statusCode,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body: string(bodyBytes),
+	}
 }

@@ -2,6 +2,7 @@ package wake
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -47,20 +48,37 @@ func TestWakeWhenServiceStopped(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "test-cluster", "fluidity-server")
 
-	response, err := handler.HandleRequest(context.Background(), WakeRequest{})
+	// Pass event as direct JSON (what Lambda Function URL would send)
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if response.Status != "waking" {
-		t.Errorf("Expected status 'waking', got '%s'", response.Status)
+	// Response is wrapped in FunctionURLResponse
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 1 {
-		t.Errorf("Expected DesiredCount=1, got %d", response.DesiredCount)
+	if functionURLResp.StatusCode != 200 {
+		t.Errorf("Expected StatusCode 200, got %d", functionURLResp.StatusCode)
 	}
 
-	if response.EstimatedStartTime == "" {
+	// Parse the wrapped response
+	var wakeResp WakeResponse
+	if err := json.Unmarshal([]byte(functionURLResp.Body), &wakeResp); err != nil {
+		t.Fatalf("Failed to parse response body: %v", err)
+	}
+
+	if wakeResp.Status != "waking" {
+		t.Errorf("Expected status 'waking', got '%s'", wakeResp.Status)
+	}
+
+	if wakeResp.DesiredCount != 1 {
+		t.Errorf("Expected DesiredCount=1, got %d", wakeResp.DesiredCount)
+	}
+
+	if wakeResp.EstimatedStartTime == "" {
 		t.Error("Expected EstimatedStartTime to be set")
 	}
 }
@@ -88,21 +106,31 @@ func TestWakeWhenServiceAlreadyRunning(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "test-cluster", "fluidity-server")
 
-	response, err := handler.HandleRequest(context.Background(), WakeRequest{})
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if response.Status != "already_running" {
-		t.Errorf("Expected status 'already_running', got '%s'", response.Status)
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 1 {
-		t.Errorf("Expected DesiredCount=1, got %d", response.DesiredCount)
+	var wakeResp WakeResponse
+	if err := json.Unmarshal([]byte(functionURLResp.Body), &wakeResp); err != nil {
+		t.Fatalf("Failed to parse response body: %v", err)
 	}
 
-	if response.RunningCount != 1 {
-		t.Errorf("Expected RunningCount=1, got %d", response.RunningCount)
+	if wakeResp.Status != "already_running" {
+		t.Errorf("Expected status 'already_running', got '%s'", wakeResp.Status)
+	}
+
+	if wakeResp.DesiredCount != 1 {
+		t.Errorf("Expected DesiredCount=1, got %d", wakeResp.DesiredCount)
+	}
+
+	if wakeResp.RunningCount != 1 {
+		t.Errorf("Expected RunningCount=1, got %d", wakeResp.RunningCount)
 	}
 }
 
@@ -129,21 +157,31 @@ func TestWakeWhenServiceStarting(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "test-cluster", "fluidity-server")
 
-	response, err := handler.HandleRequest(context.Background(), WakeRequest{})
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if response.Status != "starting" {
-		t.Errorf("Expected status 'starting', got '%s'", response.Status)
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 1 {
-		t.Errorf("Expected DesiredCount=1, got %d", response.DesiredCount)
+	var wakeResp WakeResponse
+	if err := json.Unmarshal([]byte(functionURLResp.Body), &wakeResp); err != nil {
+		t.Fatalf("Failed to parse response body: %v", err)
 	}
 
-	if response.PendingCount != 1 {
-		t.Errorf("Expected PendingCount=1, got %d", response.PendingCount)
+	if wakeResp.Status != "starting" {
+		t.Errorf("Expected status 'starting', got '%s'", wakeResp.Status)
+	}
+
+	if wakeResp.DesiredCount != 1 {
+		t.Errorf("Expected DesiredCount=1, got %d", wakeResp.DesiredCount)
+	}
+
+	if wakeResp.PendingCount != 1 {
+		t.Errorf("Expected PendingCount=1, got %d", wakeResp.PendingCount)
 	}
 }
 
@@ -159,14 +197,20 @@ func TestWakeServiceNotFound(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "test-cluster", "non-existent-service")
 
-	_, err := handler.HandleRequest(context.Background(), WakeRequest{})
-	if err == nil {
-		t.Fatal("Expected error when service not found, got nil")
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
+	if err != nil {
+		// Errors are returned wrapped in FunctionURLResponse with statusCode 500
+		t.Fatalf("Expected error wrapped in response, got error: %v", err)
 	}
 
-	expectedError := "service non-existent-service not found in cluster test-cluster"
-	if err.Error() != expectedError {
-		t.Errorf("Expected error '%s', got '%s'", expectedError, err.Error())
+	// Check if response is error response
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
+	}
+
+	if functionURLResp.StatusCode != 500 {
+		t.Errorf("Expected error status 500, got %d", functionURLResp.StatusCode)
 	}
 }
 
@@ -198,12 +242,13 @@ func TestWakeWithRequestOverrides(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "default-cluster", "default-service")
 
-	request := WakeRequest{
-		ClusterName: "override-cluster",
-		ServiceName: "override-service",
+	// Pass request as JSON-encoded map (what Function URL would receive)
+	requestJSON := map[string]interface{}{
+		"cluster_name": "override-cluster",
+		"service_name": "override-service",
 	}
 
-	_, err := handler.HandleRequest(context.Background(), request)
+	_, err := handler.HandleRequest(context.Background(), requestJSON)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}

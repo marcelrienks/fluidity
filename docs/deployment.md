@@ -255,21 +255,26 @@ The deployment script automates all infrastructure setup:
 
 #### Configuration (Agent Setup)
 
-After deployment, configure your agent with the API credentials from step 3:
+After deployment, configure your agent with the Function URLs from step 3:
 
 ```yaml
 server_host: "<SERVER_PUBLIC_IP>"
 server_port: 8443
-kill_api_endpoint: "https://xxxxx.execute-api.us-east-1.amazonaws.com/prod/kill"
-api_key: "<API_KEY_VALUE>"
+wake_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
+kill_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
+connection_timeout: "90s"
+connection_retry_interval: "5s"
 cert_file: "./certs/client.crt"
 key_file: "./certs/client.key"
 ca_file: "./certs/ca.crt"
 ```
 
-To get the API key value:
+To get the Function URLs:
 ```bash
-aws apigateway get-api-key --api-key <API_KEY_ID> --include-value --region <REGION>
+aws cloudformation describe-stacks \
+  --stack-name fluidity-lambda \
+  --query 'Stacks[0].Outputs' \
+  --output table
 ```
 
 #### Advanced: Force Clean Slate
@@ -334,16 +339,19 @@ Add automated lifecycle management to Option C for 90% cost reduction.
 # Deploy Lambda control plane
 ./scripts/deploy-fluidity.sh deploy --force
 
-# Configure agent with API endpoints
-# See outputs from deployment script
+# Get Function URLs from deployment output
+aws cloudformation describe-stacks \
+  --stack-name fluidity-lambda \
+  --query 'Stacks[0].Outputs' \
+  --output table
 ```
 
 #### What It Does
 
-- **Wake API:** Starts server on agent connection (~60s startup)
-- **Kill API:** Stops server on agent disconnect (saves ~$8.88/month)
-- **Sleep API:** Auto-stops idle server after 15 minutes
-- **Scheduled Kill:** Optional daily shutdown at specified time
+- **Wake Function URL:** Starts server on agent connection (~60s startup)
+- **Kill Function URL:** Stops server on agent disconnect (saves ~$8.88/month)
+- **Sleep Function URL:** Auto-stops idle server after 15 minutes
+- **Scheduled Kill:** Optional daily shutdown via EventBridge
 
 #### Configuration
 
@@ -352,11 +360,16 @@ After deploying Lambda stack, update agent config:
 ```yaml
 server_host: "<SERVER_PUBLIC_IP>"
 server_port: 8443
-wake_api_endpoint: "https://xxxxx.execute-api.us-east-1.amazonaws.com/prod/wake"
-kill_api_endpoint: "https://xxxxx.execute-api.us-east-1.amazonaws.com/prod/kill"
+wake_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
+kill_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
 connection_timeout: "90s"
 connection_retry_interval: "5s"
+cert_file: "./certs/client.crt"
+key_file: "./certs/client.key"
+ca_file: "./certs/ca.crt"
 ```
+
+See **[Lambda Functions](lambda.md)** for detailed documentation.
 
 ---
 
@@ -495,34 +508,34 @@ aws cloudformation continue-update-rollback --stack-name fluidity-fargate
 
 After running the deployment script:
 
-**Step 1: View credentials**
+**Step 1: Get Function URLs** (if using Lambda control plane)
 ```bash
-./scripts/deploy-fluidity.sh outputs
+aws cloudformation describe-stacks \
+  --stack-name fluidity-lambda \
+  --query 'Stacks[0].Outputs' \
+  --output table
 ```
 
 This displays:
-- API Endpoint (Kill API URL)
-- API Key ID
+- Wake Function URL
+- Kill Function URL
 
-**Step 2: Get API key value**
-```bash
-aws apigateway get-api-key --api-key <API_KEY_ID> --include-value --region <REGION>
-```
+**Step 2: Configure agent**
 
-**Step 3: Configure agent**
-
-Update `configs/agent.yaml` with the credentials from Steps 1-2:
+Update `configs/agent.yaml` with the Function URLs:
 ```yaml
 server_host: "<SERVER_PUBLIC_IP>"
 server_port: 8443
-kill_api_endpoint: "<Kill API Endpoint>"
-api_key: "<API Key Value>"
+wake_api_endpoint: "<Wake Function URL>"
+kill_api_endpoint: "<Kill Function URL>"
+connection_timeout: "90s"
+connection_retry_interval: "5s"
 cert_file: "./certs/client.crt"
 key_file: "./certs/client.key"
 ca_file: "./certs/ca.crt"
 ```
 
-**Step 4: Deploy agent**
+**Step 3: Deploy agent**
 ```bash
 ./scripts/build-core.sh --agent
 ./build/fluidity-agent -config configs/agent.yaml
@@ -538,7 +551,6 @@ ca_file: "./certs/ca.crt"
 |--------|---------|---------|
 | `deploy` | Create or update infrastructure | `./deploy-fluidity.sh deploy` |
 | `status` | Show CloudFormation stack status | `./deploy-fluidity.sh status` |
-| `outputs` | Display API credentials | `./deploy-fluidity.sh outputs` |
 | `delete` | Remove all infrastructure | `./deploy-fluidity.sh delete` |
 
 ### Options
@@ -584,9 +596,12 @@ ca_file: "./certs/ca.crt"
 ./scripts/deploy-fluidity.sh status
 ```
 
-**View API credentials**
+**Get Function URLs**
 ```bash
-./scripts/deploy-fluidity.sh outputs
+aws cloudformation describe-stacks \
+  --stack-name fluidity-lambda \
+  --query 'Stacks[0].Outputs' \
+  --output table
 ```
 
 **Delete all infrastructure**

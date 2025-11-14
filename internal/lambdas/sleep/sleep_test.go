@@ -2,6 +2,7 @@ package sleep
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -61,12 +62,26 @@ func TestSleepWhenServiceAlreadyStopped(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if response.Action != "no_change" {
-		t.Errorf("Expected action 'no_change', got: %s", response.Action)
+	// Response might be wrapped in FunctionURLResponse or direct SleepResponse depending on event type
+	var sleepResp SleepResponse
+
+	if funcURLResp, ok := response.(FunctionURLResponse); ok {
+		// Unwrap from Function URL response
+		if err := json.Unmarshal([]byte(funcURLResp.Body), &sleepResp); err != nil {
+			t.Fatalf("Failed to parse response body: %v", err)
+		}
+	} else if sr, ok := response.(*SleepResponse); ok {
+		sleepResp = *sr
+	} else {
+		t.Fatalf("Expected FunctionURLResponse or *SleepResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 0 {
-		t.Errorf("Expected desiredCount 0, got: %d", response.DesiredCount)
+	if sleepResp.Action != "no_change" {
+		t.Errorf("Expected action 'no_change', got: %s", sleepResp.Action)
+	}
+
+	if sleepResp.DesiredCount != 0 {
+		t.Errorf("Expected desiredCount 0, got: %d", sleepResp.DesiredCount)
 	}
 }
 
@@ -127,16 +142,28 @@ func TestSleepWhenServiceIsIdle(t *testing.T) {
 		t.Error("Expected UpdateService to be called")
 	}
 
-	if response.Action != "scaled_down" {
-		t.Errorf("Expected action 'scaled_down', got: %s", response.Action)
+	// Parse response
+	var sleepResp SleepResponse
+	if funcURLResp, ok := response.(FunctionURLResponse); ok {
+		if err := json.Unmarshal([]byte(funcURLResp.Body), &sleepResp); err != nil {
+			t.Fatalf("Failed to parse response body: %v", err)
+		}
+	} else if sr, ok := response.(*SleepResponse); ok {
+		sleepResp = *sr
+	} else {
+		t.Fatalf("Expected FunctionURLResponse or *SleepResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 0 {
-		t.Errorf("Expected desiredCount 0, got: %d", response.DesiredCount)
+	if sleepResp.Action != "scaled_down" {
+		t.Errorf("Expected action 'scaled_down', got: %s", sleepResp.Action)
 	}
 
-	if response.AvgActiveConnections != 0.0 {
-		t.Errorf("Expected avgActiveConnections 0, got: %f", response.AvgActiveConnections)
+	if sleepResp.DesiredCount != 0 {
+		t.Errorf("Expected desiredCount 0, got: %d", sleepResp.DesiredCount)
+	}
+
+	if sleepResp.AvgActiveConnections != 0.0 {
+		t.Errorf("Expected avgActiveConnections 0, got: %f", sleepResp.AvgActiveConnections)
 	}
 }
 
@@ -182,16 +209,28 @@ func TestSleepWhenServiceIsActive(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if response.Action != "no_change" {
-		t.Errorf("Expected action 'no_change', got: %s", response.Action)
+	// Parse response
+	var sleepResp SleepResponse
+	if funcURLResp, ok := response.(FunctionURLResponse); ok {
+		if err := json.Unmarshal([]byte(funcURLResp.Body), &sleepResp); err != nil {
+			t.Fatalf("Failed to parse response body: %v", err)
+		}
+	} else if sr, ok := response.(*SleepResponse); ok {
+		sleepResp = *sr
+	} else {
+		t.Fatalf("Expected FunctionURLResponse or *SleepResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 1 {
-		t.Errorf("Expected desiredCount 1, got: %d", response.DesiredCount)
+	if sleepResp.Action != "no_change" {
+		t.Errorf("Expected action 'no_change', got: %s", sleepResp.Action)
 	}
 
-	if response.AvgActiveConnections != 2.5 {
-		t.Errorf("Expected avgActiveConnections 2.5, got: %f", response.AvgActiveConnections)
+	if sleepResp.DesiredCount != 1 {
+		t.Errorf("Expected desiredCount 1, got: %d", sleepResp.DesiredCount)
+	}
+
+	if sleepResp.AvgActiveConnections != 2.5 {
+		t.Errorf("Expected avgActiveConnections 2.5, got: %f", sleepResp.AvgActiveConnections)
 	}
 }
 
@@ -239,12 +278,24 @@ func TestSleepWhenIdleButBelowThreshold(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if response.Action != "no_change" {
-		t.Errorf("Expected action 'no_change', got: %s", response.Action)
+	// Parse response
+	var sleepResp SleepResponse
+	if funcURLResp, ok := response.(FunctionURLResponse); ok {
+		if err := json.Unmarshal([]byte(funcURLResp.Body), &sleepResp); err != nil {
+			t.Fatalf("Failed to parse response body: %v", err)
+		}
+	} else if sr, ok := response.(*SleepResponse); ok {
+		sleepResp = *sr
+	} else {
+		t.Fatalf("Expected FunctionURLResponse or *SleepResponse, got %T", response)
 	}
 
-	if response.IdleDurationSeconds >= 900 { // 15 minutes
-		t.Errorf("Expected idle duration < 900 seconds, got: %d", response.IdleDurationSeconds)
+	if sleepResp.Action != "no_change" {
+		t.Errorf("Expected action 'no_change', got: %s", sleepResp.Action)
+	}
+
+	if sleepResp.IdleDurationSeconds >= 900 { // 15 minutes
+		t.Errorf("Expected idle duration < 900 seconds, got: %d", sleepResp.IdleDurationSeconds)
 	}
 }
 
@@ -262,14 +313,20 @@ func TestSleepServiceNotFound(t *testing.T) {
 
 	handler := NewHandlerWithClients(mockECS, mockCW, "test-cluster", "test-service", 15, 10)
 
-	_, err := handler.HandleRequest(context.Background(), SleepRequest{})
-	if err == nil {
-		t.Fatal("Expected error for non-existent service, got nil")
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
+	if err != nil {
+		// Errors are returned wrapped in FunctionURLResponse with statusCode 500
+		t.Fatalf("Expected error wrapped in response, got error: %v", err)
 	}
 
-	expectedError := "service test-service not found in cluster test-cluster"
-	if err.Error() != expectedError {
-		t.Errorf("Expected error '%s', got: %v", expectedError, err)
+	// Check if response is error response
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
+	}
+
+	if functionURLResp.StatusCode != 500 {
+		t.Errorf("Expected error status 500, got %d", functionURLResp.StatusCode)
 	}
 }
 
@@ -301,14 +358,14 @@ func TestSleepWithRequestOverrides(t *testing.T) {
 
 	handler := NewHandlerWithClients(mockECS, mockCW, "default-cluster", "default-service", 15, 10)
 
-	request := SleepRequest{
-		ClusterName:        "override-cluster",
-		ServiceName:        "override-service",
-		IdleThresholdMins:  30,
-		LookbackPeriodMins: 20,
+	requestJSON := map[string]interface{}{
+		"cluster_name":         "override-cluster",
+		"service_name":         "override-service",
+		"idle_threshold_mins":  30,
+		"lookback_period_mins": 20,
 	}
 
-	_, err := handler.HandleRequest(context.Background(), request)
+	_, err := handler.HandleRequest(context.Background(), requestJSON)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -338,9 +395,20 @@ func TestSleepCloudWatchError(t *testing.T) {
 
 	handler := NewHandlerWithClients(mockECS, mockCW, "test-cluster", "test-service", 15, 10)
 
-	_, err := handler.HandleRequest(context.Background(), SleepRequest{})
-	if err == nil {
-		t.Fatal("Expected error from CloudWatch API, got nil")
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
+	if err != nil {
+		// Errors are returned wrapped in FunctionURLResponse with statusCode 500
+		t.Fatalf("Expected error wrapped in response, got error: %v", err)
+	}
+
+	// Check if response is error response
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
+	}
+
+	if functionURLResp.StatusCode != 500 {
+		t.Errorf("Expected error status 500, got %d", functionURLResp.StatusCode)
 	}
 }
 
@@ -385,8 +453,19 @@ func TestSleepECSUpdateError(t *testing.T) {
 
 	handler := NewHandlerWithClients(mockECS, mockCW, "test-cluster", "test-service", 15, 10)
 
-	_, err := handler.HandleRequest(context.Background(), SleepRequest{})
-	if err == nil {
-		t.Fatal("Expected error from ECS UpdateService, got nil")
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
+	if err != nil {
+		// Errors are returned wrapped in FunctionURLResponse with statusCode 500
+		t.Fatalf("Expected error wrapped in response, got error: %v", err)
+	}
+
+	// Check if response is error response
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
+	}
+
+	if functionURLResp.StatusCode != 500 {
+		t.Errorf("Expected error status 500, got %d", functionURLResp.StatusCode)
 	}
 }
