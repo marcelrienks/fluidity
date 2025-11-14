@@ -49,6 +49,38 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+log_section() {
+    echo ""
+    echo "==="
+    echo "$*"
+    echo "==="
+}
+
+log_substep() {
+    echo ""
+    echo "--- $*"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error() {
+    echo "[ERROR] $*" >&2
+}
+
+log_debug() {
+    echo "[DEBUG] $*" >&2
+}
+
 echo -e "\n${MAGENTA}=== Fluidity End-to-End Docker Test ===${NC}"
 
 cleanup() {

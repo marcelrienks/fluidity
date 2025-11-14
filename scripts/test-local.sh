@@ -58,6 +58,38 @@ MAGENTA='\033[0;35m'
 WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+log_section() {
+    echo ""
+    echo "==="
+    echo "$*"
+    echo "==="
+}
+
+log_substep() {
+    echo ""
+    echo "--- $*"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error() {
+    echo "[ERROR] $*" >&2
+}
+
+log_debug() {
+    echo "[DEBUG] $*" >&2
+}
+
 echo -e "\n${MAGENTA}=== Fluidity Local Binary Test ===${NC}"
 
 cleanup() {

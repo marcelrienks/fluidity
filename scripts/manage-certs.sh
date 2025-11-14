@@ -69,19 +69,44 @@ EOF
 }
 
 # ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+log_section() {
+    echo ""
+    echo "==="
+    echo "$*"
+    echo "==="
+}
+
+log_substep() {
+    echo ""
+    echo "--- $*"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error() {
+    echo "[ERROR] $*" >&2
+}
+
+# ============================================================================
 # CERTIFICATE GENERATION FUNCTIONS
 # ============================================================================
 
 generate_certificates() {
-    echo "═══════════════════════════════════════════════════════════"
-    echo "  Fluidity Certificate Generation"
-    echo "═══════════════════════════════════════════════════════════"
-    echo ""
+    log_section "Fluidity Certificate Generation"
     
     # Create certs directory if it doesn't exist
     mkdir -p "$CERTS_DIR"
-    echo "Certificates directory: $CERTS_DIR"
-    echo "Validity period: $DAYS days"
+    log_info "Certificates directory: $CERTS_DIR"
+    log_info "Validity period: $DAYS days"
     echo ""
     
     # Generate CA private key
@@ -156,16 +181,15 @@ EXTEOF
     chmod 600 "$CERTS_DIR"/*.key
     chmod 644 "$CERTS_DIR"/*.crt
     
+    log_success "Certificates generated successfully"
     echo ""
-    echo "✓ Certificates generated successfully!"
-    echo ""
-    echo "Files created:"
-    echo "  $CERTS_DIR/ca.crt       - CA certificate"
-    echo "  $CERTS_DIR/ca.key       - CA private key"
-    echo "  $CERTS_DIR/server.crt   - Server certificate"
-    echo "  $CERTS_DIR/server.key   - Server private key"
-    echo "  $CERTS_DIR/client.crt   - Client certificate"
-    echo "  $CERTS_DIR/client.key   - Client private key"
+    log_substep "Files Created"
+    log_info "CA certificate: $CERTS_DIR/ca.crt"
+    log_info "CA private key: $CERTS_DIR/ca.key"
+    log_info "Server certificate: $CERTS_DIR/server.crt"
+    log_info "Server private key: $CERTS_DIR/server.key"
+    log_info "Client certificate: $CERTS_DIR/client.crt"
+    log_info "Client private key: $CERTS_DIR/client.key"
     echo ""
     echo "⚠️  WARNING: These certificates are for development only!"
     echo "For production, use properly signed certificates from a trusted CA."
@@ -177,34 +201,32 @@ EXTEOF
 # ============================================================================
 
 save_to_secrets_manager() {
-    echo "═══════════════════════════════════════════════════════════"
-    echo "  Saving Certificates to AWS Secrets Manager"
-    echo "═══════════════════════════════════════════════════════════"
-    echo ""
-    echo "Secret name: $SECRET_NAME"
-    echo "Certificate file: $CERTS_DIR/server.crt"
-    echo "Key file: $CERTS_DIR/server.key"
-    echo "CA file: $CERTS_DIR/ca.crt"
+    log_section "Saving Certificates to AWS Secrets Manager"
+    
+    log_info "Secret name: $SECRET_NAME"
+    log_info "Certificate file: $CERTS_DIR/server.crt"
+    log_info "Key file: $CERTS_DIR/server.key"
+    log_info "CA file: $CERTS_DIR/ca.crt"
     echo ""
     
     # Check files exist
     if [ ! -f "$CERTS_DIR/server.crt" ]; then
-        echo "✗ Error: Certificate file not found: $CERTS_DIR/server.crt"
+        log_error "Certificate file not found: $CERTS_DIR/server.crt"
         exit 1
     fi
     
     if [ ! -f "$CERTS_DIR/server.key" ]; then
-        echo "✗ Error: Key file not found: $CERTS_DIR/server.key"
+        log_error "Key file not found: $CERTS_DIR/server.key"
         exit 1
     fi
     
     if [ ! -f "$CERTS_DIR/ca.crt" ]; then
-        echo "✗ Error: CA file not found: $CERTS_DIR/ca.crt"
+        log_error "CA file not found: $CERTS_DIR/ca.crt"
         exit 1
     fi
     
     # Read and base64 encode the certificates
-    echo "Encoding certificates..."
+    log_info "Encoding certificates..."
     CERT_PEM=$(base64 -w 0 < "$CERTS_DIR/server.crt")
     KEY_PEM=$(base64 -w 0 < "$CERTS_DIR/server.key")
     CA_PEM=$(base64 -w 0 < "$CERTS_DIR/ca.crt")
@@ -220,20 +242,20 @@ EOF
 )
     
     # Save to AWS Secrets Manager
-    echo "Contacting AWS Secrets Manager..."
+    log_info "Contacting AWS Secrets Manager..."
     
     if aws secretsmanager describe-secret --secret-id "$SECRET_NAME" &>/dev/null; then
-        echo "Secret exists, updating..."
+        log_info "Secret exists, updating..."
         aws secretsmanager update-secret \
             --secret-id "$SECRET_NAME" \
             --secret-string "$SECRET_JSON" >/dev/null
-        echo "✓ Secret updated successfully!"
+        log_success "Secret updated successfully!"
     else
-        echo "Secret does not exist, creating..."
+        log_info "Secret does not exist, creating..."
         aws secretsmanager create-secret \
             --name "$SECRET_NAME" \
             --secret-string "$SECRET_JSON" >/dev/null
-        echo "✓ Secret created successfully!"
+        log_success "Secret created successfully!"
     fi
     
     echo ""
@@ -245,7 +267,7 @@ EOF
 
 # Check if OpenSSL is available
 if ! command -v openssl &> /dev/null; then
-    echo "✗ Error: OpenSSL not found!"
+    log_error "OpenSSL not found!"
     echo "Please install OpenSSL and ensure it's in your PATH."
     exit 1
 fi
@@ -253,7 +275,7 @@ fi
 # Check if AWS CLI is available (if saving to secrets)
 if [ "$SAVE_TO_SECRETS" = true ]; then
     if ! command -v aws &> /dev/null; then
-        echo "✗ Error: AWS CLI not found!"
+        log_error "AWS CLI not found!"
         echo "Please install the AWS CLI and ensure it's in your PATH."
         echo "Visit: https://aws.amazon.com/cli/"
         exit 1
@@ -266,12 +288,10 @@ generate_certificates
 # Save to Secrets Manager if requested
 if [ "$SAVE_TO_SECRETS" = true ]; then
     save_to_secrets_manager
-    echo "Configuration for Fluidity:"
-    echo "  use_secrets_manager: true"
-    echo "  secrets_manager_name: $SECRET_NAME"
+    log_substep "Configuration for Fluidity"
+    log_info "use_secrets_manager: true"
+    log_info "secrets_manager_name: $SECRET_NAME"
     echo ""
 fi
 
-echo "═══════════════════════════════════════════════════════════"
-echo "  Certificate management complete!"
-echo "═══════════════════════════════════════════════════════════"
+log_section "Certificate management complete!"

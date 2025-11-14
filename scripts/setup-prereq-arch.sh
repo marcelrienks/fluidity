@@ -18,6 +18,38 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+log_section() {
+    echo ""
+    echo "==="
+    echo "$*"
+    echo "==="
+}
+
+log_substep() {
+    echo ""
+    echo "--- $*"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error() {
+    echo "[ERROR] $*" >&2
+}
+
+log_debug() {
+    echo "[DEBUG] $*" >&2
+}
+
 # Function to check if a command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1

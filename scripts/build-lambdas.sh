@@ -15,8 +15,16 @@ LAMBDAS_DIR="$PROJECT_ROOT/cmd/lambdas"
 BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
 
 # Logging functions (consistent with other build scripts)
+log_section() {
+    echo ""
+    echo "==="
+    echo "$*"
+    echo "==="
+}
+
 log_substep() {
-    echo "=== $*"
+    echo ""
+    echo "--- $*"
 }
 
 log_info() {

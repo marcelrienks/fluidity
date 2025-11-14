@@ -91,11 +91,14 @@ log_header() {
 
 log_section() {
     echo ""
-    echo ">>> $*"
+    echo "==="
+    echo "$*"
+    echo "==="
 }
 
 log_substep() {
-    echo "=== $*"
+    echo ""
+    echo "--- $*"
 }
 
 log_info() {
