@@ -150,11 +150,14 @@ log_error_end() {
 
 log_section() {
     echo ""
-    echo ">>> $*"
+    echo "==="
+    echo "$*"
+    echo "==="
 }
 
 log_substep() {
-    echo "=== $*"
+    echo ""
+    echo "--- $*"
 }
 
 log_success() {
@@ -282,9 +285,14 @@ deploy_server() {
     
     log_debug "Calling server deployment script with: ${args[*]}"
     
-    # Capture output to extract endpoints
+    # Run script and capture output for endpoint extraction
     local output
-    if output=$(bash "$server_script" "${args[@]}" 2>&1); then
+    local temp_output="/tmp/fluidity-deploy-server-$$.log"
+    
+    if bash "$server_script" "${args[@]}" 2>&1 | tee "$temp_output"; then
+        output=$(cat "$temp_output")
+        rm -f "$temp_output"
+        
         log_success "Server deployment completed"
         
         # Extract endpoints from export_endpoints output
@@ -301,9 +309,11 @@ deploy_server() {
         
         return 0
     else
+        output=$(cat "$temp_output")
+        rm -f "$temp_output"
+        
         log_error_start
         echo "Server deployment failed"
-        echo "$output"
         log_error_end
         return 1
     fi
@@ -354,6 +364,7 @@ deploy_agent() {
     
     log_debug "Calling agent deployment script with: ${args[*]}"
     
+    # Run script and display output
     if bash "$agent_script" "${args[@]}"; then
         log_success "Agent deployment completed"
         return 0
@@ -389,6 +400,7 @@ delete_server() {
     
     log_debug "Calling server deletion with: ${args[*]}"
     
+    # Run script and display output
     if bash "$server_script" "${args[@]}"; then
         log_success "Infrastructure deletion completed"
         return 0

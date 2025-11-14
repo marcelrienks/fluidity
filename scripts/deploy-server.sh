@@ -106,11 +106,14 @@ log_error_end() {
 
 log_section() {
     echo ""
-    echo ">>> $*"
+    echo "==="
+    echo "$*"
+    echo "==="
 }
 
 log_substep() {
-    echo "=== $*"
+    echo ""
+    echo "--- $*"
 }
 
 log_success() {
