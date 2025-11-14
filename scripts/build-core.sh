@@ -36,7 +36,6 @@ echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
 
 # Logging functions (consistent with deploy-fluidity.sh)
 log_header() {
-    echo ""
     echo "================================================================================"
     echo "$*"
     echo "================================================================================"

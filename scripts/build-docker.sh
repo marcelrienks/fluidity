@@ -82,7 +82,6 @@ GOARCH=""
 # ============================================================================
 
 log_header() {
-    echo ""
     echo "================================================================================"
     echo "$*"
     echo "================================================================================"
@@ -244,6 +243,8 @@ check_prerequisites() {
                 log_info "WSL detected - attempting to start Docker Desktop via PowerShell"
                 if powershell.exe -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'" 2>/dev/null; then
                     log_info "Docker Desktop start command sent"
+                    log_info "Giving Docker Desktop time to initialize..."
+                    sleep 10
                 else
                     log_error "Failed to start Docker Desktop"
                     echo "Please start Docker Desktop manually:"
@@ -282,20 +283,49 @@ check_prerequisites() {
         log_info "Waiting for Docker daemon to start (up to 180 seconds)..."
         local wait_time=0
         local max_wait=180
+        local retry_count=0
         while [[ $wait_time -lt $max_wait ]]; do
+            # Try to connect to docker daemon
             if docker ps &>/dev/null 2>&1; then
                 log_success "Docker daemon is now accessible"
                 break
             fi
+            
+            # For WSL, also check if Docker socket is accessible
+            if [[ -S /var/run/docker.sock ]]; then
+                # Socket exists, try one more time with explicit socket check
+                if docker ps &>/dev/null 2>&1; then
+                    log_success "Docker daemon is now accessible"
+                    break
+                fi
+            fi
+            
             sleep 3
             wait_time=$((wait_time + 3))
+            retry_count=$((retry_count + 1))
+            
+            # Show progress every 15 seconds
+            if [[ $((retry_count % 5)) -eq 0 ]]; then
+                log_debug "Still waiting for Docker daemon ($wait_time/${max_wait}s)..."
+            fi
             echo -n "."
         done
         echo ""
         
-        # Final check
+        # Final check with better error messaging
         if ! docker ps &>/dev/null 2>&1; then
             log_error "Docker daemon failed to start within ${max_wait}s"
+            
+            # Provide WSL-specific troubleshooting
+            if grep -qi microsoft /proc/version 2>/dev/null; then
+                echo "WSL-specific troubleshooting steps:"
+                echo "  1. Ensure Docker Desktop is running on Windows"
+                echo "  2. Check that WSL 2 integration is enabled in Docker Desktop settings"
+                echo "  3. Verify WSL 2 is the default distro: wsl --set-default-version 2"
+                echo "  4. Try manually connecting: docker ps"
+                echo "  5. Restart WSL: wsl --shutdown"
+                echo ""
+            fi
             echo "Please ensure Docker Desktop is running and try again"
             exit 1
         fi
