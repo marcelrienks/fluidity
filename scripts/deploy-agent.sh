@@ -541,11 +541,21 @@ install_agent() {
     
     log_substep "Creating Installation Directory"
     
+    # Check if we need sudo for Linux system directories
+    SUDO=""
+    if [[ "$OS_TYPE" == "linux" && "$INSTALL_PATH" == /opt/* || "$INSTALL_PATH" == /usr/local/* ]]; then
+        if [[ ! -d "$INSTALL_PATH" ]] && [[ ! -w "$(dirname "$INSTALL_PATH")" ]]; then
+            log_info "Elevated privileges required for installation to: $INSTALL_PATH"
+            SUDO="sudo"
+        fi
+    fi
+    
     if [[ ! -d "$INSTALL_PATH" ]]; then
         log_info "Creating installation directory: $INSTALL_PATH"
-        mkdir -p "$INSTALL_PATH" || {
+        $SUDO mkdir -p "$INSTALL_PATH" || {
             log_error_start
-            echo "Failed to create directory (try with sudo): $INSTALL_PATH"
+            echo "Failed to create directory: $INSTALL_PATH"
+            echo "Try running with: sudo bash scripts/deploy-agent.sh deploy"
             log_error_end
             exit 1
         }
@@ -561,14 +571,15 @@ install_agent() {
     
     log_substep "Installing Agent Binary"
     log_info "Copying: $binary_path to $AGENT_EXE_PATH"
-    cp "$binary_path" "$AGENT_EXE_PATH" || {
+    $SUDO cp "$binary_path" "$AGENT_EXE_PATH" || {
         log_error_start
-        echo "Failed to copy binary (try with sudo)"
+        echo "Failed to copy binary to: $AGENT_EXE_PATH"
+        echo "Try running with: sudo bash scripts/deploy-agent.sh deploy"
         log_error_end
         exit 1
     }
     
-    chmod +x "$AGENT_EXE_PATH"
+    $SUDO chmod +x "$AGENT_EXE_PATH"
     
     log_substep "Fixing File Permissions"
     # Change ownership to current user so they can access the files
