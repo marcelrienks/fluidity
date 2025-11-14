@@ -1,44 +1,58 @@
 #!/usr/bin/env bash
 
 ###############################################################################
-# Fluidity Deployment Script
+# Fluidity Complete Deployment Script
 # 
-# Deploys complete Fluidity infrastructure to AWS using CloudFormation.
-# Automatically detects missing AWS parameters, generates certificates if needed,
-# and builds all components in a single command.
+# Orchestrates deployment of both Fluidity server (to AWS) and agent (to local system).
+# Automatically detects OS-specific defaults and passes server endpoints to agent.
 #
 # FUNCTION:
-#   Provisions and manages Fluidity tunnel infrastructure on AWS including:
-#   - ECS Fargate cluster and server deployment
-#   - Lambda control plane (Wake/Sleep/Kill functions)
-#   - API Gateway with authentication
-#   - EventBridge scheduling
-#   - CloudWatch monitoring
+#   Coordinates end-to-end Fluidity deployment:
+#   - Detects OS and sets appropriate defaults (install path, port)
+#   - Deploys server and Lambda to AWS
+#   - Collects endpoint information from CloudFormation outputs
+#   - Deploys and configures agent with server details
+#
+# DEPLOYMENT FLOW:
+#   1. Validate prerequisites and OS
+#   2. Deploy server to AWS (CloudFormation + ECS + Lambda)
+#   3. Collect server and Lambda endpoints from CloudFormation
+#   4. Deploy agent to local system with collected endpoints
+#   5. Verify complete deployment
 #
 # USAGE:
 #   ./deploy-fluidity.sh [action] [options]
 #
 # ACTIONS:
-#   deploy      Deploy all infrastructure (default)
-#   delete      Delete all infrastructure
-#   status      Show current stack status
-#   outputs     Display stack outputs and API credentials
+#   deploy           Deploy both server and agent (default)
+#   deploy-server    Deploy only server to AWS
+#   deploy-agent     Deploy only agent to local system
+#   delete           Delete AWS infrastructure only
+#   status           Show deployment status
 #
 # OPTIONS:
 #   --region <region>              AWS region (auto-detect from AWS config)
 #   --vpc-id <vpc>                 VPC ID (auto-detect default VPC)
 #   --public-subnets <subnets>     Comma-separated subnet IDs (auto-detect)
 #   --allowed-cidr <cidr>          Allowed ingress CIDR (auto-detect your IP)
+#   --server-ip <ip>               Server IP (for agent, defaults to Fargate task public IP)
+#   --local-proxy-port <port>      Agent listening port (default: 8080 on Windows, 8080 on Linux/macOS)
+#   --cert-path <path>             Path to client certificate (optional)
+#   --key-path <path>              Path to client key (optional)
+#   --ca-cert-path <path>          Path to CA certificate (optional)
+#   --install-path <path>          Custom agent installation path (optional)
+#   --skip-build                   Skip building agent, use existing binary
 #   --debug                        Enable debug logging
-#   --force                        Delete and recreate all resources (instead of update)
+#   --force                        Delete and recreate resources (server only)
 #   -h, --help                     Show this help message
 #
 # EXAMPLES:
 #   ./deploy-fluidity.sh deploy
-#   ./deploy-fluidity.sh deploy --debug
-#   ./deploy-fluidity.sh deploy --force --region us-west-2
+#   ./deploy-fluidity.sh deploy --local-proxy-port 8080
+#   ./deploy-fluidity.sh deploy-server --region us-west-2
+#   ./deploy-fluidity.sh deploy-agent --server-ip 192.168.1.100
+#   ./deploy-fluidity.sh status
 #   ./deploy-fluidity.sh delete
-#   ./deploy-fluidity.sh outputs
 #
 ###############################################################################
 
@@ -51,35 +65,58 @@ set -euo pipefail
 ACTION="${1:-deploy}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-CERTS_DIR="$PROJECT_ROOT/certs"
-CLOUDFORMATION_DIR="$PROJECT_ROOT/deployments/cloudformation"
 
 # AWS Configuration
-REGION=""
+AWS_REGION=""
 VPC_ID=""
 PUBLIC_SUBNETS=""
 ALLOWED_CIDR=""
 
+# Agent Configuration
+SERVER_IP=""
+LOCAL_PROXY_PORT=""
+CERT_PATH=""
+KEY_PATH=""
+CA_CERT_PATH=""
+INSTALL_PATH=""
+
 # Feature Flags
 DEBUG=false
 FORCE=false
-ACCOUNT_ID=""
-BUILD_VERSION=""
+SKIP_BUILD=false
 
-# Stack Names
-STACK_NAME="fluidity"
-FARGATE_STACK_NAME="${STACK_NAME}-fargate"
-LAMBDA_STACK_NAME="${STACK_NAME}-lambda"
+# Endpoints from server deployment
+WAKE_ENDPOINT=""
+KILL_ENDPOINT=""
+SERVER_REGION=""
+SERVER_PORT="8443"
 
-# Paths
-FARGATE_TEMPLATE="$CLOUDFORMATION_DIR/fargate.yaml"
-LAMBDA_TEMPLATE="$CLOUDFORMATION_DIR/lambda.yaml"
-TEMP_PARAMS_DIR="/tmp/fluidity-deploy-$$"
+# Detect OS and set defaults
+case "$(uname -s)" in
+    MINGW64_NT*|MSYS_NT*|CYGWIN*)
+        OS_TYPE="windows"
+        DEFAULT_INSTALL_PATH="C:\\Program Files\\fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
+        ;;
+    Darwin)
+        OS_TYPE="darwin"
+        DEFAULT_INSTALL_PATH="/usr/local/opt/fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
+        ;;
+    Linux)
+        OS_TYPE="linux"
+        DEFAULT_INSTALL_PATH="/opt/fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
+        ;;
+    *)
+        OS_TYPE="unknown"
+        DEFAULT_INSTALL_PATH="/opt/fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
+        ;;
+esac
 
-# Storage for error logs
-ERROR_LOG=""
-API_ENDPOINT=""
-API_KEY_ID=""
+INSTALL_PATH="${INSTALL_PATH:-$DEFAULT_INSTALL_PATH}"
+LOCAL_PROXY_PORT="${LOCAL_PROXY_PORT:-$DEFAULT_LOCAL_PROXY_PORT}"
 
 # ============================================================================
 # LOGGING FUNCTIONS
@@ -93,6 +130,10 @@ log_debug() {
     if [[ "$DEBUG" == "true" ]]; then
         echo "[DEBUG] $*" >&2
     fi
+}
+
+log_warn() {
+    echo "[WARN] $*" >&2
 }
 
 log_error_start() {
@@ -125,7 +166,6 @@ log_success() {
 # ============================================================================
 
 show_help() {
-    # Extract and display help from header comments
     sed -n '3,/^###############################################################################$/p' "$0" | sed '$d' | sed 's/^# *//'
     exit 0
 }
@@ -135,7 +175,7 @@ parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             --region)
-                REGION="$2"
+                AWS_REGION="$2"
                 shift 2
                 ;;
             --vpc-id)
@@ -149,6 +189,34 @@ parse_arguments() {
             --allowed-cidr)
                 ALLOWED_CIDR="$2"
                 shift 2
+                ;;
+            --server-ip)
+                SERVER_IP="$2"
+                shift 2
+                ;;
+            --local-proxy-port)
+                LOCAL_PROXY_PORT="$2"
+                shift 2
+                ;;
+            --cert-path)
+                CERT_PATH="$2"
+                shift 2
+                ;;
+            --key-path)
+                KEY_PATH="$2"
+                shift 2
+                ;;
+            --ca-cert-path)
+                CA_CERT_PATH="$2"
+                shift 2
+                ;;
+            --install-path)
+                INSTALL_PATH="$2"
+                shift 2
+                ;;
+            --skip-build)
+                SKIP_BUILD=true
+                shift
                 ;;
             --debug)
                 DEBUG=true
@@ -173,7 +241,7 @@ parse_arguments() {
 
 validate_action() {
     case "$ACTION" in
-        deploy|delete|status|outputs)
+        deploy|deploy-server|deploy-agent|delete|status)
             ;;
         -h|--help)
             show_help
@@ -181,7 +249,7 @@ validate_action() {
         *)
             log_error_start
             echo "Invalid action: $ACTION"
-            echo "Valid actions: deploy, delete, status, outputs"
+            echo "Valid actions: deploy, deploy-server, deploy-agent, delete, status"
             log_error_end
             exit 1
             ;;
@@ -189,982 +257,175 @@ validate_action() {
 }
 
 # ============================================================================
-# PREREQUISITE CHECKS
+# DEPLOYMENT FUNCTIONS
 # ============================================================================
 
-check_prerequisites() {
-    log_substep "Checking Prerequisites"
-
-    # Check AWS CLI
-    if ! command -v aws &>/dev/null; then
+deploy_server() {
+    log_section "Deploying Server to AWS"
+    
+    local server_script="$SCRIPT_DIR/deploy-server.sh"
+    
+    if [[ ! -f "$server_script" ]]; then
         log_error_start
-        echo "AWS CLI not found"
-        echo "Install from: https://aws.amazon.com/cli/"
+        echo "Server deployment script not found: $server_script"
         log_error_end
         exit 1
     fi
-    log_debug "AWS CLI found"
-
-    # Docker check is handled by build-docker.sh script
-    # (which includes auto-start logic)
-
-    # Check jq
-    if ! command -v jq &>/dev/null; then
-        log_error_start
-        echo "jq not found (required for JSON processing)"
-        echo "Install from: https://stedolan.github.io/jq/"
-        log_error_end
-        exit 1
-    fi
-    log_debug "jq found"
-
-    # Get AWS Account ID
-    if ! ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>&1); then
-        log_error_start
-        echo "Failed to get AWS Account ID"
-        echo "Ensure AWS credentials are configured: aws configure"
-        log_error_end
-        exit 1
-    fi
-    log_info "AWS Account: $ACCOUNT_ID"
-    log_debug "Account ID: $ACCOUNT_ID"
-
-    # Check templates exist
-    if [[ ! -f "$FARGATE_TEMPLATE" ]]; then
-        log_error_start
-        echo "Fargate template not found: $FARGATE_TEMPLATE"
-        log_error_end
-        exit 1
-    fi
-    log_debug "Fargate template found"
-
-    if [[ ! -f "$LAMBDA_TEMPLATE" ]]; then
-        log_error_start
-        echo "Lambda template not found: $LAMBDA_TEMPLATE"
-        log_error_end
-        exit 1
-    fi
-    log_debug "Lambda template found"
-}
-
-# ============================================================================
-# AWS PARAMETER AUTO-DETECTION
-# ============================================================================
-
-auto_detect_parameters() {
-    log_substep "Detecting AWS Parameters"
-
-    # Detect Region
-    if [[ -z "$REGION" ]]; then
-        if REGION=$(aws configure get region 2>/dev/null); then
-            [[ -n "$REGION" ]] && log_info "Region auto-detected: $REGION" || {
-                read -p "Enter AWS Region (e.g., us-east-1): " REGION
-                [[ -z "$REGION" ]] && {
-                    log_error_start
-                    echo "Region is required"
-                    log_error_end
-                    exit 1
-                }
-            }
-        else
-            read -p "Enter AWS Region (e.g., us-east-1): " REGION
-            [[ -z "$REGION" ]] && {
-                log_error_start
-                echo "Region is required"
-                log_error_end
-                exit 1
-            }
-        fi
-    fi
-    log_debug "Region: $REGION"
-
-    # Detect VPC ID
-    if [[ -z "$VPC_ID" ]]; then
-        if VPC_ID=$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text 2>/dev/null); then
-            if [[ -n "$VPC_ID" && "$VPC_ID" != "None" ]]; then
-                log_info "VPC auto-detected: $VPC_ID"
-            else
-                read -p "Enter VPC ID (e.g., vpc-abc123): " VPC_ID
-                [[ -z "$VPC_ID" ]] && {
-                    log_error_start
-                    echo "VPC ID is required"
-                    log_error_end
-                    exit 1
-                }
-            fi
-        else
-            read -p "Enter VPC ID (e.g., vpc-abc123): " VPC_ID
-            [[ -z "$VPC_ID" ]] && {
-                log_error_start
-                echo "VPC ID is required"
-                log_error_end
-                exit 1
-            }
-        fi
-    fi
-    log_debug "VPC ID: $VPC_ID"
-
-    # Detect Public Subnets
-    if [[ -z "$PUBLIC_SUBNETS" ]]; then
-        if SUBNET_LIST=$(aws ec2 describe-subnets --region "$REGION" --filters Name=vpc-id,Values="$VPC_ID" --query 'Subnets[*].SubnetId' --output text 2>/dev/null); then
-            if [[ -n "$SUBNET_LIST" ]]; then
-                PUBLIC_SUBNETS=$(echo "$SUBNET_LIST" | tr '\t' ',')
-                log_info "Subnets auto-detected: $PUBLIC_SUBNETS"
-            else
-                read -p "Enter Public Subnet IDs (comma-separated): " PUBLIC_SUBNETS
-                [[ -z "$PUBLIC_SUBNETS" ]] && {
-                    log_error_start
-                    echo "Public Subnets are required"
-                    log_error_end
-                    exit 1
-                }
-            fi
-        else
-            read -p "Enter Public Subnet IDs (comma-separated): " PUBLIC_SUBNETS
-            [[ -z "$PUBLIC_SUBNETS" ]] && {
-                log_error_start
-                echo "Public Subnets are required"
-                log_error_end
-                exit 1
-            }
-        fi
-    fi
-    log_debug "Public Subnets: $PUBLIC_SUBNETS"
-
-    # Detect Public IP (Allowed CIDR)
-    if [[ -z "$ALLOWED_CIDR" ]]; then
-        PUBLIC_IP=""
-        
-        # Try multiple IP detection services with fallbacks
-        for service in "https://icanhazip.com" "https://ifconfig.me" "https://api.ipify.org" "https://ident.me"; do
-            log_debug "Attempting to get public IP from: $service"
-            if PUBLIC_IP=$(curl -s --max-time 3 "$service" 2>/dev/null); then
-                PUBLIC_IP=$(echo "$PUBLIC_IP" | tr -d '\n' | tr -d ' ')
-                if [[ "$PUBLIC_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                    ALLOWED_CIDR="${PUBLIC_IP}/32"
-                    log_info "Public IP auto-detected: $ALLOWED_CIDR"
-                    break
-                fi
-            fi
-        done
-        
-        # If all services failed, prompt user
-        if [[ -z "$ALLOWED_CIDR" ]]; then
-            log_debug "Failed to auto-detect public IP from all services"
-            read -p "Enter Allowed Ingress CIDR (e.g., 1.2.3.4/32): " ALLOWED_CIDR
-            [[ -z "$ALLOWED_CIDR" ]] && {
-                log_error_start
-                echo "Allowed Ingress CIDR is required"
-                log_error_end
-                exit 1
-            }
-        fi
-    fi
-    log_debug "Allowed CIDR: $ALLOWED_CIDR"
-}
-
-# ============================================================================
-# CERTIFICATE MANAGEMENT
-# ============================================================================
-
-ensure_certificates() {
-    if [[ ! -f "$CERTS_DIR/server.crt" ]] || [[ ! -f "$CERTS_DIR/server.key" ]] || [[ ! -f "$CERTS_DIR/ca.crt" ]]; then
-        log_info "Certificates not found, generating..."
-        if bash "$SCRIPT_DIR/manage-certs.sh"; then
-            log_success "Certificates generated"
-        else
-            log_error_start
-            echo "Failed to generate certificates"
-            echo "Run manually: ./scripts/manage-certs.sh"
-            log_error_end
-            exit 1
-        fi
-    else
-        log_success "Certificates found"
-    fi
-    log_debug "Certificates location: $CERTS_DIR"
-}
-
-store_certificates_in_secrets_manager() {
-    local secret_name="fluidity-certificates"
-
-    log_info "Storing certificates in AWS Secrets Manager..."
-
-    # Check if secret exists and its status
-    local secret_status
-    if secret_status=$(aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" --query 'DeletedDate' --output text 2>/dev/null); then
-        if [[ "$secret_status" != "None" && -n "$secret_status" ]]; then
-            log_info "Secret is marked for deletion, waiting for removal (max 30s)..."
-            local retry_count=0
-            while [ $retry_count -lt 15 ]; do
-                if ! aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" &>/dev/null 2>&1; then
-                    log_debug "Secret deletion complete"
-                    break
-                fi
-                sleep 2
-                retry_count=$((retry_count + 1))
-            done
-        fi
-    fi
-
-    # Build JSON with properly escaped certificates
-    local secret_json
-    secret_json=$(jq -n \
-        --arg cert "$(cat "$CERTS_DIR/server.crt")" \
-        --arg key "$(cat "$CERTS_DIR/server.key")" \
-        --arg ca "$(cat "$CERTS_DIR/ca.crt")" \
-        '{cert_pem: $cert, key_pem: $key, ca_pem: $ca}')
     
-    if [[ -z "$secret_json" ]]; then
-        log_error_start
-        echo "Failed to build secret JSON from certificates"
-        log_error_end
-        return 1
-    fi
-    log_debug "Secret JSON created successfully"
-
-    # Create or update secret
-    if aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" &>/dev/null 2>&1; then
-        log_debug "Updating existing secret: $secret_name"
-        if ! aws secretsmanager put-secret-value \
-            --secret-id "$secret_name" \
-            --secret-string "$secret_json" \
-            --region "$REGION" >/dev/null 2>&1; then
-            log_error_start
-            echo "Failed to update Secrets Manager secret"
-            log_error_end
-            return 1
-        fi
-        log_success "Secret updated: $secret_name"
-    else
-        log_debug "Creating new secret: $secret_name"
-        if ! aws secretsmanager create-secret \
-            --name "$secret_name" \
-            --description "TLS certificates for Fluidity server" \
-            --secret-string "$secret_json" \
-            --region "$REGION" \
-            --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=DeployScript >/dev/null 2>&1; then
-            log_error_start
-            echo "Failed to create Secrets Manager secret"
-            log_error_end
-            return 1
-        fi
-        log_success "Secret created: $secret_name"
-    fi
-
-    # Get ARN
-    local secret_arn
-    secret_arn=$(aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" --query 'ARN' --output text 2>&1)
-    if [[ $? -ne 0 || -z "$secret_arn" ]]; then
-        log_error_start
-        echo "Failed to retrieve Secrets Manager secret ARN"
-        log_error_end
-        return 1
-    fi
+    local args=("deploy")
+    [[ -n "$AWS_REGION" ]] && args+=(--region "$AWS_REGION")
+    [[ -n "$VPC_ID" ]] && args+=(--vpc-id "$VPC_ID")
+    [[ -n "$PUBLIC_SUBNETS" ]] && args+=(--public-subnets "$PUBLIC_SUBNETS")
+    [[ -n "$ALLOWED_CIDR" ]] && args+=(--allowed-cidr "$ALLOWED_CIDR")
+    [[ "$FORCE" == "true" ]] && args+=(--force)
+    [[ "$DEBUG" == "true" ]] && args+=(--debug)
     
-    log_success "Certificates stored in Secrets Manager"
-    log_debug "Secret ARN: $secret_arn"
-
-    echo "$secret_arn"
-}
-
-# ============================================================================
-# BUILD & DEPLOYMENT
-# ============================================================================
-
-build_lambda_functions() {
-    BUILD_VERSION=$(date +%Y%m%d%H%M%S)
-    log_info "Build version: $BUILD_VERSION"
-    log_debug "Calling: bash $SCRIPT_DIR/build-lambdas.sh"
-
-    # Determine which timeout command to use (BSD timeout on macOS, GNU timeout on Linux)
-    local timeout_cmd="timeout"
-    if ! command -v timeout &> /dev/null; then
-        if command -v gtimeout &> /dev/null; then
-            timeout_cmd="gtimeout"
-        else
-            log_debug "timeout/gtimeout not found, running without timeout"
-            timeout_cmd=""
-        fi
-    fi
-
-    # Run with timeout and capture output
-    if [ -n "$timeout_cmd" ]; then
-        if $timeout_cmd 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
-            log_success "Lambda functions built"
-            log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
-            rm -f /tmp/lambda_build_$$.log
-            log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
-            return 0
-        else
-            local exit_code=$?
-            log_error_start
-            if [ $exit_code -eq 124 ]; then
-                echo "Lambda build timed out after 300s"
-            else
-                echo "Lambda build failed with exit code $exit_code"
-            fi
-            echo "Build output:"
-            cat /tmp/lambda_build_$$.log 2>/dev/null || echo "(no output captured)"
-            log_error_end
-            ERROR_LOG+=$'Lambda build failed\n'
-            rm -f /tmp/lambda_build_$$.log
-            return 1
-        fi
-    else
-        if bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
-            log_success "Lambda functions built"
-            log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
-            rm -f /tmp/lambda_build_$$.log
-            log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
-            return 0
-        else
-            local exit_code=$?
-            log_error_start
-            echo "Lambda build failed with exit code $exit_code"
-            echo "Build output:"
-            cat /tmp/lambda_build_$$.log 2>/dev/null || echo "(no output captured)"
-            log_error_end
-            ERROR_LOG+=$'Lambda build failed\n'
-            rm -f /tmp/lambda_build_$$.log
-            return 1
-        fi
-    fi
-}
-
-build_and_push_docker_image() {
-    local build_version="$1"
-    local ecr_repo="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/fluidity-server"
-
-    log_info "ECR repository: $ecr_repo"
-
-    # Ensure ECR repo exists
-    if ! aws ecr describe-repositories --repository-names fluidity-server --region "$REGION" &>/dev/null; then
-        log_info "Creating ECR repository..."
-        aws ecr create-repository --repository-name fluidity-server --region "$REGION" >/dev/null 2>&1 || true
-    fi
-    log_debug "ECR repository verified"
-
-    # Build and push using build-docker.sh (always targets linux/amd64 for Fargate)
-    log_info "Building and pushing Docker image for Fargate (linux/amd64)..."
-    if bash "$SCRIPT_DIR/build-docker.sh" \
-        --server \
-        --version "$build_version" \
-        --platform linux/amd64 \
-        --push \
-        --ecr-repo "$ecr_repo" \
-        --region "$REGION"; then
-        log_success "Docker image built and pushed to ECR"
-    else
-        log_error_start
-        echo "Docker build or push failed"
-        log_error_end
-        ERROR_LOG+=$'Docker build/push failed\n'
-        return 1
-    fi
-
-    log_debug "Image URI: $ecr_repo:$build_version"
-    DOCKER_IMAGE_URI="$ecr_repo:$build_version"
-}
-
-upload_lambda_to_s3() {
-    local build_version="$1"
-    local lambda_s3_bucket="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
-
-    # Ensure S3 bucket exists
-    if ! aws s3 ls "s3://$lambda_s3_bucket" --region "$REGION" &>/dev/null; then
-        log_info "Creating S3 bucket: $lambda_s3_bucket"
-        if ! aws s3 mb "s3://$lambda_s3_bucket" --region "$REGION"; then
-            log_error_start
-            echo "Failed to create S3 bucket: $lambda_s3_bucket"
-            log_error_end
-            ERROR_LOG+=$'S3 bucket creation failed\n'
-            return 1
-        fi
-        log_success "S3 bucket created"
-    else
-        log_info "S3 bucket already exists: $lambda_s3_bucket"
-    fi
-    log_debug "S3 bucket ready: $lambda_s3_bucket"
-
-    # Verify Lambda build directory exists
-    local lambda_build_dir="$PROJECT_ROOT/build/lambdas"
-    if [[ ! -d "$lambda_build_dir" ]]; then
-        log_error_start
-        echo "Lambda build directory not found: $lambda_build_dir"
-        log_error_end
-        ERROR_LOG+=$'Lambda build directory not found\n'
-        return 1
-    fi
-    log_debug "Lambda build directory exists: $lambda_build_dir"
-
-    # Upload functions
-    local func_count=0
-    for func in wake sleep kill; do
-        local zip_name="${func}-${build_version}.zip"
-        local zip_path="$lambda_build_dir/$zip_name"
+    log_debug "Calling server deployment script with: ${args[*]}"
+    
+    # Capture output to extract endpoints
+    local output
+    if output=$(bash "$server_script" "${args[@]}" 2>&1); then
+        log_success "Server deployment completed"
         
-        if [[ ! -f "$zip_path" ]]; then
-            log_error_start
-            echo "Lambda ZIP file not found: $zip_path"
-            log_error_end
-            ERROR_LOG+=$"Lambda ZIP not found: $zip_name\n"
-            return 1
-        fi
+        # Extract endpoints from export_endpoints output
+        local endpoints
+        endpoints=$(echo "$output" | grep "export " | grep -E "ENDPOINT|REGION|PORT" || true)
         
-        log_info "Uploading $zip_name..."
-        if ! aws s3 cp "$zip_path" "s3://$lambda_s3_bucket/fluidity/$zip_name" --region "$REGION"; then
-            log_error_start
-            echo "Failed to upload $zip_name to S3"
-            log_error_end
-            ERROR_LOG+=$"Failed to upload $zip_name\n"
-            return 1
-        fi
-        log_success "$zip_name uploaded"
-        func_count=$((func_count + 1))
-    done
-
-    log_success "All $func_count Lambda functions uploaded"
-    log_debug "Lambda artifacts in S3: s3://$lambda_s3_bucket/fluidity/"
-    LAMBDA_S3_BUCKET="$lambda_s3_bucket"
-}
-
-verify_s3_resources() {
-    local build_version="$1"
-    local lambda_s3_bucket="$2"
-    local max_retries=30
-    local retry_delay=2
-    local total_wait=0
-    local max_total_wait=60
-
-    log_substep "Verifying S3 Resource Propagation"
-    log_info "Checking Lambda artifacts in S3 (up to ${max_total_wait}s with backoff)"
-
-    local all_found=false
-    local attempt=0
-
-    while [[ $total_wait -lt $max_total_wait ]]; do
-        attempt=$((attempt + 1))
-        all_found=true
-
-        for func in wake sleep kill; do
-            local zip_name="${func}-${build_version}.zip"
-            if aws s3 ls "s3://$lambda_s3_bucket/fluidity/$zip_name" --region "$REGION" &>/dev/null; then
-                log_debug "✓ Found: $zip_name"
-            else
-                log_debug "✗ Not found: $zip_name (attempt $attempt)"
-                all_found=false
-            fi
-        done
-
-        if [[ "$all_found" == "true" ]]; then
-            log_success "All S3 resources verified and propagated"
-            log_info "Waiting additional 10s to ensure complete propagation..."
-            sleep 10
-            return 0
-        fi
-
-        if [[ $total_wait -lt $max_total_wait ]]; then
-            log_info "Retrying in ${retry_delay}s... (${total_wait}s/${max_total_wait}s)"
-            sleep "$retry_delay"
-            total_wait=$((total_wait + retry_delay))
-        fi
-    done
-
-    log_error_start
-    echo "S3 resources not fully propagated after ${max_total_wait}s"
-    echo "This may cause Lambda deployment to fail"
-    log_error_end
-    return 1
-}
-
-deploy_cloudformation_stack() {
-    local stack_name="$1"
-    local template="$2"
-    local params_file="$3"
-
-    log_info "Deploying CloudFormation stack: $stack_name"
-
-    # Check if stack exists
-    if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" &>/dev/null; then
-        if [[ "$FORCE" == "true" ]]; then
-            log_info "Force flag enabled, deleting and recreating stack..."
-            aws cloudformation delete-stack --stack-name "$stack_name" --region "$REGION"
-            if ! aws cloudformation wait stack-delete-complete --stack-name "$stack_name" --region "$REGION" 2>/dev/null; then
-                log_error_start
-                echo "Stack deletion failed or timed out: $stack_name"
-                log_error_end
-                ERROR_LOG+=$"Stack deletion failed: $stack_name\n"
-                return 1
-            fi
-            log_debug "Stack deleted successfully, creating new stack..."
-            aws cloudformation create-stack \
-                --stack-name "$stack_name" \
-                --template-body file://"$template" \
-                --parameters file://"$params_file" \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "$REGION" \
-                --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=DeployScript >/dev/null
-            if ! wait_for_stack_creation "$stack_name"; then
-                log_error_start
-                echo "Stack creation failed or timed out: $stack_name"
-                log_error_end
-                ERROR_LOG+=$"Stack creation failed: $stack_name\n"
-                return 1
-            fi
-            log_success "Stack recreated: $stack_name"
-        else
-            log_debug "Stack exists, updating..."
-            aws cloudformation update-stack \
-                --stack-name "$stack_name" \
-                --template-body file://"$template" \
-                --parameters file://"$params_file" \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "$REGION" \
-                --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=DeployScript >/dev/null 2>&1 || {
-                    # If no updates are to be performed, that's okay
-                    log_debug "No updates to be performed or stack update already in progress"
-                }
-            if ! aws cloudformation wait stack-update-complete --stack-name "$stack_name" --region "$REGION" 2>/dev/null; then
-                log_debug "Stack update timed out or no updates needed (this may be okay)"
-            fi
-            log_success "Stack updated: $stack_name"
-        fi
-    else
-        log_debug "Stack does not exist, creating..."
-        aws cloudformation create-stack \
-            --stack-name "$stack_name" \
-            --template-body file://"$template" \
-            --parameters file://"$params_file" \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region "$REGION" \
-            --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=DeployScript >/dev/null
-        if ! wait_for_stack_creation "$stack_name"; then
-            log_error_start
-            echo "Stack creation failed or timed out: $stack_name"
-            log_error_end
-            # Get failed events for diagnostics
-            log_error_start
-            echo "CloudFormation Stack Events:"
-            aws cloudformation describe-stack-events \
-                --stack-name "$stack_name" \
-                --region "$REGION" \
-                --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`ROLLBACK_IN_PROGRESS` || ResourceStatus==`ROLLBACK_COMPLETE`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
-                --output table 2>/dev/null || true
-            log_error_end
-            ERROR_LOG+=$"Stack creation failed: $stack_name\n"
-            return 1
-        fi
-        log_success "Stack created: $stack_name"
-    fi
-}
-
-wait_for_stack_creation() {
-    local stack_name="$1"
-    local timeout=600
-    local elapsed=0
-    local poll_interval=10
-    local last_event_timestamp=""
-
-    log_info "Waiting for stack creation to complete (max ${timeout}s)..."
-
-    while [ $elapsed -lt $timeout ]; do
-        local status
-        status=$(aws cloudformation describe-stacks \
-            --stack-name "$stack_name" \
-            --region "$REGION" \
-            --query 'Stacks[0].StackStatus' \
-            --output text 2>/dev/null)
-
-        # Get recent events
-        local events
-        events=$(aws cloudformation describe-stack-events \
-            --stack-name "$stack_name" \
-            --region "$REGION" \
-            --query 'StackEvents[*].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
-            --output text 2>/dev/null || echo "")
-
-        # Show new events
-        if [[ -n "$events" ]]; then
-            echo "$events" | while IFS=$'\t' read -r timestamp resource_id resource_status resource_reason; do
-                if [[ -n "$timestamp" && "$timestamp" != "$last_event_timestamp" ]]; then
-                    if [[ "$resource_status" == "CREATE_FAILED" || "$resource_status" == "ROLLBACK_IN_PROGRESS" ]]; then
-                        log_error_start
-                        echo "$timestamp | $resource_id | $resource_status | $resource_reason"
-                        log_error_end
-                    elif [[ "$resource_status" != "CREATE_IN_PROGRESS" ]]; then
-                        log_debug "$timestamp | $resource_id | $resource_status"
-                    fi
-                    last_event_timestamp="$timestamp"
-                fi
-            done
-        fi
-
-        case "$status" in
-            CREATE_COMPLETE)
-                return 0
-                ;;
-            ROLLBACK_COMPLETE|CREATE_FAILED|ROLLBACK_IN_PROGRESS)
-                log_error_start
-                echo "Stack creation failed with status: $status"
-                log_error_end
-                return 1
-                ;;
-            CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS)
-                sleep $poll_interval
-                elapsed=$((elapsed + poll_interval))
-                ;;
-            *)
-                log_debug "Stack status: $status (elapsed: ${elapsed}s)"
-                sleep $poll_interval
-                elapsed=$((elapsed + poll_interval))
-                ;;
-        esac
-    done
-
-    log_error_start
-    echo "Stack creation timed out after ${timeout}s"
-    log_error_end
-    return 1
-}
-
-# ============================================================================
-# RETENTION POLICIES
-# ============================================================================
-
-set_retention_policies() {
-    log_section "Step 8: Configure Retention Policies"
-    
-    # CloudWatch Logs
-    log_substep "Setting CloudWatch Logs Retention"
-    local log_group="/ecs/fluidity/server"
-    if aws logs describe-log-groups --log-group-name-prefix "$log_group" --region "$REGION" &>/dev/null; then
-        log_info "Setting retention to 7 days for: $log_group"
-        if aws logs put-retention-policy \
-            --log-group-name "$log_group" \
-            --retention-in-days 7 \
-            --region "$REGION" >/dev/null 2>&1; then
-            log_success "CloudWatch Logs retention set to 7 days"
-        else
-            log_info "Failed to set log retention (may not have permissions)"
-        fi
-    else
-        log_info "Log group not found (will be created with 7-day retention on next task run)"
-    fi
-    
-    # ECR Lifecycle Policy
-    log_substep "Setting ECR Lifecycle Policy"
-    local ecr_repo="fluidity-server"
-    if aws ecr describe-repositories --repository-names "$ecr_repo" --region "$REGION" &>/dev/null 2>&1; then
-        local lifecycle_policy=$(cat <<'EOF'
-{
-  "rules": [
-    {
-      "rulePriority": 1,
-      "description": "Keep only the latest image (by push date)",
-      "selection": {
-        "tagStatus": "any",
-        "countType": "imageCountMoreThan",
-        "countNumber": 1
-      },
-      "action": {
-        "type": "expire"
-      }
-    }
-  ]
-}
-EOF
-)
-        if echo "$lifecycle_policy" | aws ecr put-lifecycle-policy \
-            --repository-name "$ecr_repo" \
-            --lifecycle-policy-text file:///dev/stdin \
-            --region "$REGION" >/dev/null 2>&1; then
-            log_success "ECR lifecycle policy set (keeping only latest image, deleting older)"
-        else
-            log_info "Failed to set ECR lifecycle policy"
-        fi
-    fi
-    
-    # S3 Lambda Artifacts Cleanup (keep only current build)
-    log_substep "Cleaning Old S3 Lambda Artifacts"
-    local s3_bucket="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
-    if aws s3 ls "s3://$s3_bucket" --region "$REGION" &>/dev/null 2>&1; then
-        # Get current build version from latest deployment
-        local current_version
-        current_version=$(aws cloudformation describe-stacks \
-            --stack-name "$LAMBDA_STACK_NAME" \
-            --region "$REGION" \
-            --query 'Stacks[0].Parameters[?ParameterKey==`BuildVersion`].ParameterValue' \
-            --output text 2>/dev/null)
-        
-        if [[ -n "$current_version" && "$current_version" != "None" ]]; then
-            log_info "Current build version: $current_version"
-            log_info "Deleting old Lambda artifacts (keeping only $current_version)"
+        if [[ -n "$endpoints" ]]; then
+            log_debug "Extracted endpoints:"
+            log_debug "$endpoints"
             
-            # List all Lambda ZIPs and delete those not matching current version
-            local deleted_count=0
-            for func in wake sleep kill; do
-                # Get all versions of this function
-                local all_zips
-                all_zips=$(aws s3 ls "s3://$s3_bucket/fluidity/${func}-" --region "$REGION" 2>/dev/null | awk '{print $4}' || echo "")
-                
-                if [[ -n "$all_zips" ]]; then
-                    echo "$all_zips" | while read -r zip_file; do
-                        if [[ -n "$zip_file" && "$zip_file" != "${func}-${current_version}.zip" ]]; then
-                            if aws s3 rm "s3://$s3_bucket/fluidity/$zip_file" --region "$REGION" >/dev/null 2>&1; then
-                                log_debug "Deleted: $zip_file"
-                                deleted_count=$((deleted_count + 1))
-                            fi
-                        fi
-                    done
-                fi
-            done
-            
-            log_success "S3 cleanup complete (keeping only current build: $current_version)"
-        else
-            log_info "Could not determine current build version, skipping S3 cleanup"
+            # Source the endpoints
+            eval "$endpoints"
         fi
-    fi
-    
-    log_success "Retention policies configured"
-}
-
-# ============================================================================
-# CLEANUP & OUTPUT
-# ============================================================================
-
-output_api_credentials() {
-    log_section "API Credentials"
-
-    # Get Lambda outputs
-    API_ENDPOINT=$(aws cloudformation describe-stacks \
-        --stack-name "$LAMBDA_STACK_NAME" \
-        --region "$REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`KillAPIEndpoint`].OutputValue' \
-        --output text 2>/dev/null) || API_ENDPOINT="Not found"
-
-    API_KEY_ID=$(aws cloudformation describe-stacks \
-        --stack-name "$LAMBDA_STACK_NAME" \
-        --region "$REGION" \
-        --query 'Stacks[0].Outputs[?OutputKey==`APIKeyId`].OutputValue' \
-        --output text 2>/dev/null) || API_KEY_ID="Not found"
-
-    log_info "API Endpoint: $API_ENDPOINT"
-    log_info "API Key ID: $API_KEY_ID"
-
-    if [[ "$API_KEY_ID" != "Not found" && -n "$API_KEY_ID" ]]; then
-        log_info "To get API key value, run:"
-        log_info "  aws apigateway get-api-key --api-key $API_KEY_ID --include-value --region $REGION"
-    fi
-}
-
-cleanup() {
-    rm -rf "$TEMP_PARAMS_DIR" 2>/dev/null || true
-}
-
-# ============================================================================
-# ACTIONS
-# ============================================================================
-
-action_deploy() {
-    mkdir -p "$TEMP_PARAMS_DIR"
-
-    # Step 2: Build and upload Lambda functions to S3
-    log_section "Step 2: Build and Upload Lambda Functions to S3"
-    
-    log_substep "Building Lambda Functions"
-    if ! build_lambda_functions; then
-        return 1
-    fi
-    
-    log_substep "Uploading Lambda Functions to S3"
-    if ! upload_lambda_to_s3 "$BUILD_VERSION"; then
-        return 1
-    fi
-    lambda_s3_bucket="$LAMBDA_S3_BUCKET"
-
-    # Step 3: Build and push Fargate Docker image to ECR
-    log_section "Step 3: Build and Push Fargate Docker Image to ECR"
-    if ! build_and_push_docker_image "$BUILD_VERSION"; then
-        return 1
-    fi
-    docker_image=$(echo "$DOCKER_IMAGE_URI" | tail -1)
-
-    # Step 4: Prepare certificates and store in Secrets Manager
-    log_section "Step 4: Prepare Certificates and Store in Secrets Manager"
-    
-    log_substep "Ensuring Certificates Exist"
-    ensure_certificates
-    
-    log_substep "Storing Certificates in Secrets Manager"
-    secret_arn=$(store_certificates_in_secrets_manager) || return 1
-    secret_arn=$(echo "$secret_arn" | tail -1)
-
-    # Step 5: Deploy Fargate server stack
-    log_section "Step 5: Deploy Fargate Server Stack"
-    local fargate_params="$TEMP_PARAMS_DIR/fargate-params.json"
-    cat > "$fargate_params" << EOF
-[
-  {"ParameterKey": "ClusterName", "ParameterValue": "fluidity"},
-  {"ParameterKey": "ServiceName", "ParameterValue": "fluidity-server"},
-  {"ParameterKey": "ContainerImage", "ParameterValue": "$docker_image"},
-  {"ParameterKey": "ContainerPort", "ParameterValue": "8443"},
-  {"ParameterKey": "Cpu", "ParameterValue": "256"},
-  {"ParameterKey": "Memory", "ParameterValue": "512"},
-  {"ParameterKey": "DesiredCount", "ParameterValue": "0"},
-  {"ParameterKey": "VpcId", "ParameterValue": "$VPC_ID"},
-  {"ParameterKey": "PublicSubnets", "ParameterValue": "$PUBLIC_SUBNETS"},
-  {"ParameterKey": "AllowedIngressCidr", "ParameterValue": "$ALLOWED_CIDR"},
-  {"ParameterKey": "AssignPublicIp", "ParameterValue": "ENABLED"},
-  {"ParameterKey": "LogGroupName", "ParameterValue": "/ecs/fluidity/server"},
-  {"ParameterKey": "LogRetentionDays", "ParameterValue": "7"},
-  {"ParameterKey": "CertificatesSecretArn", "ParameterValue": "$secret_arn"}
-]
-EOF
-    deploy_cloudformation_stack "$FARGATE_STACK_NAME" "$FARGATE_TEMPLATE" "$fargate_params" || return 1
-
-    # Step 6: Verify S3 Lambda artifacts are available for deployment
-    log_section "Step 6: Verify S3 Lambda Artifacts are Available"
-    verify_s3_resources "$BUILD_VERSION" "$lambda_s3_bucket" || return 1
-
-    # Step 7: Deploy Lambda control plane stack
-    log_section "Step 7: Deploy Lambda Control Plane Stack"
-    local lambda_params="$TEMP_PARAMS_DIR/lambda-params.json"
-    cat > "$lambda_params" << EOF
-[
-  {"ParameterKey": "LambdaS3Bucket", "ParameterValue": "$lambda_s3_bucket"},
-  {"ParameterKey": "LambdaS3KeyPrefix", "ParameterValue": "fluidity/"},
-  {"ParameterKey": "BuildVersion", "ParameterValue": "$BUILD_VERSION"},
-  {"ParameterKey": "ECSClusterName", "ParameterValue": "fluidity"},
-  {"ParameterKey": "ECSServiceName", "ParameterValue": "fluidity-server"},
-  {"ParameterKey": "IdleThresholdMinutes", "ParameterValue": "15"},
-  {"ParameterKey": "LookbackPeriodMinutes", "ParameterValue": "10"},
-  {"ParameterKey": "SleepCheckIntervalMinutes", "ParameterValue": "5"},
-  {"ParameterKey": "DailyKillTime", "ParameterValue": "cron(0 23 * * ? *)"},
-  {"ParameterKey": "WakeLambdaTimeout", "ParameterValue": "30"},
-  {"ParameterKey": "SleepLambdaTimeout", "ParameterValue": "60"},
-  {"ParameterKey": "KillLambdaTimeout", "ParameterValue": "30"},
-  {"ParameterKey": "APIThrottleBurstLimit", "ParameterValue": "20"},
-  {"ParameterKey": "APIThrottleRateLimit", "ParameterValue": "3"},
-  {"ParameterKey": "APIQuotaLimit", "ParameterValue": "300"}
-]
-EOF
-    deploy_cloudformation_stack "$LAMBDA_STACK_NAME" "$LAMBDA_TEMPLATE" "$lambda_params" || return 1
-
-    # Step 8: Configure retention policies
-    set_retention_policies
-
-    log_success "Deployment completed successfully"
-}
-
-action_delete() {
-    log_section "Step 1: Delete CloudFormation Stacks"
-
-    for stack_name in "$LAMBDA_STACK_NAME" "$FARGATE_STACK_NAME"; do
-        if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" &>/dev/null 2>&1; then
-            log_info "Deleting CloudFormation stack: $stack_name"
-            aws cloudformation delete-stack --stack-name "$stack_name" --region "$REGION"
-            if aws cloudformation wait stack-delete-complete --stack-name "$stack_name" --region "$REGION" 2>/dev/null; then
-                log_success "CloudFormation stack deleted: $stack_name"
-            else
-                log_info "Stack deletion in progress or timed out: $stack_name"
-            fi
-        else
-            log_info "CloudFormation stack not found: $stack_name"
-        fi
-    done
-
-    # Step 2: Delete ECR repository
-    log_section "Step 2: Delete ECR Repository"
-    if aws ecr describe-repositories --repository-names fluidity-server --region "$REGION" &>/dev/null 2>&1; then
-        log_info "Deleting ECR repository: fluidity-server"
-        if aws ecr delete-repository --repository-name fluidity-server --region "$REGION" --force >/dev/null 2>&1; then
-            log_success "ECR repository deleted"
-        else
-            log_info "Failed to delete ECR repository (may be in use)"
-        fi
-    else
-        log_info "ECR repository not found"
-    fi
-
-    # Step 3: Delete S3 bucket and contents
-    log_section "Step 3: Delete S3 Bucket and Contents"
-    local lambda_s3_bucket="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
-    if aws s3 ls "s3://$lambda_s3_bucket" --region "$REGION" &>/dev/null 2>&1; then
-        log_info "Deleting S3 bucket and contents: $lambda_s3_bucket"
-        if aws s3 rm "s3://$lambda_s3_bucket" --recursive --region "$REGION" >/dev/null 2>&1 && \
-           aws s3 rb "s3://$lambda_s3_bucket" --region "$REGION" >/dev/null 2>&1; then
-            log_success "S3 bucket deleted"
-        else
-            log_info "Failed to delete S3 bucket (may be in use or contain protected objects)"
-        fi
-    else
-        log_info "S3 bucket not found"
-    fi
-
-    # Step 4: Delete Secrets Manager secret
-    log_section "Step 4: Delete Secrets Manager Secret"
-    if aws secretsmanager describe-secret --secret-id fluidity-certificates --region "$REGION" &>/dev/null 2>&1; then
-        log_info "Deleting Secrets Manager secret: fluidity-certificates"
-        if aws secretsmanager delete-secret --secret-id fluidity-certificates --region "$REGION" --force-delete-without-recovery >/dev/null 2>&1; then
-            log_success "Secrets Manager secret deleted"
-        else
-            log_info "Failed to delete Secrets Manager secret"
-        fi
-    else
-        log_info "Secrets Manager secret not found"
-    fi
-
-    # Step 5: Delete CloudWatch log groups
-    log_section "Step 5: Delete CloudWatch Log Groups"
-    local log_patterns=("/ecs/fluidity" "/aws/lambda/fluidity" "API-Gateway-Execution-Logs" "scheduler-")
-    
-    for pattern in "${log_patterns[@]}"; do
-        local log_groups
-        log_groups=$(aws logs describe-log-groups --region "$REGION" --query "logGroups[?contains(logGroupName, '$pattern')].logGroupName" --output text 2>/dev/null)
         
-        if [[ -n "$log_groups" ]]; then
-            log_info "Found log groups matching pattern: $pattern"
-            echo "$log_groups" | tr '\t' '\n' | while read -r log_group; do
-                if [[ -n "$log_group" ]]; then
-                    if aws logs delete-log-group --log-group-name "$log_group" --region "$REGION" >/dev/null 2>&1; then
-                        log_success "Deleted: $log_group"
-                    else
-                        log_info "Failed to delete: $log_group"
-                    fi
-                fi
-            done
-        fi
-    done
-
-    log_success "Infrastructure cleanup completed"
+        return 0
+    else
+        log_error_start
+        echo "Server deployment failed"
+        echo "$output"
+        log_error_end
+        return 1
+    fi
 }
 
-action_status() {
-    log_section "Stack Status"
-
-    for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
-        local status
-        if status=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null); then
-            log_info "$stack_name: $status"
-        else
-            log_info "$stack_name: Not found"
-        fi
-    done
+deploy_agent() {
+    log_section "Deploying Agent to Local System"
+    
+    local agent_script="$SCRIPT_DIR/deploy-agent.sh"
+    
+    if [[ ! -f "$agent_script" ]]; then
+        log_error_start
+        echo "Agent deployment script not found: $agent_script"
+        log_error_end
+        exit 1
+    fi
+    
+    local args=("deploy")
+    
+    # Pass server configuration
+    if [[ -n "$SERVER_IP" ]]; then
+        args+=(--server-ip "$SERVER_IP")
+    fi
+    
+    args+=(--server-port "$SERVER_PORT")
+    args+=(--local-proxy-port "$LOCAL_PROXY_PORT")
+    
+    # Pass Lambda endpoints if available
+    if [[ -n "$WAKE_ENDPOINT" ]]; then
+        args+=(--wake-endpoint "$WAKE_ENDPOINT")
+    fi
+    
+    if [[ -n "$KILL_ENDPOINT" ]]; then
+        args+=(--kill-endpoint "$KILL_ENDPOINT")
+    fi
+    
+    # Pass certificate paths if provided
+    [[ -n "$CERT_PATH" ]] && args+=(--cert-path "$CERT_PATH")
+    [[ -n "$KEY_PATH" ]] && args+=(--key-path "$KEY_PATH")
+    [[ -n "$CA_CERT_PATH" ]] && args+=(--ca-cert-path "$CA_CERT_PATH")
+    
+    # Pass installation path if specified
+    [[ -n "$INSTALL_PATH" && "$INSTALL_PATH" != "$DEFAULT_INSTALL_PATH" ]] && args+=(--install-path "$INSTALL_PATH")
+    
+    # Pass build/debug flags
+    [[ "$SKIP_BUILD" == "true" ]] && args+=(--skip-build)
+    [[ "$DEBUG" == "true" ]] && args+=(--debug)
+    
+    log_debug "Calling agent deployment script with: ${args[*]}"
+    
+    if bash "$agent_script" "${args[@]}"; then
+        log_success "Agent deployment completed"
+        return 0
+    else
+        log_error_start
+        echo "Agent deployment failed"
+        log_error_end
+        return 1
+    fi
 }
 
-action_outputs() {
-    log_section "Stack Outputs"
+delete_server() {
+    log_section "Deleting AWS Infrastructure"
+    
+    local server_script="$SCRIPT_DIR/deploy-server.sh"
+    
+    if [[ ! -f "$server_script" ]]; then
+        log_error_start
+        echo "Server deployment script not found: $server_script"
+        log_error_end
+        exit 1
+    fi
+    
+    read -p "Are you sure you want to delete the AWS infrastructure? (yes/no): " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        log_warn "Deletion cancelled"
+        return 0
+    fi
+    
+    local args=("delete")
+    [[ -n "$AWS_REGION" ]] && args+=(--region "$AWS_REGION")
+    [[ "$DEBUG" == "true" ]] && args+=(--debug)
+    
+    log_debug "Calling server deletion with: ${args[*]}"
+    
+    if bash "$server_script" "${args[@]}"; then
+        log_success "Infrastructure deletion completed"
+        return 0
+    else
+        log_error_start
+        echo "Infrastructure deletion failed"
+        log_error_end
+        return 1
+    fi
+}
 
-    for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
-        log_substep "$stack_name"
-        if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table 2>/dev/null; then
-            :
-        else
-            log_info "Stack not found"
-        fi
-        echo ""
-    done
+show_status() {
+    log_section "Fluidity Deployment Status"
+    
+    log_substep "Server Status (AWS)"
+    
+    local server_script="$SCRIPT_DIR/deploy-server.sh"
+    
+    if [[ -f "$server_script" ]]; then
+        local args=("status")
+        [[ -n "$AWS_REGION" ]] && args+=(--region "$AWS_REGION")
+        [[ "$DEBUG" == "true" ]] && args+=(--debug)
+        
+        bash "$server_script" "${args[@]}" || true
+    else
+        log_info "Server deployment script not found"
+    fi
+    
+    log_substep "Agent Status"
+    
+    local agent_script="$SCRIPT_DIR/deploy-agent.sh"
+    
+    if [[ -f "$agent_script" ]]; then
+        bash "$agent_script" status || true
+    else
+        log_info "Agent deployment script not found"
+    fi
 }
 
 # ============================================================================
@@ -1172,65 +433,84 @@ action_outputs() {
 # ============================================================================
 
 main() {
-    # Parse command line
     validate_action
     parse_arguments "$@"
-
-    # Traps
-    trap cleanup EXIT
-
-    # Step 1: Check prerequisites and detect AWS parameters
-    log_section "Step 1: Check Prerequisites and Detect AWS Parameters"
-    check_prerequisites
-
-    # Detect region for all actions (needed for AWS API calls)
-    if [[ -z "$REGION" ]]; then
-        if REGION=$(aws configure get region 2>/dev/null); then
-            [[ -n "$REGION" ]] && log_debug "Region auto-detected: $REGION" || {
-                log_error_start
-                echo "Region could not be auto-detected. Set it with: aws configure set region us-east-1"
-                log_error_end
-                exit 1
-            }
-        else
-            log_error_start
-            echo "Region could not be auto-detected. Set it with: aws configure set region us-east-1"
-            log_error_end
-            exit 1
-        fi
-    fi
-
-    # Deploy-specific steps (need full parameter detection)
-    if [[ "$ACTION" == "deploy" ]]; then
-        auto_detect_parameters
-        log_info "Parameters: Region=$REGION VPC=$VPC_ID"
-        [[ "$FORCE" == "true" ]] && log_info "Force mode: Enabled (will delete and recreate all resources)"
-    fi
-
-    # Execute action
+    
+    log_section "Fluidity Complete Deployment"
+    log_info "Operating System: $OS_TYPE"
+    log_info "Default install path: $DEFAULT_INSTALL_PATH"
+    log_info "Default proxy port: $DEFAULT_LOCAL_PROXY_PORT"
+    
     case "$ACTION" in
         deploy)
-            if action_deploy; then
-                output_api_credentials
-                log_success "Deployment finished successfully"
-            else
-                log_error_start
-                echo "$ERROR_LOG"
-                log_error_end
-                output_api_credentials
+            if ! deploy_server; then
                 exit 1
             fi
+            
+            # Deploy agent with collected endpoints
+            if ! deploy_agent; then
+                exit 1
+            fi
+            
+            log_success "Complete Fluidity deployment finished successfully"
+            log_info ""
+            log_info "Summary:"
+            log_info "  - Server deployed to AWS"
+            log_info "  - Agent deployed to: $INSTALL_PATH"
+            log_info "  - Configuration: $INSTALL_PATH/agent.yaml"
+            log_info ""
+            log_info "Next steps:"
+            log_info "1. Start the Fargate task in AWS Console (set DesiredCount=1)"
+            log_info "2. Run the agent: $INSTALL_PATH/$([[ "$OS_TYPE" == "windows" ]] && echo "fluidity-agent.exe" || echo "fluidity-agent")"
+            log_info ""
             ;;
+        
+        deploy-server)
+            if ! deploy_server; then
+                exit 1
+            fi
+            
+            log_success "Server deployment finished successfully"
+            log_info ""
+            log_info "To deploy agent with server endpoints, run:"
+            log_info "  ./deploy-fluidity.sh deploy-agent"
+            log_info ""
+            ;;
+        
+        deploy-agent)
+            if [[ -z "$SERVER_IP" ]]; then
+                log_warn "Server IP not provided, agent configuration will require manual input"
+            fi
+            
+            if ! deploy_agent; then
+                exit 1
+            fi
+            
+            log_success "Agent deployment finished successfully"
+            log_info ""
+            log_info "Agent installed to: $INSTALL_PATH"
+            log_info "Configuration: $INSTALL_PATH/agent.yaml"
+            log_info ""
+            ;;
+        
         delete)
-            action_delete
+            if ! delete_server; then
+                exit 1
+            fi
+            
+            log_success "Deletion complete"
+            log_info ""
+            log_info "To uninstall the agent, run:"
+            log_info "  ./deploy-agent.sh uninstall"
+            log_info ""
             ;;
+        
         status)
-            action_status
-            ;;
-        outputs)
-            action_outputs
+            show_status
             ;;
     esac
+    
+    echo ""
 }
 
 # Execute main
