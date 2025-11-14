@@ -417,7 +417,6 @@ build_docker_image() {
         --progress=plain \
         -f "$dockerfile" \
         -t "$image_name:$BUILD_VERSION" \
-        -t "$image_name:latest" \
         "$PROJECT_ROOT" 2>&1 | grep -v -E '^#[0-9]'; then
         
         log_success "Docker image built: $image_name:$BUILD_VERSION"
