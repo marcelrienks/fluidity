@@ -368,6 +368,11 @@ ca_cert_file: "$CA_CERT_PATH"
 log_level: "$LOG_LEVEL"
 EOF
     
+    # Fix permissions on config directory
+    if [[ -n "$SUDO_USER" ]]; then
+        chown -R "$SUDO_USER:$SUDO_USER" "$CONFIG_DIR" 2>/dev/null || true
+    fi
+    
     log_success "Configuration file created: $CONFIG_FILE"
 }
 
@@ -564,6 +569,19 @@ install_agent() {
     }
     
     chmod +x "$AGENT_EXE_PATH"
+    
+    log_substep "Fixing File Permissions"
+    # Change ownership to current user so they can access the files
+    local current_user
+    current_user=$(whoami)
+    if [[ "$current_user" != "root" ]]; then
+        log_warn "Cannot change permissions - script not running as root"
+    else
+        chown -R "$SUDO_USER:$SUDO_USER" "$INSTALL_PATH" "$CONFIG_DIR" 2>/dev/null || {
+            log_warn "Could not change ownership to $SUDO_USER - you may need to adjust permissions manually"
+        }
+        log_info "Permissions fixed for user: $SUDO_USER"
+    fi
     
     if [[ ! -f "$AGENT_EXE_PATH" ]]; then
         log_error_start
