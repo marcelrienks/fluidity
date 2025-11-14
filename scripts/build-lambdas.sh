@@ -15,6 +15,12 @@ LAMBDAS_DIR="$PROJECT_ROOT/cmd/lambdas"
 BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
 
 # Logging functions (consistent with other build scripts)
+log_header() {
+    echo "================================================================================"
+    echo "$*"
+    echo "================================================================================"
+}
+
 log_minor() {
     echo ""
     echo "$*"
@@ -43,6 +49,7 @@ log_error() {
 mkdir -p "$BUILD_DIR"
 echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
 
+log_header "Fluidity Lambda Build"
 log_info "Building Lambda functions..."
 
 # List of Lambda functions to build
