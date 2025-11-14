@@ -1023,6 +1023,15 @@ EOF
     verify_s3_resources "$BUILD_VERSION" "$lambda_s3_bucket" || return 1
 
     log_section "Step 7: Deploy Lambda Control Plane Stack"
+    
+    log_substep "Cleaning up existing Lambda log groups (idempotent)"
+    for log_group in "/aws/lambda/fluidity-lambda-kill" "/aws/lambda/fluidity-lambda-sleep" "/aws/lambda/fluidity-lambda-wake"; do
+        if aws logs describe-log-groups --log-group-name-prefix "$log_group" --region "$REGION" 2>/dev/null | grep -q "\"logGroupName\": \"$log_group\""; then
+            log_info "Deleting existing log group: $log_group"
+            aws logs delete-log-group --log-group-name "$log_group" --region "$REGION" 2>/dev/null || true
+        fi
+    done
+    
     local lambda_params="$TEMP_PARAMS_DIR/lambda-params.json"
     cat > "$lambda_params" << EOF
 [
