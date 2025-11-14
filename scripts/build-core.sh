@@ -43,16 +43,16 @@ log_header() {
     echo ""
 }
 
-log_section() {
+log_minor() {
     echo ""
-    echo "==="
     echo "$*"
-    echo "==="
+    echo "=========================================="
 }
 
 log_substep() {
     echo ""
-    echo "--- $*"
+    echo "$*"
+    echo "-------------------------------------------"
 }
 
 log_info() {
@@ -125,12 +125,14 @@ if [[ "$BUILD_ALL" == true ]]; then
     BUILD_SERVER=true
 fi
 
+# Main execution
+log_header "Fluidity Core Build"
+
 # Clean if requested
 if [[ "$CLEAN" == true ]]; then
-    echo -e "${YELLOW}Cleaning build directory...${NC}"
+    log_section "Cleaning Build Directory"
     rm -rf "$BUILD_DIR"
-    echo -e "${GREEN}✓ Build directory cleaned${NC}"
-    echo ""
+    log_success "Build directory cleaned"
 fi
 
 # Create build directory
@@ -153,7 +155,7 @@ fi
 
 # Build server
 if [[ "$BUILD_SERVER" == true ]]; then
-    log_substep "Building Server"
+    log_minor "Build Server"
     
     SERVER_DIR="$CMD_DIR/server"
     SERVER_BINARY="fluidity-server${BINARY_SUFFIX}"
@@ -169,9 +171,10 @@ if [[ "$BUILD_SERVER" == true ]]; then
     BUILD_CMD="go build -ldflags='-s -w' -o $BUILD_DIR/$SERVER_BINARY ."
     
     if [[ -n "$GOOS" ]]; then
-    BUILD_CMD="GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=$CGO_ENABLED $BUILD_CMD"
+        BUILD_CMD="GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=$CGO_ENABLED $BUILD_CMD"
     fi
     
+    log_substep "Compiling Server Binary"
     echo "Compiling: $SERVER_BINARY"
     eval $BUILD_CMD
     
@@ -187,7 +190,7 @@ fi
 
 # Build agent
 if [[ "$BUILD_AGENT" == true ]]; then
-    log_substep "Building Agent"
+    log_minor "Build Agent"
     
     AGENT_DIR="$CMD_DIR/agent"
     AGENT_BINARY="fluidity-agent${BINARY_SUFFIX}"
@@ -205,6 +208,7 @@ if [[ "$BUILD_AGENT" == true ]]; then
         BUILD_CMD="GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=$CGO_ENABLED $BUILD_CMD"
     fi
     
+    log_substep "Compiling Agent Binary"
     echo "Compiling: $AGENT_BINARY"
     eval $BUILD_CMD
     
@@ -219,12 +223,12 @@ fi
 
 # Build lambdas if --all was specified
 if [[ "$BUILD_ALL" == true ]]; then
-    log_substep "Building Lambda Functions"
+    log_minor "Build Lambda Functions"
     "$SCRIPT_DIR/build-lambdas.sh"
 fi
 
 # Summary
-log_substep "Build Summary"
+log_minor "Build Summary"
 if [[ -d "$BUILD_DIR" ]]; then
     ls -lh "$BUILD_DIR" 2>/dev/null | grep -E '(fluidity-|\.zip)' || echo "No binaries found"
 fi

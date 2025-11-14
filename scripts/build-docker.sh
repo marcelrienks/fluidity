@@ -89,16 +89,16 @@ log_header() {
     echo ""
 }
 
-log_section() {
+log_minor() {
     echo ""
-    echo "==="
     echo "$*"
-    echo "==="
+    echo "=========================================="
 }
 
 log_substep() {
     echo ""
-    echo "--- $*"
+    echo "$*"
+    echo "-------------------------------------------"
 }
 
 log_info() {
@@ -223,7 +223,7 @@ validate_options() {
 # ============================================================================
 
 check_prerequisites() {
-    log_substep "Checking Prerequisites"
+    log_minor "Checking Prerequisites"
 
     # Check Docker
     if ! command -v docker &>/dev/null; then
@@ -279,9 +279,9 @@ check_prerequisites() {
         fi
         
         # Wait for Docker daemon to become available (extended timeout for Windows)
-        log_info "Waiting for Docker daemon to start (up to 120 seconds)..."
+        log_info "Waiting for Docker daemon to start (up to 180 seconds)..."
         local wait_time=0
-        local max_wait=120
+        local max_wait=180
         while [[ $wait_time -lt $max_wait ]]; do
             if docker ps &>/dev/null 2>&1; then
                 log_success "Docker daemon is now accessible"
@@ -376,7 +376,7 @@ build_docker_image() {
     local dockerfile="$PROJECT_ROOT/deployments/$component/Dockerfile"
     local image_name="fluidity-$component"
     
-    log_info "Building Docker image: $image_name:$BUILD_VERSION"
+    log_substep "Building Docker image: $image_name:$BUILD_VERSION"
     log_debug "Dockerfile: $dockerfile"
     log_debug "Build context: $PROJECT_ROOT"
     log_debug "Platform: $TARGET_PLATFORM"
@@ -445,12 +445,12 @@ main() {
     check_prerequisites
 
     # Build binaries
-    log_section "Step 1: Build Binaries"
+    log_minor "Step 1: Build Binaries"
     build_binaries
 
     # Build Docker images
     if [[ "$BUILD_SERVER" == "true" ]]; then
-        log_section "Step 2: Build Server Docker Image"
+        log_minor "Step 2: Build Server Docker Image"
         build_docker_image "server"
         
         if [[ "$PUSH_TO_ECR" == "true" ]]; then
@@ -459,7 +459,7 @@ main() {
     fi
 
     if [[ "$BUILD_AGENT" == "true" ]]; then
-        log_section "Step 3: Build Agent Docker Image"
+        log_minor "Step 3: Build Agent Docker Image"
         build_docker_image "agent"
         
         if [[ "$PUSH_TO_ECR" == "true" ]]; then
