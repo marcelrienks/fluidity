@@ -480,14 +480,16 @@ build_lambda_functions() {
     fi
 
     if [ -n "$timeout_cmd" ]; then
-        if BUILD_VERSION="$BUILD_VERSION" $timeout_cmd 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
+        $timeout_cmd 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log
+        local exit_code=${PIPESTATUS[0]}
+        
+        if [ $exit_code -eq 0 ]; then
             log_success "Lambda functions built"
             log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
             rm -f /tmp/lambda_build_$$.log
             log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
             return 0
         else
-            local exit_code=$?
             log_error_start
             if [ $exit_code -eq 124 ]; then
                 echo "Lambda build timed out after 300s"
@@ -502,14 +504,16 @@ build_lambda_functions() {
             return 1
         fi
     else
-        if BUILD_VERSION="$BUILD_VERSION" bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
+        bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log
+        local exit_code=${PIPESTATUS[0]}
+        
+        if [ $exit_code -eq 0 ]; then
             log_success "Lambda functions built"
             log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
             rm -f /tmp/lambda_build_$$.log
             log_debug "Lambda build artifacts in: $PROJECT_ROOT/build/lambdas"
             return 0
         else
-            local exit_code=$?
             log_error_start
             echo "Lambda build failed with exit code $exit_code"
             echo "Build output:"
@@ -1033,10 +1037,7 @@ EOF
   {"ParameterKey": "DailyKillTime", "ParameterValue": "cron(0 23 * * ? *)"},
   {"ParameterKey": "WakeLambdaTimeout", "ParameterValue": "30"},
   {"ParameterKey": "SleepLambdaTimeout", "ParameterValue": "60"},
-  {"ParameterKey": "KillLambdaTimeout", "ParameterValue": "30"},
-  {"ParameterKey": "APIThrottleBurstLimit", "ParameterValue": "20"},
-  {"ParameterKey": "APIThrottleRateLimit", "ParameterValue": "3"},
-  {"ParameterKey": "APIQuotaLimit", "ParameterValue": "300"}
+  {"ParameterKey": "KillLambdaTimeout", "ParameterValue": "30"}
 ]
 EOF
     deploy_cloudformation_stack "$LAMBDA_STACK_NAME" "$LAMBDA_TEMPLATE" "$lambda_params" || return 1
