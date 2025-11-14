@@ -17,7 +17,7 @@ Installs: Go 1.21+, Make, Docker, OpenSSL, Node.js 18+, npm
 
 **1. Generate certificates:**
 ```bash
-./scripts/manage-certs.sh
+./scripts/generate-certs.sh
 ```
 
 **2. Build:**

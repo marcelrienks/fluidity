@@ -284,7 +284,7 @@ aws ec2 describe-network-interfaces \
 
 Regenerate certificates and redeploy:
 ```bash
-./scripts/manage-certs.sh
+./scripts/generate-certs.sh
 docker build -f deployments/server/Dockerfile -t fluidity-server .
 docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 aws ecs update-service --cluster fluidity --service fluidity-server --force-new-deployment

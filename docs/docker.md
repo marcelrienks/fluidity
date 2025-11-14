@@ -276,10 +276,10 @@ tls: failed to verify certificate: x509: certificate is valid for fluidity-serve
 **Solution:** Regenerate certificates:
 ```powershell
 # Windows
-.\scripts\manage-certs.sh
+.\scripts\generate-certs.sh
 
 # macOS/Linux
-./scripts/manage-certs.sh
+./scripts/generate-certs.sh
 ```
 
 **Verify:**

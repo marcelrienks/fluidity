@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Fluidity - AWS Fargate (ECS) deployment for tunnel server with mTLS certificate management via AWS Secrets Manager.
-  Run ./scripts/manage-certs.sh to generate certificates before deploying.
+  Run ./scripts/generate-certs.sh to generate certificates before deploying.
   Set DesiredCount=0 when not in use (no charges), DesiredCount=1 to start (~$9/month for 24/7).
 
 Metadata:

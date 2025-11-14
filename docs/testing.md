@@ -364,7 +364,7 @@ go test ./internal/integration/... -parallel 1 -v
 ```bash
 # Integration tests auto-generate certificates
 # For E2E tests, regenerate:
-./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
+./scripts/generate-certs.sh             # All platforms (use WSL on Windows)
 ```
 
 ### Flaky Tests

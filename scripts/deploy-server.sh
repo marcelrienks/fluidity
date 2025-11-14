@@ -356,12 +356,12 @@ auto_detect_parameters() {
 ensure_certificates() {
     if [[ ! -f "$CERTS_DIR/server.crt" ]] || [[ ! -f "$CERTS_DIR/server.key" ]] || [[ ! -f "$CERTS_DIR/ca.crt" ]]; then
         log_info "Certificates not found, generating..."
-        if bash "$SCRIPT_DIR/manage-certs.sh"; then
+        if bash "$SCRIPT_DIR/generate-certs.sh"; then
             log_success "Certificates generated"
         else
             log_error_start
             echo "Failed to generate certificates"
-            echo "Run manually: ./scripts/manage-certs.sh"
+            echo "Run manually: ./scripts/generate-certs.sh"
             log_error_end
             exit 1
         fi

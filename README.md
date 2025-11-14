@@ -40,7 +40,7 @@ For detailed setup, see the [Deployment Guide](docs/deployment.md).
 
 **Local development:**
 ```bash
-./scripts/manage-certs.sh              # Generate certificates
+./scripts/generate-certs.sh             # Generate certificates
 ./scripts/build-core.sh                # Build server and agent
 ./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
 ./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2

@@ -36,7 +36,7 @@ Before deploying, ensure you have:
 **All deployment options require certificates to be generated first.**
 
 ```bash
-./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
+./scripts/generate-certs.sh             # All platforms (use WSL on Windows)
 ```
 
 This creates certificates in `./certs/`:
@@ -56,8 +56,8 @@ Run server and agent binaries directly on your machine.
 
 **Setup:**
 ```bash
-./scripts/manage-certs.sh                # Generate certificates
-./scripts/build-core.sh                  # Build both server and agent
+./scripts/generate-certs.sh               # Generate certificates
+./scripts/build-core.sh                   # Build both server and agent
 ./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
 ./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 ```
@@ -75,8 +75,8 @@ Test containerized deployment locally before cloud deployment.
 
 **Setup:**
 ```bash
-./scripts/manage-certs.sh                # Generate certificates
-./scripts/build-core.sh --linux          # Build static Linux binaries
+./scripts/generate-certs.sh               # Generate certificates
+./scripts/build-core.sh --linux           # Build static Linux binaries
 docker build -f deployments/server/Dockerfile -t fluidity-server .
 docker build -f deployments/agent/Dockerfile -t fluidity-agent .
 ```
@@ -450,7 +450,7 @@ sudo apt-get install jq
 
 **"Certificates not found"**
 ```bash
-./scripts/manage-certs.sh
+./scripts/generate-certs.sh
 ```
 
 **"Required configuration missing: server_ip"**
@@ -580,7 +580,7 @@ Shows all CloudFormation outputs including Lambda endpoints.
 
 4. **Rotate certificates:** At least annually
    ```bash
-   ./scripts/manage-certs.sh
+   ./scripts/generate-certs.sh
    ./scripts/deploy-fluidity.sh deploy --force
    ```
 

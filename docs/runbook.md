@@ -118,7 +118,7 @@ aws logs tail /aws/lambda/fluidity-wake --since 10m
 
 ```bash
 # Generate new certificates
-./scripts/manage-certs.sh
+./scripts/generate-certs.sh
 
 # Build Linux binary and Docker image
 ./scripts/build-core.sh --server --linux

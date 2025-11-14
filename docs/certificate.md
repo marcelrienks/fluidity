@@ -4,12 +4,12 @@
 
 **Local development:**
 ```bash
-./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
+./scripts/generate-certs.sh             # All platforms (use WSL on Windows)
 ```
 
 **AWS deployment:**
 ```bash
-./scripts/manage-certs.sh --save-to-secrets
+./scripts/generate-certs.sh --save-to-secrets
 ```
 
 ## Script Options
@@ -75,17 +75,17 @@ secrets_manager_name: "fluidity/certificates"
 
 **Certificate rotation:**
 ```bash
-./scripts/manage-certs.sh --save-to-secrets
+./scripts/generate-certs.sh --save-to-secrets
 ```
 
 **Custom secret name:**
 ```bash
-./scripts/manage-certs.sh --save-to-secrets --secret-name "my-org/fluidity/certs"
+./scripts/generate-certs.sh --save-to-secrets --secret-name "my-org/fluidity/certs"
 ```
 
 **Custom directory:**
 ```bash
-./scripts/manage-certs.sh --certs-dir /opt/fluidity/certs
+./scripts/generate-certs.sh --certs-dir /opt/fluidity/certs
 ```
 
 **Verify certificates:**
