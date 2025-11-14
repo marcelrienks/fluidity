@@ -163,44 +163,11 @@ docker logs <container-id>
 
 ## Networking Modes
 
-### Bridge (Default)
+**Default (bridge):** Isolated network with port forwarding. Uses `host.docker.internal` for container-to-container communication (pre-configured in Docker configs).
 
-```powershell
-docker run -p 8443:8443 fluidity-server
-```
+**Custom network** (optional): `docker network create fluidity-net`, then use `--network fluidity-net`. Containers communicate by name (included in certificate SAN).
 
-Isolated network with port forwarding. Requires `host.docker.internal` for container-to-container communication.
-
-### Custom Bridge Network
-
-```powershell
-# Create network
-docker network create fluidity-net
-
-# Run server (named "fluidity-server")
-docker run --rm --name fluidity-server --network fluidity-net \
-  -v "$(pwd)/certs:/root/certs:ro" \
-  -v "$(pwd)/configs/server.yaml:/root/config/server.yaml:ro" \
-  -p 8443:8443 \
-  fluidity-server
-
-# Run agent (connects to "fluidity-server")
-docker run --rm --network fluidity-net \
-  -v "$(pwd)/certs:/root/certs:ro" \
-  -v "$(pwd)/configs/agent.yaml:/root/config/agent.yaml:ro" \
-  -p 8080:8080 \
-  fluidity-agent
-```
-
-Containers communicate by name with automatic DNS. Works because certificate includes `fluidity-server` in SAN.
-
-### Host Network (Linux only)
-
-```bash
-docker run --network host fluidity-server
-```
-
-Server uses host's network stack (no port mapping needed). Not available on Windows/macOS Docker Desktop.
+**Host network** (Linux only): `docker run --network host` uses host's network stack directly.
 
 ---
 

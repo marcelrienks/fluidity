@@ -54,56 +54,14 @@ Fluidity uses AWS CloudFormation for infrastructure management with automated de
 
 ## Quick Deploy
 
-### Prerequisites
+**Prerequisites:** See [Deployment Guide](deployment.md)
 
+**Single command (builds, pushes, deploys everything):**
 ```bash
-# Install tools
-./scripts/setup-prereq-<platform>.sh
-
-# Generate certificates
-./scripts/manage-certs.sh
+./scripts/deploy-fluidity.sh deploy
 ```
 
-### Step 1: Build and Push Server Image
-
-```bash
-# Create ECR repository
-aws ecr create-repository --repository-name fluidity-server
-
-# Build Linux binary
-./scripts/build-core.sh --linux
-
-# Build Docker image
-docker build -f deployments/server/Dockerfile -t fluidity-server .
-
-# Tag and push
-docker tag fluidity-server:latest <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest
-docker push <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest
-```
-
-### Step 2: Deploy Fargate Stack
-
-```bash
-cd scripts
-
-# Linux/macOS
-./deploy-fluidity.sh -e prod -a deploy
-
-# Windows PowerShell
-.\deploy-fluidity.ps1 -Environment prod -Action deploy
-```
-
-### Step 3: Deploy Lambda Stack (Optional)
-
-```bash
-cd scripts
-
-# Linux/macOS
-./deploy-fluidity.sh -e prod -a deploy-lambda
-
-# Windows PowerShell
-.\deploy-fluidity.ps1 -Environment prod -Action deploy-lambda
-```
+Automatically handles: ECR setup, image push, CloudFormation stacks (Fargate + Lambda), agent configuration
 
 ---
 
@@ -127,93 +85,36 @@ scripts/
 
 ## Configuration
 
-### Parameters File (`params.json`)
+Set via environment variables (auto-detected by default):
+```bash
+export AWS_REGION=us-east-1
+export VPC_ID=vpc-xxxxxxxx
+export PUBLIC_SUBNETS=subnet-1,subnet-2
+export ALLOWED_INGRESS_CIDR=YOUR_IP/32
 
-Replace all `<>` placeholders:
+./scripts/deploy-fluidity.sh deploy
+```
 
+Or use CloudFormation parameters file:
 ```json
 {
   "StackName": "fluidity",
-  "Environment": "prod",
-  "ContainerImage": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/fluidity-server:latest",
-  "ClusterName": "fluidity-prod",
-  "ServiceName": "fluidity-server-prod",
   "VpcId": "<VPC_ID>",
-  "PublicSubnets": "<SUBNET_ID_1>,<SUBNET_ID_2>",
+  "PublicSubnets": "<SUBNET_1>,<SUBNET_2>",
   "AllowedIngressCidr": "<YOUR_IP>/32"
 }
-```
-
-**Get required IDs:**
-
-```bash
-# VPC ID
-aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text
-
-# Subnet IDs
-aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID> --query 'Subnets[*].SubnetId' --output text
-
-# Your IP
-curl ifconfig.me
-```
-
-### Environment Variables
-
-**All parameters can be set via environment variables:**
-
-```bash
-export AWS_REGION=us-east-1
-export AWS_ACCOUNT_ID=123456789012
-export STACK_NAME=fluidity-prod
-export CLUSTER_NAME=fluidity-prod
-export SERVICE_NAME=fluidity-server-prod
-export CONTAINER_IMAGE=123456789012.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
-export VPC_ID=vpc-xxxxxxxx
-export PUBLIC_SUBNETS=subnet-xxxxxxxx,subnet-yyyyyyyy
-export ALLOWED_INGRESS_CIDR=203.0.113.0/32
-
-./deploy-fluidity.sh -e prod -a deploy
 ```
 
 ---
 
 ## Stack Management
 
-### Create Stack
-
-```bash
-./deploy-fluidity.sh -e prod -a deploy
-```
-
-### Update Stack
-
-```bash
-# Same command - script detects existing stack
-./deploy-fluidity.sh -e prod -a deploy
-```
-
-### View Stack Status
-
-```bash
-./deploy-fluidity.sh -e prod -a status
-```
-
-### View Stack Outputs
-
-```bash
-./deploy-fluidity.sh -e prod -a outputs
-```
-
-**Expected outputs:**
-- Fargate Server IP
-- API Gateway URLs (Wake/Kill endpoints)
-- Lambda Function ARNs
-
-### Delete Stack
-
-```bash
-./deploy-fluidity.sh -e prod -a delete --force
-```
+| Action | Command |
+|--------|---------|
+| Create/Update | `./scripts/deploy-fluidity.sh deploy` |
+| Check status | `./scripts/deploy-fluidity.sh status` |
+| View outputs | `./scripts/deploy-fluidity.sh outputs` |
+| Delete | `./scripts/deploy-fluidity.sh delete --force` |
 
 ---
 
@@ -309,47 +210,19 @@ aws cloudformation describe-stack-drift-detection-status \
 
 ## Common Operations
 
-### Start Server
-
 ```bash
-aws ecs update-service \
-  --cluster fluidity-prod \
-  --service fluidity-server-prod \
-  --desired-count 1
-```
+# Start server
+aws ecs update-service --cluster fluidity-prod --service fluidity-server-prod --desired-count 1
 
-### Stop Server
+# Stop server
+aws ecs update-service --cluster fluidity-prod --service fluidity-server-prod --desired-count 0
 
-```bash
-aws ecs update-service \
-  --cluster fluidity-prod \
-  --service fluidity-server-prod \
-  --desired-count 0
-```
-
-### Update Server Image
-
-```bash
-# Push new image to ECR
-docker push <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest
-
-# Force new deployment
-aws ecs update-service \
-  --cluster fluidity-prod \
-  --service fluidity-server-prod \
-  --force-new-deployment
-```
-
-### View Logs
-
-```bash
+# View logs
 aws logs tail /ecs/fluidity/server --follow
-```
 
-### Check Stack Events
-
-```bash
-./deploy-fluidity.sh -e prod -a status
+# Update image (push, then force deployment)
+docker push <ecr-uri>
+aws ecs update-service --cluster fluidity-prod --service fluidity-server-prod --force-new-deployment
 ```
 
 ---

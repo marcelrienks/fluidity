@@ -54,25 +54,9 @@ go test ./internal/integration/... -v -timeout 5m
 
 ## Unit Tests
 
-**Location:** `internal/shared/*/`  
-**Count:** 17 tests  
-**Coverage:** 100% for critical paths  
-**Execution:** < 1 second
+**Location:** `internal/shared/*/` | **Count:** 17 | **Coverage:** 100% critical paths | **Speed:** <1s
 
-### What They Test
-
-**Circuit Breaker:**
-- State transitions (Closed → Open → Half-Open → Closed)
-- Failure threshold detection
-- Automatic recovery
-- Concurrent request handling
-
-**Retry Mechanism:**
-- Successful operations
-- Transient failure retry
-- Maximum attempts limit
-- Exponential backoff timing
-- Context cancellation
+**Coverage:** Circuit breaker state transitions, failure detection, retry backoff, exponential delays, context cancellation
 
 ### Running Unit Tests
 
@@ -104,77 +88,24 @@ coverage: 100.0% of statements
 
 ## Integration Tests
 
-**Location:** `internal/integration/`  
-**Count:** 30+ tests  
-**Coverage:** Full component interaction  
-**Execution:** ~3-10 seconds (parallel)
+**Location:** `internal/integration/` | **Count:** 30+ | **Coverage:** Full component interaction | **Speed:** ~3-10s
 
-### Test Organization
+**Approach:** In-memory servers, real mTLS, mocked external calls, focus on component interactions
 
-```
-internal/integration/
-├── README.md                          # Test documentation
-├── testutil.go                        # Shared test utilities and helpers
-├── tunnel_test.go                     # Agent <-> Server tunnel integration
-├── http_proxy_test.go                 # HTTP proxy functionality
-├── connect_test.go                    # HTTPS CONNECT tunneling
-├── websocket_test.go                  # WebSocket tunneling
-└── circuitbreaker_integration_test.go # Circuit breaker integration
-```
+**vs E2E Tests:**
+| Aspect | Integration | E2E |
+|--------|-------------|-----|
+| Scope | Components | Full system |
+| Speed | <1s each | 10-30s |
+| Dependencies | In-memory | Binaries/Docker |
+| Purpose | Dev feedback | Deploy validation |
+| When | Every commit | Before PR merge |
 
-### Integration Test Approach
-
-1. **Start in-memory servers**: No external processes needed
-2. **Use real TLS certificates**: Tests with actual mTLS
-3. **Mock external HTTP calls**: Fast and reliable
-4. **Test component interactions**: Focus on integration points
-5. **Clean up resources**: Proper teardown in defer statements
-
-### Key Differences from E2E Tests
-
-| Aspect | Integration Tests | E2E Tests (scripts) |
-|--------|------------------|---------------------|
-| **Scope** | Component interactions | Full system deployment |
-| **Speed** | Fast (< 1s per test) | Slow (10-30s) |
-| **Dependencies** | In-memory only | Requires binaries/Docker |
-| **Network** | Mocked/local only | Real external services |
-| **Purpose** | Development feedback | Deployment validation |
-| **When to run** | Every commit | Before deploy/PR merge |
-
-### What They Test
-
-**Tunnel Tests:**
-- Connection establishment/disconnection
-- Automatic reconnection after failure
-- HTTP request forwarding
-- Request timeout handling
-- Concurrent requests (10 simultaneous)
-- Multiple HTTP methods (GET, POST, PUT, DELETE, PATCH)
-- Large payload transfer (1MB)
-- Disconnect during active request
-
-**Proxy Tests:**
-- HTTP proxy functionality
-- HTTPS CONNECT tunneling
-- Invalid target error handling
-- Concurrent client connections (10 simultaneous)
-- Large response handling (1MB)
-- Custom header forwarding
-
-**Circuit Breaker Integration:**
-- Circuit trips after consecutive failures
-- Automatic recovery after timeout
-- Protection from cascading failures
-- Metrics collection and tracking
-- Complete state transition verification
-
-**WebSocket Tests:**
-- WebSocket connection through tunnel
-- Multiple message exchange (text/binary)
-- Ping/pong keepalive
-- Concurrent connections (5 simultaneous)
-- Large message handling (100KB)
-- Proper connection cleanup
+**Test Coverage:**
+- Tunnel: Connection lifecycle, auto-reconnect, request forwarding, timeouts, concurrent requests (10+), large payloads (1MB)
+- Proxy: HTTP/HTTPS CONNECT, error handling, concurrent clients (10+), large responses (1MB), custom headers
+- Circuit Breaker: State transitions, failure recovery, cascade protection, metrics tracking
+- WebSocket: Connection through tunnel, message exchange, keepalive, concurrent (5+), large messages (100KB)
 
 ### Running Integration Tests
 
@@ -203,22 +134,9 @@ PASS
 
 ## End-to-End (E2E) Tests
 
-**Location:** `scripts/test-*.sh`  
-**Count:** 6 scenarios (3 protocols × 2 environments)  
-**Coverage:** Full system validation  
-**Execution:** 30-120 seconds
+**Location:** `scripts/test-*.sh` | **Count:** 6 scenarios | **Coverage:** Full system | **Speed:** 30-120s
 
-### Test Scenarios
-
-**Local Environment:**
-- HTTP tunneling
-- HTTPS CONNECT tunneling
-- WebSocket tunneling
-
-**Docker Environment:**
-- HTTP tunneling
-- HTTPS CONNECT tunneling
-- WebSocket tunneling
+**Scenarios:** 3 protocols (HTTP/HTTPS/WebSocket) × 2 environments (Local/Docker)
 
 ### Running E2E Tests
 

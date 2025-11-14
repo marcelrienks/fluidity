@@ -37,97 +37,17 @@ Three Lambda functions manage Fluidity server lifecycle using **Lambda Function 
 ## Functions
 
 ### Wake Lambda
-
-**Purpose:** Start Fargate server (scale to 1)
-
-**Trigger:** 
-- API call via API Gateway
-- Manual agent startup
-
-**Execution:**
-```bash
-curl -X POST https://api-gateway-url/wake \
-  -H "Authorization: Bearer <api-key>" \
-  -d '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}'
-```
-
-**Response:**
-```json
-{
-  "action": "wake",
-  "desiredCount": 1,
-  "runningCount": 0,
-  "message": "Server starting, will be available in 20-30 seconds"
-}
-```
-
-**Code:** `internal/lambdas/wake/wake.go`
+**Purpose:** Start Fargate server (scale to 1) | **Trigger:** API call or manual agent startup | **Response:** `{"action": "wake", "desiredCount": 1}`
 
 ---
 
 ### Sleep Lambda
-
-**Purpose:** Auto-scale down when idle (scale to 0)
-
-**Trigger:** EventBridge rule (every 5 minutes)
-
-**Logic:**
-1. Fetch server metrics from CloudWatch
-2. Check last activity timestamp
-3. If idle > threshold (default 15 min), scale to 0
-4. Log action
-
-**Configuration:**
-
-```yaml
-# configs/server.yaml
-emit_metrics: true
-metrics_interval: "60s"
-```
-
-**CloudWatch Metrics Used:**
-- `Fluidity/ActiveConnections`
-- `Fluidity/LastActivityEpochSeconds`
-
-**Response:**
-```json
-{
-  "action": "sleep",
-  "desiredCount": 0,
-  "reason": "Idle for 15+ minutes",
-  "savedAt": "2024-01-15T10:30:00Z"
-}
-```
-
-**Code:** `internal/lambdas/sleep/sleep.go`
+**Purpose:** Auto-scale down when idle (scale to 0) | **Trigger:** EventBridge every 5 min | **Logic:** Check CloudWatch metrics, scale to 0 if idle > 15 min | **Response:** `{"action": "sleep", "desiredCount": 0}`
 
 ---
 
 ### Kill Lambda
-
-**Purpose:** Immediate server shutdown (emergency/scheduled)
-
-**Trigger:**
-- API call (emergency)
-- EventBridge rule (nightly at 11 PM UTC)
-
-**Execution (API):**
-```bash
-curl -X POST https://api-gateway-url/kill \
-  -H "Authorization: Bearer <api-key>" \
-  -d '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}'
-```
-
-**Response:**
-```json
-{
-  "action": "kill",
-  "desiredCount": 0,
-  "killedAt": "2024-01-15T23:00:00Z"
-}
-```
-
-**Code:** `internal/lambdas/kill/kill.go`
+**Purpose:** Immediate server shutdown | **Trigger:** API call or EventBridge (nightly 11 PM UTC) | **Response:** `{"action": "kill", "desiredCount": 0}`
 
 ---
 
@@ -196,103 +116,32 @@ cat response.json
 
 ## API Usage
 
-### Wake Endpoint
-
-**Request:**
 ```bash
-curl -X POST https://<api-gateway-url>/wake \
-  -H "Content-Type: application/json" \
-  -d '{
-    "clusterName": "fluidity-prod",
-    "serviceName": "fluidity-server-prod"
-  }'
-```
+# Wake
+curl -X POST https://<api-url>/wake -d '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}'
 
-**Response:**
-```json
-{
-  "action": "wake",
-  "desiredCount": 1,
-  "runningCount": 0,
-  "message": "Server starting..."
-}
-```
+# Kill
+curl -X POST https://<api-url>/kill -d '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}'
 
-### Kill Endpoint
-
-**Request:**
-```bash
-curl -X POST https://<api-gateway-url>/kill \
-  -H "Content-Type: application/json" \
-  -d '{
-    "clusterName": "fluidity-prod",
-    "serviceName": "fluidity-server-prod"
-  }'
-```
-
-**Response:**
-```json
-{
-  "action": "kill",
-  "desiredCount": 0,
-  "killedAt": "2024-01-15T23:00:00Z"
-}
-```
-
-### Status Endpoint
-
-**Request:**
-```bash
-curl -X GET https://<api-gateway-url>/status \
-  -H "Content-Type: application/json"
-```
-
-**Response:**
-```json
-{
-  "clusterName": "fluidity-prod",
-  "serviceName": "fluidity-server-prod",
-  "desiredCount": 1,
-  "runningCount": 1,
-  "deployments": 1,
-  "events": [
-    {
-      "id": "1",
-      "createdAt": "2024-01-15T10:30:00Z",
-      "message": "service was unable to place a Fargate task"
-    }
-  ]
-}
+# Status
+curl -X GET https://<api-url>/status
 ```
 
 ---
 
 ## Configuration
 
-### Environment Variables
-
-Set in Lambda environment:
-
-```bash
+**Environment Variables:**
+```
 ECS_CLUSTER_NAME=fluidity-prod
 ECS_SERVICE_NAME=fluidity-server-prod
 IDLE_THRESHOLD_MINUTES=15
 SLEEP_CHECK_INTERVAL_MINUTES=5
 ```
 
-### EventBridge Rules
-
-**Sleep Rule:**
-```yaml
-Schedule: rate(5 minutes)
-Target: Sleep Lambda
-```
-
-**Kill Rule:**
-```yaml
-Schedule: cron(0 23 * * ? *)    # 11 PM UTC daily
-Target: Kill Lambda
-```
+**EventBridge Rules:**
+- Sleep: `rate(5 minutes)` → Sleep Lambda
+- Kill: `cron(0 23 * * ? *)` (11 PM UTC) → Kill Lambda
 
 ---
 

@@ -106,24 +106,8 @@ Private CA (Self-signed)
 - Certificate validation against private CA
 - No InsecureSkipVerify
 
-**Agent TLS Config**:
-```go
-&tls.Config{
-    Certificates: []tls.Certificate{clientCert},
-    RootCAs:      caCertPool,
-    MinVersion:   tls.VersionTLS13,
-}
-```
-
-**Server TLS Config**:
-```go
-&tls.Config{
-    Certificates: []tls.Certificate{serverCert},
-    ClientAuth:   tls.RequireAndVerifyClientCert,
-    ClientCAs:    caCertPool,
-    MinVersion:   tls.VersionTLS13,
-}
-```
+**Agent TLS:** Client cert, RootCAs (CA cert pool), TLS 1.3 minimum  
+**Server TLS:** Server cert, RequireAndVerifyClientCert, CA cert pool, TLS 1.3 minimum
 
 ---
 
@@ -190,59 +174,25 @@ fluidity/
 - Retries connection for configured duration (default 90s)
 - Calls Kill Lambda on graceful shutdown
 
-### Configuration
-
+**Agent Configuration** (`agent.yaml`):
 ```yaml
-# agent.yaml
 server_ip: "3.24.56.78"
 server_port: 8443
 local_proxy_port: 8080
 cert_file: "./certs/client.crt"
 key_file: "./certs/client.key"
 ca_cert_file: "./certs/ca.crt"
-log_level: "info"
 ```
 
----
-
-## Server Architecture
-
-### Core Responsibilities
-
-1. **mTLS Server**: Accept authenticated agent connections
-2. **HTTP Client**: Make requests to target websites
-3. **Response Relay**: Return website responses through tunnel
-4. **Metrics Emission**: Publish CloudWatch metrics (when enabled)
-
-### Key Components
-
-**Tunnel Server** (`internal/core/server/server.go`):
-- Accepts mTLS connections on port 8443
-- Validates client certificates
-- Handles concurrent requests via goroutines
-
-**HTTP Client**:
-- Connection pooling for target requests
-- Circuit breaker for external failures
-- Retry logic with exponential backoff
-
-**Metrics Emitter** (planned):
-- Tracks active connections (atomic counter)
-- Records last activity timestamp
-- Emits CloudWatch metrics every 60s
-
-### Configuration
-
+**Server Configuration** (`server.yaml`):
 ```yaml
-# server.yaml
 listen_addr: "0.0.0.0"
 listen_port: 8443
 cert_file: "/root/certs/server.crt"
 key_file: "/root/certs/server.key"
 ca_cert_file: "/root/certs/ca.crt"
-log_level: "info"
 max_connections: 100
-emit_metrics: true          # For Lambda control plane
+emit_metrics: true
 metrics_interval: "60s"
 ```
 
