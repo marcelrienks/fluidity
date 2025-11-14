@@ -105,18 +105,9 @@ aws logs tail /aws/lambda/fluidity-wake --since 10m
 - ECS service name mismatch
 - API Gateway authentication
 
-### High Costs
+### Resource Optimization
 
-**Check usage:**
-```bash
-aws ce get-cost-and-usage \
-  --time-period Start=2025-10-01,End=2025-10-31 \
-  --granularity DAILY \
-  --metrics UnblendedCost \
-  --filter file://filter.json
-```
-
-**Optimize:**
+**Best practices:**
 - Ensure Sleep Lambda is running
 - Set `desiredCount=0` when not in use
 - Adjust idle threshold
@@ -160,7 +151,6 @@ cd scripts
 **Set up CloudWatch Alarms:**
 - Lambda errors > 5 in 5 minutes
 - ECS service unhealthy
-- High cost anomaly
 
 ## Backup
 

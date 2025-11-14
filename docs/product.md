@@ -41,13 +41,11 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
    - Cross-platform (Windows/macOS/Linux)
    - Docker containers (~44MB)
    - AWS Fargate deployment
-   - Pay-per-use model
 
 6. **Lifecycle Management** (Phase 2)
    - Auto-start server on agent startup
    - Auto-scale down when idle
    - Scheduled shutdown
-   - Cost optimization
 
 ### Non-Functional
 
@@ -62,10 +60,7 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
    - Automated testing scripts
    - Clear documentation
 
-3. **Cost**
-   - < $5/month for regular use
-   - < $10/month for 24/7 operation
-   - Minimal AWS charges
+
 
 ## Success Metrics
 
@@ -73,7 +68,6 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
 - <500ms average latency overhead
 - 99%+ uptime for cloud deployment
 - <10 minutes setup time
-- Cost < $5/month for typical use
 
 ## Out of Scope
 

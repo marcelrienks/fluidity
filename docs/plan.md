@@ -21,7 +21,7 @@ Development roadmap by phase.
 
 ## Phase 2: Lambda Control Plane 🚧 IN PROGRESS
 
-**Goal:** Automated lifecycle management with cost optimization
+**Goal:** Automated lifecycle management
 
 **Completed:**
 - [x] Lambda functions (Wake/Sleep/Kill)
@@ -29,13 +29,10 @@ Development roadmap by phase.
 - [x] Deployment automation scripts
 - [x] CloudWatch metrics and dashboards
 - [x] EventBridge schedulers
+- [x] Convert Lambda infrastructure from API Gateway to Function URLs
 
 **In Progress:**
-- [ ] Convert Lambda infrastructure from API Gateway to Function URLs
 - [ ] Create full deployment script (AWS deploy + agent compilation with Lambda endpoints)
-- [ ] Agent lifecycle integration (Wake/Kill API calls)
-- [ ] Server metrics emission
-- [ ] End-to-end lifecycle testing
 
 ## Phase 3: Production Hardening 📋 PLANNED
 
@@ -61,7 +58,8 @@ Development roadmap by phase.
 | Docker | ✅ Complete | Single-stage builds |
 | Testing | ✅ Complete | 75+ tests |
 | Lambda functions | ✅ Complete | Wake/Sleep/Kill implemented |
-| CloudFormation | ✅ Complete | Infrastructure as Code |
+| CloudFormation | ✅ Complete | Infrastructure as Code, Lambda Function URLs |
+| Lambda Function URLs | ✅ Complete | Migrated from API Gateway |
 | Agent lifecycle | 🚧 In Progress | Wake/Kill integration |
 | Server metrics | 🚧 In Progress | CloudWatch emission |
 | CI/CD | 📋 Planned | GitHub Actions |

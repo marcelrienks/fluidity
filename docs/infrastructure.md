@@ -1,607 +1,436 @@
 # Infrastructure as Code
 
-Complete guide to deploying and managing Fluidity using AWS CloudFormation.
-
-**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
+Fluidity uses AWS CloudFormation for infrastructure management with automated deployment scripts, environment separation (dev/prod), stack protection policies, and drift detection.
 
 ---
 
 ## Overview
 
-
-
-**Two CloudFormation stacks:**Fluidity uses AWS CloudFormation for infrastructure management with automated deployment scripts, environment separation (dev/prod), stack protection policies, and drift detection.
-
-- **Fargate Stack**: ECS cluster, service, task definition
-
-- **Lambda Stack**: Control plane (Wake/Sleep/Kill), API Gateway, EventBridge**Two main stacks:**
+**Two main stacks:**
 
 - **Fargate Stack**: ECS cluster, service, and task definition
+- **Lambda Stack**: Control plane (Wake/Sleep/Kill), API Gateway, EventBridge
 
-## Quick Start
+**Architecture:**
 
-### 1. Build and Push Docker Image
+```
+┌──────────────────────────────────────────────────────────┐
+│         CloudFormation Stack: Fargate                    │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │ ECS Cluster "fluidity"                             │  │
+│  │ ├─ ECS Service "fluidity-server"                   │  │
+│  │ │  └─ Fargate Task (0.25 vCPU, 512 MB)             │  │
+│  │ │     └─ Container: fluidity-server (ECR image)    │  │
+│  │ └─ CloudWatch Logs (/ecs/fluidity/server)          │  │
+│  │                                                     │  │
+│  │ Security Group (port 8443)                          │  │
+│  │ IAM Roles (Execution, Task)                         │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│      CloudFormation Stack: Lambda Control Plane              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ API Gateway (HTTPS endpoints)                          │  │
+│  │ ├─ POST /wake   → Wake Lambda                         │  │
+│  │ ├─ POST /kill   → Kill Lambda                         │  │
+│  │ └─ GET /status  → Check status                        │  │
+│  │                                                       │  │
+│  │ Lambda Functions                                      │  │
+│  │ ├─ Wake (on API call)                                │  │
+│  │ ├─ Sleep (EventBridge every 5 min)                   │  │
+│  │ └─ Kill (API call + EventBridge nightly)             │  │
+│  │                                                       │  │
+│  │ EventBridge Rules                                     │  │
+│  │ ├─ Sleep: rate(5 minutes)                            │  │
+│  │ └─ Kill: cron(0 23 * * ? *)                          │  │
+│  │                                                       │  │
+│  │ S3 Bucket (Lambda artifacts)                          │  │
+│  └───────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Quick Deploy
+
+### Prerequisites
 
 ```bash
+# Install tools
+./scripts/setup-prereq-<platform>.sh
+
+# Generate certificates
+./scripts/manage-certs.sh
+```
+
+### Step 1: Build and Push Server Image
+
+```bash
+# Create ECR repository
+aws ecr create-repository --repository-name fluidity-server
+
 # Build Linux binary
-./scripts/build-core.sh --server --linux
+./scripts/build-core.sh --linux
 
 # Build Docker image
 docker build -f deployments/server/Dockerfile -t fluidity-server .
 
-# Tag and push to ECR
-docker tag fluidity-server:latest YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/fluidity-server:latest
-aws ecr get-login-password --region YOUR_REGION | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com
-docker push YOUR_ACCOUNT_ID.dkr.ecr.YOUR_REGION.amazonaws.com/fluidity-server:latest
+# Tag and push
+docker tag fluidity-server:latest <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest
 ```
 
-### 2. Configure Parameters
-
-- Set `VpcId` and `PublicSubnets`
-
-- Set `AllowedIngressCidr` to your IP (`x.x.x.x/32`)Edit `deployments/cloudformation/params.json`:
-
-- Update `ContainerImage` with ECR URI- Replace `YOUR_ACCOUNT_ID`, `YOUR_REGION`
-
-- Set `VpcId` and `PublicSubnets`
-
-### 3. Deploy- Set `AllowedIngressCidr` to your public IP (`x.x.x.x/32`)
-
-- Update `ContainerImage` with your ECR URI
+### Step 2: Deploy Fargate Stack
 
 ```bash
+cd scripts
 
-cd scripts### 3. Deploy Infrastructure
+# Linux/macOS
+./deploy-fluidity.sh -e prod -a deploy
 
-./deploy-fluidity.sh -e prod -a deploy              # Linux/macOS
-
-.\deploy-fluidity.ps1 -Environment prod -Action deploy  # Windows```powershell
-
-```cd scripts
-
-./deploy-fluidity.ps1 -Environment prod -Action deploy
-
-## Manage```
-
-
-
-**Start server:**Or with Bash:
-
-```bash```bash
-
-aws ecs update-service --cluster fluidity-prod --service fluidity-server-prod --desired-count 1cd scripts
-
-```./deploy-fluidity.sh -e prod -a deploy
-
+# Windows PowerShell
+.\deploy-fluidity.ps1 -Environment prod -Action deploy
 ```
 
-**Stop server:**
+### Step 3: Deploy Lambda Stack (Optional)
 
-```bash## File Structure
+```bash
+cd scripts
 
-aws ecs update-service --cluster fluidity-prod --service fluidity-server-prod --desired-count 0
+# Linux/macOS
+./deploy-fluidity.sh -e prod -a deploy-lambda
 
-``````
+# Windows PowerShell
+.\deploy-fluidity.ps1 -Environment prod -Action deploy-lambda
+```
 
+---
+
+## File Structure
+
+```
 deployments/cloudformation/
-
-**Get public IP:**├── fargate.yaml              # ECS Fargate cluster and service
-
-```bash├── lambda.yaml               # Lambda control plane infrastructure
-
-# Get task ARN, then ENI, then IP (see Fargate Guide)├── params-dev.json           # Development parameters
-
-```├── params-prod.json          # Production parameters
-
+├── fargate.yaml              # ECS Fargate cluster and service
+├── lambda.yaml               # Lambda control plane infrastructure
+├── params.json               # Parameters (replace <> values)
 ├── stack-policy.json         # Stack deletion protection
+├── stack-policy-fargate.json # Fargate-specific protections
+└── stack-policy-lambda.json  # Lambda-specific protections
 
-**View status:**└── README.md
-
-```bash
-
-cd scriptsscripts/
-
-./deploy-fluidity.sh -e prod -a status├── deploy-fluidity.ps1       # PowerShell deployment script
-
-```└── deploy-fluidity.sh        # Bash deployment script
-
+scripts/
+├── deploy-fluidity.sh        # Bash deployment script
+└── deploy-fluidity.ps1       # PowerShell deployment script
 ```
 
-**View outputs:**
+---
 
-```bash## Configuration
+## Configuration
 
+### Parameters File (`params.json`)
+
+Replace all `<>` placeholders:
+
+```json
+{
+  "StackName": "fluidity",
+  "Environment": "prod",
+  "ContainerImage": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/fluidity-server:latest",
+  "ClusterName": "fluidity-prod",
+  "ServiceName": "fluidity-server-prod",
+  "VpcId": "<VPC_ID>",
+  "PublicSubnets": "<SUBNET_ID_1>,<SUBNET_ID_2>",
+  "AllowedIngressCidr": "<YOUR_IP>/32"
+}
+```
+
+**Get required IDs:**
+
+```bash
+# VPC ID
+aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text
+
+# Subnet IDs
+aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID> --query 'Subnets[*].SubnetId' --output text
+
+# Your IP
+curl ifconfig.me
+```
+
+### Environment Variables
+
+**All parameters can be set via environment variables:**
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_ACCOUNT_ID=123456789012
+export STACK_NAME=fluidity-prod
+export CLUSTER_NAME=fluidity-prod
+export SERVICE_NAME=fluidity-server-prod
+export CONTAINER_IMAGE=123456789012.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
+export VPC_ID=vpc-xxxxxxxx
+export PUBLIC_SUBNETS=subnet-xxxxxxxx,subnet-yyyyyyyy
+export ALLOWED_INGRESS_CIDR=203.0.113.0/32
+
+./deploy-fluidity.sh -e prod -a deploy
+```
+
+---
+
+## Stack Management
+
+### Create Stack
+
+```bash
+./deploy-fluidity.sh -e prod -a deploy
+```
+
+### Update Stack
+
+```bash
+# Same command - script detects existing stack
+./deploy-fluidity.sh -e prod -a deploy
+```
+
+### View Stack Status
+
+```bash
+./deploy-fluidity.sh -e prod -a status
+```
+
+### View Stack Outputs
+
+```bash
 ./deploy-fluidity.sh -e prod -a outputs
-
-```### Parameters Reference
-
-
-
-**Delete:**| Parameter | Purpose | Dev Value | Prod Value |
-
-```bash|-----------|---------|-----------|-----------|
-
-./deploy-fluidity.sh -e prod -a delete| `ClusterName` | ECS cluster name | `fluidity-dev` | `fluidity-prod` |
-
-```| `ServiceName` | ECS service name | `fluidity-server-dev` | `fluidity-server-prod` |
-
-| `ContainerImage` | ECR image URI | Required | Required |
-
-## Monitoring| `VpcId` | VPC for deployment | Required | Required |
-
-| `PublicSubnets` | Subnets for tasks | Required | Required |
-
-**CloudWatch Logs:**| `AllowedIngressCidr` | IP whitelist | Required | Required |
-
-```bash| `Cpu` | Task CPU | 256 | 256 |
-
-aws logs tail /ecs/fluidity/server --follow| `Memory` | Task memory (MB) | 512 | 512 |
-
-aws logs tail /aws/lambda/fluidity-wake --follow| `DesiredCount` | Running tasks | 0 | 0 |
-
-```| `LogRetentionDays` | Log retention | 7 | 30 |
-
-| `IdleThresholdMinutes` | Idle timeout | 5 | 15 |
-
-**CloudWatch Metrics:**| `SleepCheckIntervalMinutes` | Check frequency | 2 | 5 |
-
-- `Fluidity/ActiveConnections`
-
-- `Fluidity/LastActivityEpochSeconds`**Environment Differences:**
-
-- **Dev**: Optimized for testing (faster iterations, shorter timeouts)
-
-**CloudWatch Dashboard:** Auto-created with Lambda metrics- **Prod**: Conservative settings (longer timeouts, more logs)
-
-
-
-## Drift Detection## Deployment Operations
-
-
-
-Check for manual changes:### Deploy Infrastructure
-
-```bash
-
-./deploy-fluidity.sh -e prod -a status```powershell
-
-```./deploy-fluidity.ps1 -Environment prod -Action deploy
-
 ```
 
-Fix drift by redeploying.
-
-Creates or updates both stacks and applies protection policies.
-
-## Cost Estimation
-
-### Check Status
-
-| Scenario | Fargate | Lambda | Total/Month |
-
-|----------|---------|--------|-------------|```powershell
-
-| 2h/day | $0.27 | $0.05 | **$0.32** |./deploy-fluidity.ps1 -Environment prod -Action status
-
-| 8h/day | $1.08 | $0.05 | **$1.13** |```
-
-| 24/7 | $8.64 | $0.05 | **$8.69** |
-
-Displays stack status and performs drift detection to identify manual changes.
-
-## Related Documentation
-
-### View Outputs
-
-- [Deployment Guide](deployment.md) - All options
-
-- [Fargate Guide](fargate.md) - ECS details  ```powershell
-
-- [Lambda Functions](lambda.md) - Control plane./deploy-fluidity.ps1 -Environment prod -Action outputs
-
-```
-
-Shows all stack outputs including API endpoints and ARNs.
+**Expected outputs:**
+- Fargate Server IP
+- API Gateway URLs (Wake/Kill endpoints)
+- Lambda Function ARNs
 
 ### Delete Stack
 
-```powershell
-./deploy-fluidity.ps1 -Environment prod -Action delete -Force
+```bash
+./deploy-fluidity.sh -e prod -a delete --force
 ```
+
+---
+
+## CloudFormation Templates
+
+### Fargate Template (`fargate.yaml`)
+
+**Parameters:**
+- `ContainerImage` - ECR image URI
+- `ClusterName` - ECS cluster name
+- `ServiceName` - ECS service name
+- `VpcId` - VPC for deployment
+- `PublicSubnets` - Comma-separated subnet IDs
+- `AllowedIngressCidr` - CIDR for port 8443 access
+
+**Resources:**
+- ECS Cluster
+- ECS Service
+- Fargate Task Definition
+- CloudWatch Log Group
+- Security Group
+- IAM Execution Role
+- IAM Task Role
+
+**Outputs:**
+- Server Public IP
+- Task ARN
+- Service ARN
+
+### Lambda Template (`lambda.yaml`)
+
+**Parameters:**
+- `LambdaS3Bucket` - S3 bucket with Lambda artifacts
+- `LambdaS3KeyPrefix` - S3 prefix for artifacts
+- `ECSClusterName` - Target ECS cluster
+- `ECSServiceName` - Target ECS service
+- `IdleThresholdMinutes` - Idle timeout (default: 15)
+- `SleepCheckInterval` - Sleep check frequency (default: 5 min)
+
+**Resources:**
+- Lambda Execution Role
+- Wake Lambda Function
+- Sleep Lambda Function
+- Kill Lambda Function
+- API Gateway REST API
+- API Gateway Deployment
+- EventBridge Rules
+- S3 Bucket (artifacts)
+
+**Outputs:**
+- Wake API Endpoint
+- Kill API Endpoint
+- Status API Endpoint
+
+---
+
+## Stack Policies
+
+Stack policies prevent accidental modifications or deletions:
+
+**Fargate policy** (`stack-policy-fargate.json`):
+- Allows all updates
+- Prevents task definition updates (use blue-green deployment instead)
+
+**Lambda policy** (`stack-policy-lambda.json`):
+- Allows Lambda function code updates
+- Prevents role modifications
+
+**Apply policies:**
+
+```bash
+aws cloudformation set-stack-policy \
+  --stack-name fluidity-fargate \
+  --stack-policy-body file://stack-policy-fargate.json
+```
+
+---
+
+## Drift Detection
+
+Detect manual changes to stack resources:
+
+```bash
+# Detect drift
+aws cloudformation detect-stack-drift --stack-name fluidity-fargate
+
+# Check status
+aws cloudformation describe-stack-drift-detection-status \
+  --stack-drift-detection-id <drift-id>
+```
+
+---
+
+## Common Operations
 
 ### Start Server
 
-```powershell
-aws ecs update-service `
-  --cluster fluidity-prod `
-  --service fluidity-server-prod `
+```bash
+aws ecs update-service \
+  --cluster fluidity-prod \
+  --service fluidity-server-prod \
   --desired-count 1
 ```
 
 ### Stop Server
 
-```powershell
-aws ecs update-service `
-  --cluster fluidity-prod `
-  --service fluidity-server-prod `
+```bash
+aws ecs update-service \
+  --cluster fluidity-prod \
+  --service fluidity-server-prod \
   --desired-count 0
 ```
 
-Or use Lambda Sleep function (automatic on idle).
+### Update Server Image
 
-### Get Public IP
+```bash
+# Push new image to ECR
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest
 
-After starting the server:
-
-```powershell
-$taskArn = aws ecs list-tasks --cluster fluidity-prod --service-name fluidity-server-prod --query 'taskArns[0]' --output text
-$eniId = aws ecs describe-tasks --cluster fluidity-prod --tasks $taskArn --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text
-aws ec2 describe-network-interfaces --network-interface-ids $eniId --query 'NetworkInterfaces[0].Association.PublicIp' --output text
+# Force new deployment
+aws ecs update-service \
+  --cluster fluidity-prod \
+  --service fluidity-server-prod \
+  --force-new-deployment
 ```
 
-## Drift Detection
+### View Logs
 
-Detect manual changes made outside CloudFormation:
-
-```powershell
-./deploy-fluidity.ps1 -Environment prod -Action status
+```bash
+aws logs tail /ecs/fluidity/server --follow
 ```
 
-**Results:**
-- `IN_SYNC`: Stack matches template ✓
-- `DRIFTED`: Manual changes detected
-- `UNKNOWN`: Detection in progress
+### Check Stack Events
 
-Reconcile drift by redeploying:
-```powershell
-./deploy-fluidity.ps1 -Environment prod -Action deploy
+```bash
+./deploy-fluidity.sh -e prod -a status
 ```
 
-## Stack Protection
-
-Stack policies prevent accidental deletion of:
-- API Gateway (REST API and Stage)
-- Lambda functions (Wake, Sleep, Kill)
-- EventBridge rules
-- ECS Service and TaskDefinition
-- IAM roles
-
-Applied automatically during deployment. To manually apply:
-
-```powershell
-aws cloudformation set-stack-policy `
-  --stack-name fluidity-prod-fargate `
-  --stack-policy-body file://stack-policy.json
-```
+---
 
 ## Monitoring
 
-### CloudWatch Alarms
-
-Three CloudWatch alarms are automatically created:
-- **Wake Lambda Errors**: Alerts when Wake Lambda execution fails
-- **Sleep Lambda Errors**: Alerts when Sleep Lambda execution fails
-- **Kill Lambda Errors**: Alerts when Kill Lambda execution fails
-
-All alarms send notifications to an SNS topic configured during deployment.
-
-**Configure Email Notifications:**
+### CloudWatch Dashboards
 
 ```bash
-# Get SNS topic ARN from stack outputs
-TOPIC_ARN=$(aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs[?OutputKey==`AlarmNotificationTopicArn`].OutputValue' \
-  --output text)
-
-# Subscribe your email
-aws sns subscribe \
-  --topic-arn $TOPIC_ARN \
-  --protocol email \
-  --notification-endpoint your-email@example.com
+aws cloudwatch put-dashboard \
+  --dashboard-name fluidity-server \
+  --dashboard-body file://dashboard.json
 ```
 
-Confirm the subscription email from AWS SNS.
+### Alarms
 
-### CloudWatch Dashboard
+Set up alarms for:
+- Task failures
+- High CPU/memory
+- API errors
+- Lambda timeouts
 
-A dashboard is automatically created with:
-- Lambda metrics (invocations, errors, duration, throttles)
-- Fluidity server metrics (active connections, last activity)
-- API Gateway metrics (requests, 4xx/5xx errors)
-- Lambda error logs from the last hour
-
-**Access Dashboard:**
+**Example:**
 
 ```bash
-# Get dashboard URL from stack outputs
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs[?OutputKey==`DashboardURL`].OutputValue' \
-  --output text
-```
-
-Or access via AWS Console: CloudWatch → Dashboards → `fluidity-dashboard`
-
-### CloudWatch Logs
-
-```bash
-# Container logs
-aws logs tail /ecs/fluidity/server --follow
-
-# Lambda logs
-aws logs tail /aws/lambda/fluidity-wake --follow
-aws logs tail /aws/lambda/fluidity-sleep --follow
-aws logs tail /aws/lambda/fluidity-kill --follow
-
-# API Gateway logs
-aws logs tail /aws/apigateway/fluidity-api-execution --follow
-```
-
-### CloudWatch Metrics
-
-```bash
-# Server active connections
-aws cloudwatch get-metric-statistics \
-  --namespace Fluidity \
-  --metric-name ActiveConnections \
-  --dimensions Name=ServiceName,Value=fluidity-server \
-  --statistics Maximum,Average \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+aws cloudwatch put-metric-alarm \
+  --alarm-name fluidity-task-failures \
+  --alarm-description "Alert on Fluidity task failures" \
+  --metric-name RunningCount \
+  --namespace AWS/ECS \
+  --statistic Average \
   --period 300 \
-  --output table
-
-# Lambda invocations
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Invocations \
-  --dimensions Name=FunctionName,Value=fluidity-wake \
-  --statistics Sum \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
-  --period 300 \
-  --output table
+  --threshold 0 \
+  --comparison-operator LessThanThreshold \
+  --alarm-actions <sns-topic-arn>
 ```
+
+---
 
 ## Troubleshooting
 
 ### Stack Creation Failed
 
-Check stack events:
-```powershell
-aws cloudformation describe-stack-events `
-  --stack-name fluidity-prod-fargate `
-  --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`]' `
-  --output table
-```
-
-### Task Stuck in PENDING
-
-Check task status:
-```powershell
-aws ecs describe-tasks --cluster fluidity-prod `
-  --tasks $(aws ecs list-tasks --cluster fluidity-prod --service-name fluidity-server-prod --query 'taskArns[0]' --output text) `
-  --output json
-```
-
-**Common causes:**
-- Subnets not public or `AssignPublicIp` not enabled
-- Insufficient Fargate capacity
-- Security group blocking access
-
-### Lambda Invocation Failures
-
-Check logs:
 ```bash
-aws logs tail /aws/lambda/fluidity-prod-wake --follow --since 10m
+# Check events
+aws cloudformation describe-stack-events \
+  --stack-name fluidity-fargate \
+  --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`]'
+
+# View stack status
+./deploy-fluidity.sh -e prod -a status
 ```
 
-**Common causes:**
-- IAM permissions insufficient
-- ECS cluster/service name mismatch
-- Network connectivity issues
-
-### Stack in UPDATE_ROLLBACK_FAILED
-
-Recover:
-```powershell
-aws cloudformation continue-update-rollback --stack-name fluidity-prod-fargate
-```
-
-## Cost Analysis
-
-| Scenario | Fargate | Lambda | API Gateway | Total/Month |
-|----------|---------|--------|-------------|------------|
-| Dev (2h/day) | $0.27 | $0.05 | $0.10 | **$0.42** |
-| Regular (8h/day) | $1.08 | $0.05 | $0.10 | **$1.23** |
-| 24/7 | $8.64 | $0.05 | $0.10 | **$8.79** |
-
-**Cost Optimization:** Lambda Sleep function reduces costs by 70-94% through automatic idle shutdown.
-
-## Security
-
-### IAM Least-Privilege
-
-Each Lambda function has minimal permissions:
-- **Wake**: `ecs:DescribeServices`, `ecs:UpdateService`
-- **Sleep**: + `cloudwatch:GetMetricData`
-- **Kill**: `ecs:UpdateService` only
-
-### API Gateway Security
-
-- API key required for all endpoints
-- Rate limiting: 3 req/sec, 20 burst
-- Monthly quota: 300 requests
-- CloudWatch logging enabled
-
-### Network Security
-
-- Security group restricts port 8443
-- `AllowedIngressCidr` whitelist configurable
-- mTLS authentication for agent-server communication
-- TLS 1.3 encryption in transit
-
-## Best Practices
-
-1. **Environment Separation**: Use separate dev/prod stacks with different parameters
-2. **Parameters Management**: Store in version control; use `.gitignore` for sensitive values
-3. **Stack Policies**: Keep policies enabled to prevent accidents
-4. **Cost Optimization**: Set `DesiredCount=0` when not in use; rely on Lambda control plane for idle shutdown
-5. **Monitoring**: Enable CloudWatch Logs and set up alarms
-6. **Security**: Restrict `AllowedIngressCidr` to your IP; use Secrets Manager for sensitive data
-7. **CI/CD Integration**: Automate deployments via GitHub Actions or other CI/CD tools
-
-## CI/CD Integration Example
-
-GitHub Actions workflow:
-
-```yaml
-name: Deploy Fluidity
-
-on:
-  push:
-    branches: [main]
-    paths:
-      - 'deployments/cloudformation/**'
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-      - name: Deploy to prod
-        run: |
-          cd scripts
-          chmod +x deploy-fluidity.sh
-          ./deploy-fluidity.sh -e prod -a deploy -f
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│        CloudFormation Stack: Fargate            │
-│  ┌─────────────────────────────────────────┐   │
-│  │ ECS Cluster "fluidity"                  │   │
-│  │ ├─ ECS Service "fluidity-server"        │   │
-│  │ │  └─ Fargate Task (0.25 vCPU, 512 MB)  │   │
-│  │ └─ CloudWatch Logs                      │   │
-│  │                                         │   │
-│  │ Security Group (port 8443)              │   │
-│  │ IAM Roles (Execution, Task)             │   │
-│  └─────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────┐
-│       CloudFormation Stack: Lambda Control Plane         │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │ Lambda Functions                                   │  │
-│  │ ├─ Wake Lambda (check state, scale up)            │  │
-│  │ ├─ Sleep Lambda (query metrics, scale down)       │  │
-│  │ └─ Kill Lambda (immediate shutdown)               │  │
-│  │                                                    │  │
-│  │ API Gateway (/wake, /kill endpoints)              │  │
-│  │ ├─ Authentication (API key)                       │  │
-│  │ ├─ Rate limiting (3 req/s, 20 burst)              │  │
-│  │ └─ CloudWatch Logs                                │  │
-│  │                                                    │  │
-│  │ EventBridge Rules                                  │  │
-│  │ ├─ Sleep (every 5 minutes)                        │  │
-│  │ └─ Kill (daily 11 PM UTC)                         │  │
-│  │                                                    │  │
-│  │ IAM Roles (least-privilege)                       │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-```
-
-## Building and Pushing Docker Image to ECR
-
-### Prerequisites
-
-1. **AWS CLI** v2 installed and configured
-2. **Docker** installed and configured
-3. **AWS ECR** repository created
-
-### Quick Start
+### Task Won't Start
 
 ```bash
-# Create ECR repository
-aws ecr create-repository --repository-name fluidity-server --region us-east-1
+# Check logs
+aws logs tail /ecs/fluidity/server --follow
 
-# Get ECR login
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com
-
-# Build Linux binary and Docker image
-# IMPORTANT: Certificates must be in the certs/ directory before building
-./scripts/build-core.sh --server --linux
-docker build -f deployments/server/Dockerfile -t fluidity-server .
-
-# Tag for ECR
-docker tag fluidity-server:latest 123456789012.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
-
-# Push to ECR
-docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
+# Check task status
+aws ecs describe-tasks \
+  --cluster fluidity-prod \
+  --tasks $(aws ecs list-tasks --cluster fluidity-prod --query 'taskArns[0]' --output text)
 ```
 
-### Baking Certificates into Docker Image
+### Parameters Not Applied
 
-The Docker image must include TLS certificates at `/root/certs/`. The simplest approach:
+Ensure using correct parameter file and format:
+```bash
+# Via command line
+./deploy-fluidity.sh -e prod -a deploy
 
-1. Generate certificates locally:
-   ```bash
-   ./scripts/manage-certs.sh              # All platforms (use WSL on Windows)
-   ```
+# Or parameters file
+./deploy-fluidity.sh -e prod -a deploy --params-file params.json
+```
 
-2. Modify `deployments/server/Dockerfile` to copy certificates:
-   ```dockerfile
-   # Add after COPY build/fluidity-server .
-   COPY certs/ca.crt ./certs/
-   COPY certs/server.crt ./certs/
-   COPY certs/server.key ./certs/
-   ```
-
-3. Rebuild and push:
-   ```bash
-   ./scripts/build-core.sh --server --linux
-   docker build -f deployments/server/Dockerfile -t fluidity-server .
-   docker tag fluidity-server:latest <ECR_URI>
-   docker push <ECR_URI>
-   ```
-
-### Alternative: Using AWS Secrets Manager
-
-For production deployments, store certificates in AWS Secrets Manager:
-
-1. Store certificates:
-   ```bash
-   aws secretsmanager create-secret \
-     --name fluidity/server/ca-cert \
-     --secret-string file://certs/ca.crt
-   
-   aws secretsmanager create-secret \
-     --name fluidity/server/server-cert \
-     --secret-string file://certs/server.crt
-   
-   aws secretsmanager create-secret \
-     --name fluidity/server/server-key \
-     --secret-string file://certs/server.key
-   ```
-
-2. Modify CloudFormation task definition to inject secrets as environment variables
-3. Update application to read from environment or write to files on startup
+---
 
 ## Related Documentation
 
+- **[Fargate Guide](fargate.md)** - ECS Fargate details
+- **[Lambda Functions](lambda.md)** - Control plane guide
 - **[Deployment Guide](deployment.md)** - All deployment options
-- **[Architecture](architecture.md)** - System design
-- **[Fargate Guide](fargate.md)** - AWS ECS details
-- **[Lambda Guide](lambda.md)** - Control plane details
-- **[Certificate Management](certificate-management.md)** - Certificate generation
-- **[Project Plan](plan.md)** - Roadmap and progress
+- **[Docker Guide](docker.md)** - Container details

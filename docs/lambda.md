@@ -1,7 +1,6 @@
-````markdown
 # Lambda Control Plane
 
-Three Lambda functions manage Fluidity server lifecycle using **Lambda Function URLs** (no API Gateway).
+Three Lambda functions manage Fluidity server lifecycle using **Lambda Function URLs** (no API Gateway) for on-demand operation.
 
 **Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
 
@@ -10,361 +9,496 @@ Three Lambda functions manage Fluidity server lifecycle using **Lambda Function 
 ## Architecture
 
 ```
-Agent Startup → Wake Function URL → Wake Lambda → ECS desiredCount=1
-Agent Shutdown → Kill Function URL → Kill Lambda → ECS desiredCount=0
-EventBridge (5 min) → Sleep Lambda (direct) → Check metrics → Scale down if idle
-EventBridge (11 PM) → Kill Lambda (direct) → Shutdown
+┌─────────────────────────────────────────────────────────┐
+│            API Gateway (HTTP/HTTPS)                     │
+│  POST /wake    POST /kill    GET /status                │
+└────────────┬──────────────────┬──────────────┬──────────┘
+             │                  │              │
+       ┌─────▼──────┐      ┌────▼──────┐  ┌───▼──────┐
+       │Wake Lambda │      │Kill Lambda│  │Status API│
+       └─────┬──────┘      └────┬──────┘  └──────────┘
+             │                  │
+             └──────────┬───────┘
+                        │
+               ┌────────▼─────────┐
+               │   ECS Service    │
+               │ (DesiredCount=1) │
+               └──────────────────┘
+
+┌──────────────────────────────────────────────────┐
+│         EventBridge Rules (Scheduled)            │
+│  every 5 min  Sleep Lambda  Check metrics        │
+│  nightly 11PM Kill Lambda   Shutdown             │
+└──────────────────────────────────────────────────┘
 ```
+
+---
 
 ## Functions
 
 ### Wake Lambda
-**Trigger:** Agent startup (via Function URL POST)  
-**Action:** Sets ECS `desiredCount=1` if not already running  
-**Function URL:** `https://<function-url-id>.lambda-url.<region>.on.aws/`
 
-### Sleep Lambda  
-**Trigger:** EventBridge (every 5 minutes, direct) or Function URL  
-**Action:**  
-1. Query CloudWatch metrics for `LastActivityEpochSeconds`
-2. If idle > threshold (default 15 min), set `desiredCount=0`
+**Purpose:** Start Fargate server (scale to 1)
 
-**Function URL:** `https://<function-url-id>.lambda-url.<region>.on.aws/` (optional)
+**Trigger:** 
+- API call via API Gateway
+- Manual agent startup
+
+**Execution:**
+```bash
+curl -X POST https://api-gateway-url/wake \
+  -H "Authorization: Bearer <api-key>" \
+  -d '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}'
+```
+
+**Response:**
+```json
+{
+  "action": "wake",
+  "desiredCount": 1,
+  "runningCount": 0,
+  "message": "Server starting, will be available in 20-30 seconds"
+}
+```
+
+**Code:** `internal/lambdas/wake/wake.go`
+
+---
+
+### Sleep Lambda
+
+**Purpose:** Auto-scale down when idle (scale to 0)
+
+**Trigger:** EventBridge rule (every 5 minutes)
+
+**Logic:**
+1. Fetch server metrics from CloudWatch
+2. Check last activity timestamp
+3. If idle > threshold (default 15 min), scale to 0
+4. Log action
+
+**Configuration:**
+
+```yaml
+# configs/server.yaml
+emit_metrics: true
+metrics_interval: "60s"
+```
+
+**CloudWatch Metrics Used:**
+- `Fluidity/ActiveConnections`
+- `Fluidity/LastActivityEpochSeconds`
+
+**Response:**
+```json
+{
+  "action": "sleep",
+  "desiredCount": 0,
+  "reason": "Idle for 15+ minutes",
+  "savedAt": "2024-01-15T10:30:00Z"
+}
+```
+
+**Code:** `internal/lambdas/sleep/sleep.go`
+
+---
 
 ### Kill Lambda
-**Trigger:** Agent shutdown (via Function URL POST) OR EventBridge (daily 11 PM UTC)  
-**Action:** Immediately set `desiredCount=0`
 
-**Function URL:** `https://<function-url-id>.lambda-url.<region>.on.aws/`
+**Purpose:** Immediate server shutdown (emergency/scheduled)
+
+**Trigger:**
+- API call (emergency)
+- EventBridge rule (nightly at 11 PM UTC)
+
+**Execution (API):**
+```bash
+curl -X POST https://api-gateway-url/kill \
+  -H "Authorization: Bearer <api-key>" \
+  -d '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}'
+```
+
+**Response:**
+```json
+{
+  "action": "kill",
+  "desiredCount": 0,
+  "killedAt": "2024-01-15T23:00:00Z"
+}
+```
+
+**Code:** `internal/lambdas/kill/kill.go`
 
 ---
 
 ## Deployment
 
-```bash
-aws cloudformation deploy \
-  --template-file deployments/cloudformation/lambda.yaml \
-  --stack-name fluidity-lambda \
-  --parameter-overrides \
-    ECSClusterName=fluidity \
-    ECSServiceName=fluidity-server \
-    IdleThresholdMinutes=15 \
-    SleepCheckIntervalMinutes=5 \
-  --capabilities CAPABILITY_NAMED_IAM
-```
-
----
-
-## Getting Function URLs
-
-After deployment, retrieve the Function URLs from CloudFormation outputs:
+### 1. Build Lambda Functions
 
 ```bash
-# Get all outputs
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs' \
-  --output table
-
-# Get Wake Function URL specifically
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs[?OutputKey==`WakeAPIEndpoint`].OutputValue' \
-  --output text
-
-# Get Kill Function URL specifically
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs[?OutputKey==`KillAPIEndpoint`].OutputValue' \
-  --output text
+./scripts/build-lambdas.sh              # Linux/macOS
+.\scripts\build-lambdas.ps1             # Windows
 ```
 
----
-
-## Agent Configuration
-
-```yaml
-# configs/agent.yaml
-server_host: "<SERVER_PUBLIC_IP>"
-server_port: 8443
-wake_api_endpoint: "https://xxxxx.lambda-url.region.on.aws/"
-kill_api_endpoint: "https://xxxxx.lambda-url.region.on.aws/"
-connection_timeout: "90s"     # Time to wait for server after wake
-connection_retry_interval: "5s"
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_file: "./certs/ca.crt"
+**Output:**
+```
+build/lambdas/
+├── wake
+├── sleep
+└── kill
 ```
 
-**Key differences from API Gateway:**
-- No `api_key` needed
-- Simpler endpoint format (no `/prod` or `/wake` path)
-- Direct POST invokes Lambda function
-- HTTPS enforced by AWS
-
----
-
-## Server Configuration
-
-Enable metrics emission for Sleep Lambda idle detection:
-
-```yaml
-# configs/server.yaml (rebuild Docker image after changes)
-emit_metrics: true
-metrics_interval: "60s"
-```
-
----
-
-## Invoking Functions
-
-### Wake Lambda (Agent Startup)
+### 2. Deploy via CloudFormation
 
 ```bash
-WAKE_URL="https://xxxxx.lambda-url.region.on.aws/"
-curl -X POST $WAKE_URL \
-  -H "Content-Type: application/json" \
-  -d '{}'
+cd scripts
+
+# Linux/macOS
+./deploy-fluidity.sh -e prod -a deploy-lambda
+
+# Windows PowerShell
+.\deploy-fluidity.ps1 -Environment prod -Action deploy-lambda
 ```
 
-**Response Example:**
-```json
-{
-  "statusCode": 200,
-  "headers": {"Content-Type": "application/json"},
-  "body": "{\"status\":\"waking\",\"desiredCount\":1,\"runningCount\":0,\"estimatedStartTime\":\"2025-11-13T12:34:56Z\",\"message\":\"Service wake initiated...\"}"
-}
-```
+**Parameters:**
+- `ECSClusterName` - Target cluster (e.g., `fluidity-prod`)
+- `ECSServiceName` - Target service (e.g., `fluidity-server-prod`)
+- `IdleThresholdMinutes` - Idle timeout for sleep (default: 15)
+- `SleepCheckInterval` - Sleep check frequency (default: 5 min)
+- `LambdaS3Bucket` - S3 bucket with artifacts
+- `LambdaS3KeyPrefix` - S3 key prefix
 
-### Kill Lambda (Agent Shutdown)
+### 3. Test Functions
 
 ```bash
-KILL_URL="https://xxxxx.lambda-url.region.on.aws/"
-curl -X POST $KILL_URL \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-**Response Example:**
-```json
-{
-  "statusCode": 200,
-  "headers": {"Content-Type": "application/json"},
-  "body": "{\"status\":\"killed\",\"desiredCount\":0,\"message\":\"Service shutdown initiated...\"}"
-}
-```
-
-### Sleep Lambda (EventBridge)
-
-EventBridge invokes Sleep Lambda directly (no Function URL needed):
-
-```bash
-# Manual test via CloudWatch Events
+# Test Wake
 aws lambda invoke \
-  --function-name fluidity-lambda-sleep \
-  --payload '{}' \
+  --function-name fluidity-wake \
+  --payload '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}' \
   response.json
+cat response.json
 
+# Test Kill
+aws lambda invoke \
+  --function-name fluidity-kill \
+  --payload '{"clusterName":"fluidity-prod","serviceName":"fluidity-server-prod"}' \
+  response.json
+cat response.json
+
+# Test Sleep (no payload needed)
+aws lambda invoke \
+  --function-name fluidity-sleep \
+  response.json
 cat response.json
 ```
 
-**Or manually via Function URL:**
+---
+
+## API Usage
+
+### Wake Endpoint
+
+**Request:**
 ```bash
-SLEEP_URL="https://xxxxx.lambda-url.region.on.aws/"
-curl -X POST $SLEEP_URL \
+curl -X POST https://<api-gateway-url>/wake \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{
+    "clusterName": "fluidity-prod",
+    "serviceName": "fluidity-server-prod"
+  }'
 ```
 
----
+**Response:**
+```json
+{
+  "action": "wake",
+  "desiredCount": 1,
+  "runningCount": 0,
+  "message": "Server starting..."
+}
+```
 
-## EventBridge Rules
+### Kill Endpoint
 
-Automatically created by CloudFormation:
-
-- **Sleep**: `rate(5 minutes)` - Invokes Sleep Lambda every 5 minutes
-- **Kill**: `cron(0 23 * * ? *)` - Invokes Kill Lambda daily at 11 PM UTC
-
-These rules invoke Lambdas directly, not via Function URLs.
-
----
-
-## IAM Permissions
-
-Each Lambda has minimal, role-specific permissions:
-
-**Wake Lambda:**
-- `ecs:DescribeServices`
-- `ecs:UpdateService`
-
-**Sleep Lambda:**
-- `ecs:DescribeServices`
-- `ecs:UpdateService`
-- `cloudwatch:GetMetricData`
-
-**Kill Lambda:**
-- `ecs:UpdateService`
-
----
-
-## Testing
-
-**Test Wake Lambda:**
+**Request:**
 ```bash
-WAKE_URL="https://xxxxx.lambda-url.region.on.aws/"
-curl -X POST $WAKE_URL \
+curl -X POST https://<api-gateway-url>/kill \
   -H "Content-Type: application/json" \
-  -d '{}' | jq .
+  -d '{
+    "clusterName": "fluidity-prod",
+    "serviceName": "fluidity-server-prod"
+  }'
 ```
 
-**Test Kill Lambda:**
-```bash
-KILL_URL="https://xxxxx.lambda-url.region.on.aws/"
-curl -X POST $KILL_URL \
-  -H "Content-Type: application/json" \
-  -d '{}' | jq .
+**Response:**
+```json
+{
+  "action": "kill",
+  "desiredCount": 0,
+  "killedAt": "2024-01-15T23:00:00Z"
+}
 ```
 
-**Verify ECS service state:**
+### Status Endpoint
+
+**Request:**
 ```bash
-aws ecs describe-services \
-  --cluster fluidity \
-  --services fluidity-server \
-  --query 'services[0].{Desired:desiredCount,Running:runningCount,Pending:pendingCount,Status:status}' \
-  --output table
+curl -X GET https://<api-gateway-url>/status \
+  -H "Content-Type: application/json"
+```
+
+**Response:**
+```json
+{
+  "clusterName": "fluidity-prod",
+  "serviceName": "fluidity-server-prod",
+  "desiredCount": 1,
+  "runningCount": 1,
+  "deployments": 1,
+  "events": [
+    {
+      "id": "1",
+      "createdAt": "2024-01-15T10:30:00Z",
+      "message": "service was unable to place a Fargate task"
+    }
+  ]
+}
 ```
 
 ---
 
-## Cost
+## Configuration
 
-- Lambda Function URLs: No additional charge (included in Lambda pricing)
-- Lambda invocations: <$0.05/month (free tier covers 1M invocations)
-- **Total: ~$0.05/month** (90% cheaper than API Gateway)
+### Environment Variables
+
+Set in Lambda environment:
+
+```bash
+ECS_CLUSTER_NAME=fluidity-prod
+ECS_SERVICE_NAME=fluidity-server-prod
+IDLE_THRESHOLD_MINUTES=15
+SLEEP_CHECK_INTERVAL_MINUTES=5
+```
+
+### EventBridge Rules
+
+**Sleep Rule:**
+```yaml
+Schedule: rate(5 minutes)
+Target: Sleep Lambda
+```
+
+**Kill Rule:**
+```yaml
+Schedule: cron(0 23 * * ? *)    # 11 PM UTC daily
+Target: Kill Lambda
+```
 
 ---
 
 ## Monitoring
 
-**CloudWatch Logs:**
+### CloudWatch Logs
+
+View Lambda execution logs:
+
 ```bash
-aws logs tail /aws/lambda/fluidity-lambda-wake --follow
-aws logs tail /aws/lambda/fluidity-lambda-sleep --follow
-aws logs tail /aws/lambda/fluidity-lambda-kill --follow
+# Wake Lambda
+aws logs tail /aws/lambda/fluidity-wake --follow
+
+# Sleep Lambda
+aws logs tail /aws/lambda/fluidity-sleep --follow
+
+# Kill Lambda
+aws logs tail /aws/lambda/fluidity-kill --follow
 ```
 
-**Lambda Metrics (Wake):**
+### CloudWatch Metrics
+
+**Lambda Metrics:**
+- `Duration` - Execution time
+- `Errors` - Failed invocations
+- `Throttles` - Rate-limited invocations
+- `ConcurrentExecutions` - Concurrent running instances
+
+**CloudWatch Alarms:**
+
 ```bash
-# Invocations
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
-  --metric-name Invocations \
-  --dimensions Name=FunctionName,Value=fluidity-lambda-wake \
-  --statistics Sum,Average \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
-  --period 300
-
-# Errors
-aws cloudwatch get-metric-statistics \
-  --namespace AWS/Lambda \
+# Alert on Lambda errors
+aws cloudwatch put-metric-alarm \
+  --alarm-name fluidity-lambda-errors \
+  --alarm-description "Alert on Lambda function errors" \
   --metric-name Errors \
-  --dimensions Name=FunctionName,Value=fluidity-lambda-wake \
-  --statistics Sum \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
-  --period 300
-
-# Duration
-aws cloudwatch get-metric-statistics \
   --namespace AWS/Lambda \
-  --metric-name Duration \
-  --dimensions Name=FunctionName,Value=fluidity-lambda-wake \
-  --statistics Average,Maximum \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
-  --period 300
+  --statistic Sum \
+  --period 300 \
+  --threshold 1 \
+  --comparison-operator GreaterThanOrEqualToThreshold
 ```
 
 ---
 
-## Security
+## Testing
 
-**Function URL Security:**
-- Public endpoints by default (no authentication required)
-- HTTPS only (enforced by AWS)
-- Optional: Restrict via resource-based IAM policies
-- Agent validates mTLS certificates when contacting server
+### Unit Tests
 
-**Best Practices:**
-- Monitor CloudWatch Logs for errors
-- Set up CloudWatch alarms for Lambda failures
-- Use IAM resource policies to restrict access if needed
-- Keep Lambda roles with minimal permissions (already configured)
+```bash
+cd tests/lambda/
+pytest -v                          # All tests
+pytest test_wake.py -v            # Wake function
+pytest test_sleep.py -v           # Sleep function
+pytest test_kill.py -v            # Kill function
+```
+
+**Test scenarios:**
+- Wake when task stopped
+- Wake when already running (idempotent)
+- Sleep when idle
+- No sleep when active
+- Kill immediate shutdown
+
+### Integration Tests
+
+```bash
+# Deploy test stack
+aws cloudformation deploy \
+  --template-file deployments/cloudformation/lambda.yaml \
+  --stack-name fluidity-lambda-test \
+  --parameter-overrides \
+    ECSClusterName=fluidity-test \
+    ECSServiceName=fluidity-server-test
+
+# Test Wake
+aws lambda invoke \
+  --function-name fluidity-lambda-test-wake \
+  --payload '{"clusterName":"fluidity-test","serviceName":"fluidity-server-test"}' \
+  response.json
+
+# Verify server started
+aws ecs describe-services \
+  --cluster fluidity-test \
+  --services fluidity-server-test \
+  --query 'services[0].{Desired:desiredCount,Running:runningCount}'
+```
+
+---
+
+## Lifecycle Example
+
+1. **Agent starts on local machine**
+   - Agent calls Wake Lambda via API Gateway
+   - Wake Lambda scales Fargate service to 1
+   - Server starts and becomes reachable
+
+2. **Agent forwards traffic**
+   - HTTP requests tunneled through mTLS
+   - Server metrics updated with activity
+
+3. **No traffic for 15 minutes**
+   - Sleep Lambda (EventBridge every 5 min) runs
+   - Detects idle > 15 minutes
+   - Scales service to 0
+
+4. **Manual shutdown or 11 PM UTC**
+   - Kill Lambda runs (API or scheduled)
+   - Scales service to 0 immediately
+
+5. **Agent disconnects**
+   - Client closes connection
+   - Waits for reconnect signal
 
 ---
 
 ## Troubleshooting
 
-**Function URL returns error:**
+### Wake Lambda Fails
+
+**Check logs:**
 ```bash
-# Check function exists
-aws lambda get-function --function-name fluidity-lambda-wake
-
-# View recent logs
-aws logs tail /aws/lambda/fluidity-lambda-wake --follow --since 10m
-
-# Check for errors
-aws logs filter-log-events \
-  --log-group-name /aws/lambda/fluidity-lambda-wake \
-  --filter-pattern "ERROR"
+aws logs tail /aws/lambda/fluidity-wake --follow
 ```
 
-**Wake Lambda fails to update ECS:**
-- Verify cluster name: `aws ecs describe-clusters --clusters fluidity`
-- Verify service exists: `aws ecs describe-services --cluster fluidity --services fluidity-server`
-- Check IAM role: `aws iam get-role --role-name <role-name>`
+**Common issues:**
+- Cluster/service name incorrect
+- Missing ECS permissions in Lambda role
+- Subnet/security group issues
 
-**Sleep Lambda not scaling down:**
-- Verify server metrics enabled: `grep emit_metrics configs/server.yaml`
-- Check CloudWatch metrics: `aws cloudwatch list-metrics --namespace Fluidity`
-- Verify Sleep Lambda has `cloudwatch:GetMetricData` permission
+### Sleep Lambda Never Fires
 
-**Connection timeout in agent:**
-- Increase `connection_timeout` in agent config if server takes > 90s to start
-- Check Wake Lambda was invoked: `aws logs tail /aws/lambda/fluidity-lambda-wake`
-- Verify server security group allows agent IP on port 8443
+**Verify EventBridge rule:**
+```bash
+aws events describe-rule --name fluidity-sleep-rule
+
+aws events list-targets-by-rule --rule fluidity-sleep-rule
+```
+
+**Check metrics:**
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace Fluidity \
+  --metric-name ActiveConnections \
+  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+  --period 300 \
+  --statistics Average
+```
+
+### API Gateway Timeout
+
+**Increase timeout:**
+```bash
+aws apigateway update-integration \
+  --rest-api-id <api-id> \
+  --resource-id <resource-id> \
+  --http-method POST \
+  --type AWS_PROXY \
+  --integration-http-method POST \
+  --timeout-in-millis 30000    # 30 seconds
+```
 
 ---
 
-## Migration from API Gateway
+## Advanced Configuration
 
-Previously, Fluidity used API Gateway REST API with API keys and rate limiting.
+### Custom Idle Threshold
 
-**Benefits of Lambda Function URLs:**
-- 90% cost reduction
-- Simpler architecture (fewer AWS resources)
-- Faster invocation
-- No API key management needed
-- Direct Lambda invocation
+Edit CloudFormation parameters:
 
-**Key Differences:**
+```bash
+./deploy-fluidity.sh -e prod -a deploy-lambda \
+  --idle-threshold-minutes 30
+```
 
-| Aspect | API Gateway | Function URL |
-|--------|-------------|--------------|
-| Cost | ~$0.35/month | <$0.05/month |
-| Endpoint | `https://<api-id>.execute-api.region.amazonaws.com/prod/wake` | `https://<id>.lambda-url.region.on.aws/` |
-| Auth | API keys | Optional policies |
-| CORS | Configurable | Built-in |
-| Rate limit | Quota-based | Lambda concurrency |
-| Paths | `/wake`, `/kill` | Single function |
+### Disable Sleep Lambda
+
+Set `DailyKillTime` to prevent automatic shutdown:
+
+```bash
+aws cloudformation update-stack \
+  --stack-name fluidity-lambda \
+  --use-previous-template \
+  --parameters ParameterKey=SleepEnabled,ParameterValue=false
+```
+
+### Add Custom Metrics
+
+Modify Sleep Lambda to check custom metrics:
+
+```python
+# internal/lambdas/sleep/sleep.go
+response := cwClient.GetMetricStatistics(ctx, &cloudwatch.GetMetricStatisticsInput{
+    Namespace: aws.String("Fluidity"),
+    MetricName: aws.String("CustomMetric"),
+    // ... custom logic
+})
+```
 
 ---
 
 ## Related Documentation
 
-- [Infrastructure Guide](infrastructure.md) - CloudFormation details
-- [Deployment Guide](deployment.md) - Full setup
-- [Architecture](architecture.md) - System design
-
-````
+- **[Deployment Guide](deployment.md)** - All deployment options
+- **[Infrastructure as Code](infrastructure.md)** - CloudFormation details
+- **[Fargate Guide](fargate.md)** - ECS setup
+- **[Architecture](architecture.md)** - System design
+- **[Testing Guide](testing.md)** - Test strategy

@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Complete deployment guide for all Fluidity deployment options.
+Complete guide to deploying Fluidity with automated scripts and configuration management.
 
 ---
 
@@ -48,348 +48,373 @@ This creates certificates in `./certs/`:
 
 ---
 
-## Deployment Options
+## Deployment
 
-### Option A: Local Development (Recommended for Development)
+### Local Development
 
 Run server and agent binaries directly on your machine.
 
-**1. Generate certificates** (if not done already):
+**Setup:**
 ```bash
-./scripts/manage-certs.sh
+./scripts/manage-certs.sh                # Generate certificates
+./scripts/build-core.sh                  # Build both server and agent
+./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
+./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 ```
 
-**2. Build binaries:**
+**Test:**
 ```bash
-./scripts/build-core.sh                # Build both server and agent
+curl -x http://127.0.0.1:8080 http://example.com
 ```
-
-**3. Start server** (Terminal 1):
-```bash
-./build/fluidity-server -config configs/server.local.yaml
-```
-
-**4. Start agent** (Terminal 2):
-```bash
-./build/fluidity-agent -config configs/agent.local.yaml
-```
-
-**5. Configure browser proxy:** `127.0.0.1:8080`
-
-**6. Test:
-```bash
-curl -x http://127.0.0.1:8080 http://example.com -I
-curl -x http://127.0.0.1:8080 https://example.com -I
-```
-
-**Why use this option:**
-- Fastest iteration cycle
-- No container overhead
-- Easy debugging
-- Best for development
-
-**Cost:** Free
 
 ---
 
-### Option B: Docker (Local Containers)
+### Docker
 
 Test containerized deployment locally before cloud deployment.
 
-**1. Generate certificates** (if not done already):
+**Setup:**
 ```bash
-./scripts/manage-certs.sh
-```
-
-**2. Build Linux binaries:**
-```bash
-./scripts/build-core.sh --linux        # Build static Linux binaries
-```
-
-**3. Build Docker images:**
-```bash
+./scripts/manage-certs.sh                # Generate certificates
+./scripts/build-core.sh --linux          # Build static Linux binaries
 docker build -f deployments/server/Dockerfile -t fluidity-server .
 docker build -f deployments/agent/Dockerfile -t fluidity-agent .
 ```
 
-**4. Run server:**
+**Run server** (Terminal 1):
 ```bash
-docker run --rm \
-  -v "$(pwd)/certs:/root/certs:ro" \
+docker run --rm -v "$(pwd)/certs:/root/certs:ro" \
   -v "$(pwd)/configs/server.docker.yaml:/root/config/server.yaml:ro" \
-  -p 8443:8443 \
-  fluidity-server
+  -p 8443:8443 fluidity-server
 ```
 
-**5. Run agent** (new terminal):
+**Run agent** (Terminal 2):
 ```bash
-docker run --rm \
-  -v "$(pwd)/certs:/root/certs:ro" \
+docker run --rm -v "$(pwd)/certs:/root/certs:ro" \
   -v "$(pwd)/configs/agent.docker.yaml:/root/config/agent.yaml:ro" \
-  -p 8080:8080 \
-  fluidity-agent
+  -p 8080:8080 fluidity-agent
 ```
 
-**6. Test** (same as Option A)
-
-**Why use this option:**
-- Verify containers work before cloud deployment
-- Test Docker configurations locally
-- Validate image builds
-
-**Cost:** Free
-
-**See also:** [Docker Guide](docker.md) for detailed container documentation
+**Test:**
+```bash
+curl -x http://127.0.0.1:8080 http://example.com
+```
 
 ---
 
-### Option C: AWS Fargate with CloudFormation (Recommended for Production)
+### AWS Fargate with CloudFormation
 
-Deploy server to AWS using a single automated deployment script with intelligent parameter detection and infrastructure as code.
+Deploy server to AWS with automated scripts. Full details in [Infrastructure Guide](infrastructure.md).
 
-#### Quick Start (30 seconds)
+**Single command:**
+```bash
+./scripts/deploy-fluidity.sh deploy
+```
+
+This automatically:
+- Detects AWS region, VPC, subnets, and your IP
+- Generates certificates (if needed)
+- Builds and uploads Docker image to ECR
+- Deploys CloudFormation stacks  
+- Deploys and configures agent with endpoints
+
+**With explicit parameters:**
+```bash
+./scripts/deploy-fluidity.sh deploy \
+  --region us-east-1 \
+  --vpc-id vpc-12345678 \
+  --public-subnets subnet-11111111,subnet-22222222 \
+  --allowed-cidr 203.0.113.45/32 \
+  --server-ip 203.0.113.50 \
+  --local-proxy-port 8080
+```
+
+**Check status:**
+```bash
+./scripts/deploy-fluidity.sh status
+```
+
+**Delete infrastructure:**
+```bash
+./scripts/deploy-fluidity.sh delete
+```
+
+---
+
+## Deployment Automation Scripts
+
+The deployment automation system provides three modular bash scripts that work together:
+
+### Architecture Overview
+
+```
+User runs: deploy-fluidity.sh deploy
+
+    ┌─────────────────────────────────────────┐
+    │   deploy-fluidity.sh (Orchestrator)     │
+    │   - OS Detection                        │
+    │   - Detects defaults (paths, ports)     │
+    │   - Routes actions to scripts            │
+    └─────────────┬─────────────────┬─────────┘
+                  │                 │
+        ┌─────────▼──────────┐  ┌──▼──────────────┐
+        │ deploy-server.sh   │  │ deploy-agent.sh │
+        │ - AWS CloudFormation   │ - Config Mgmt   │
+        │ - ECS Fargate          │ - Build Binary  │
+        │ - Lambda Functions     │ - Install PATH  │
+        │ - Outputs Endpoints    │ - Create Config │
+        └──────────┬──────────┘  └──┬─────────────┘
+                   │                 │
+              Exports Endpoints       Consumes Endpoints
+         (wake, kill URLs)
+```
+
+### Three-Script Architecture
+
+### Script Reference
+
+### deploy-fluidity.sh (Orchestrator)
+
+**Location:** `scripts/deploy-fluidity.sh`
+
+**Actions:**
+- `deploy` - Deploy both server and agent (default)
+- `deploy-server` - Deploy only AWS infrastructure
+- `deploy-agent` - Deploy only agent to local system
+- `delete` - Delete AWS infrastructure
+- `status` - Show deployment status for both
+
+**Common Parameters:**
+```
+--region <region>           # AWS region (auto-detected)
+--vpc-id <vpc-id>          # VPC ID (auto-detected)
+--public-subnets <subnets> # Comma-separated subnet IDs (auto-detected)
+--allowed-cidr <cidr>      # Ingress CIDR (auto-detected from your IP)
+--server-ip <ip>           # Server IP for agent configuration
+--local-proxy-port <port>  # Agent port (default: 8080)
+--skip-build                # Use existing agent binary
+--debug                     # Enable debug logging
+```
+
+**Examples:**
+```bash
+./scripts/deploy-fluidity.sh deploy                    # Full deployment
+./scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
+./scripts/deploy-fluidity.sh deploy --debug             # With debug output
+./scripts/deploy-fluidity.sh status                     # Check status
+./scripts/deploy-fluidity.sh delete                     # Delete infrastructure
+```
+
+---
+
+## Configuration Management
+
+### Configuration Flow
+
+1. **User runs deployment:**
+   ```bash
+   ./scripts/deploy-fluidity.sh deploy
+   ```
+
+2. **Server deployed to AWS:**
+   - CloudFormation creates Fargate + Lambda infrastructure
+   - Collects Lambda Function URLs (wake, kill, etc.)
+
+3. **Endpoints passed to agent:**
+   - Orchestrator script captures endpoints
+   - Passes to deploy-agent.sh via command-line parameters
+
+4. **Agent configuration created/updated:**
+   - Loads existing `agent.yaml` if present
+   - Applies command-line parameter overrides
+   - Creates new config if missing
+   - Updates with server/Lambda details
+
+5. **Configuration validated:**
+   - Checks required fields (server_ip)
+   - Requests missing values interactively if needed
+   - Deployment fails cleanly if config incomplete
+
+6. **Deployment completes:**
+   - Both server and agent ready
+   - All configuration persisted
+   - Can re-run deployment to update config
+
+### Configuration Precedence
+
+1. **Config File Values** (lowest priority)
+2. **Command-line Arguments** (override config)
+3. **Required Validation** (fails if missing)
+
+### Creating/Updating Configuration
+
+**Automatic (Recommended):**
+```bash
+./scripts/deploy-fluidity.sh deploy
+# Automatically configures agent with server endpoints
+```
+
+**Manual Update:**
+```bash
+./scripts/deploy-agent.sh deploy --server-ip 192.168.1.100 --local-proxy-port 9000
+# Updates agent.yaml with new values, preserves others
+```
+
+**Interactive Input:**
+```bash
+./scripts/deploy-agent.sh deploy
+# Prompts for required server_ip if not in config
+```
+
+### Viewing Configuration
+
+**Windows:**
+```powershell
+type $APPDATA\fluidity\agent.yaml
+```
+
+**macOS/Linux:**
+```bash
+cat ~/.config/fluidity/agent.yaml
+```
+
+---
+
+## Script Features & Reference
+
+### Deployment Script Actions
+
+| Script | Action | Purpose | Example |
+|--------|--------|---------|---------|
+| deploy-fluidity.sh | deploy | Deploy server + agent | `./deploy-fluidity.sh deploy` |
+| deploy-fluidity.sh | deploy-server | Deploy AWS only | `./deploy-fluidity.sh deploy-server` |
+| deploy-fluidity.sh | deploy-agent | Deploy agent only | `./deploy-fluidity.sh deploy-agent` |
+| deploy-fluidity.sh | status | Check both | `./deploy-fluidity.sh status` |
+| deploy-fluidity.sh | delete | Remove AWS | `./deploy-fluidity.sh delete` |
+| deploy-server.sh | deploy | Deploy AWS | `./deploy-server.sh deploy` |
+| deploy-server.sh | status | Check stack | `./deploy-server.sh status` |
+| deploy-server.sh | outputs | Show endpoints | `./deploy-server.sh outputs` |
+| deploy-server.sh | delete | Remove stack | `./deploy-server.sh delete` |
+| deploy-agent.sh | deploy | Build + install | `./deploy-agent.sh deploy --server-ip X` |
+| deploy-agent.sh | status | Check install | `./deploy-agent.sh status` |
+| deploy-agent.sh | uninstall | Remove agent | `./deploy-agent.sh uninstall` |
+
+### Deployment Script Options
+
+| Option | Usage | Purpose |
+|--------|-------|---------|
+| `--region` | `--region us-west-2` | Specify AWS region |
+| `--vpc-id` | `--vpc-id vpc-123` | Specify VPC ID |
+| `--public-subnets` | `--public-subnets sub-1,sub-2` | Specify subnets |
+| `--allowed-cidr` | `--allowed-cidr 203.0.113.45/32` | Specify ingress CIDR |
+| `--server-ip` | `--server-ip 192.168.1.100` | Specify server IP |
+| `--local-proxy-port` | `--local-proxy-port 9000` | Specify proxy port |
+| `--cert-path` | `--cert-path ./certs/client.crt` | Specify certificate |
+| `--key-path` | `--key-path ./certs/client.key` | Specify key |
+| `--ca-cert-path` | `--ca-cert-path ./certs/ca.crt` | Specify CA cert |
+| `--install-path` | `--install-path /custom/path` | Custom install path |
+| `--skip-build` | `--skip-build` | Use existing binary |
+| `--debug` | `--debug` | Enable debug logging |
+| `--force` | `--force` | Recreate resources |
+| `--help` | `--help` | Show help |
+
+---
+
+## Usage Examples
+
+### Single Command Deployment (Recommended)
+
+Deploys everything with automatic defaults:
 
 ```bash
 ./scripts/deploy-fluidity.sh deploy
 ```
 
-The script will:
-- ✓ Auto-detect AWS region, VPC, subnets, and your IP
-- ✓ Generate certificates (if needed)
-- ✓ Build Lambda and Docker images
-- ✓ Deploy CloudFormation stacks
-- ✓ Output API credentials
+Output:
+- AWS infrastructure deployed to auto-detected region/VPC
+- Lambda endpoints collected automatically
+- Agent deployed with server endpoints
+- Configuration created and validated
 
-#### Full Deployment Steps
+### Step-by-Step Deployment
 
-**Step 1: Run the deployment script**
-
+**Step 1: Deploy server to AWS**
 ```bash
-cd Fluidity
-bash scripts/deploy-fluidity.sh deploy
+./scripts/deploy-fluidity.sh deploy-server --region us-west-2
 ```
 
-**With explicit parameters** (no prompts):
+**Step 2: Get server IP**
 ```bash
-bash scripts/deploy-fluidity.sh deploy \
-  --region us-east-1 \
-  --vpc-id vpc-12345678 \
-  --public-subnets subnet-11111111,subnet-22222222 \
-  --allowed-cidr 203.0.113.45/32
+# Wait for Fargate task to start, then get its public IP
+SERVER_IP=203.0.113.42
 ```
 
-**Get parameter values:**
+**Step 3: Deploy agent with server**
 ```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION="us-east-1"
-VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
-SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
-MY_IP=$(curl -s ifconfig.me)/32
+./scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
 ```
 
-**On Windows** (via WSL):
+### Manual Server IP Deployment
+
+If server IP changes or Fargate task restarts:
+
 ```bash
-wsl bash -c "cd /mnt/c/Users/marcelr/Tech/github/Fluidity && bash scripts/deploy-fluidity.sh deploy"
+./scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
 ```
 
-**Step 2: Verify deployment**
+Configuration updates automatically.
+
+### Custom Installation Path
+
+```bash
+./scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
+```
+
+### With Debug Logging
+
+```bash
+./scripts/deploy-fluidity.sh deploy --debug
+```
+
+### Deploy to Specific AWS Region
+
+```bash
+./scripts/deploy-fluidity.sh deploy --region eu-west-1
+```
+
+### Skip Agent Build (Use Existing Binary)
+
+```bash
+./scripts/deploy-fluidity.sh deploy --skip-build
+```
+
+### Check Deployment Status
 
 ```bash
 ./scripts/deploy-fluidity.sh status
 ```
 
-**Step 3: View API credentials**
+Shows:
+- AWS CloudFormation stack status
+- Agent installation status
+- Agent configuration status
+- Agent running processes
 
-```bash
-./scripts/deploy-fluidity.sh outputs
-```
+### Delete AWS Infrastructure
 
-The output includes:
-- API Endpoint (Kill API)
-- API Key ID
-- Instructions for agent configuration
-
-#### Deployment Script Features
-
-| Feature | Command | Notes |
-|---------|---------|-------|
-| **Deploy** | `./deploy-fluidity.sh deploy` | Auto-detects all parameters |
-| **Debug** | `./deploy-fluidity.sh deploy --debug` | Verbose output for troubleshooting |
-| **Force Recreate** | `./deploy-fluidity.sh deploy --force` | Delete and recreate from scratch |
-| **Status** | `./deploy-fluidity.sh status` | Show CloudFormation stack status |
-| **Outputs** | `./deploy-fluidity.sh outputs` | Display API credentials |
-| **Delete** | `./deploy-fluidity.sh delete` | Remove all infrastructure |
-| **Help** | `./deploy-fluidity.sh --help` | Show all options and examples |
-
-#### What the Script Does
-
-The deployment script automates all infrastructure setup:
-
-1. **Validates** Prerequisites
-   - AWS CLI, Docker, jq installed
-   - AWS credentials configured
-
-2. **Detects** Parameters
-   - AWS Region (from config or prompt)
-   - VPC ID (default or prompt)
-   - Public Subnets (auto or prompt)
-   - Your Public IP (auto-fetch or prompt)
-
-3. **Prepares** Infrastructure
-   - Generates certificates (if needed)
-   - Stores in AWS Secrets Manager
-
-4. **Builds** Components
-   - Lambda functions
-   - Docker server image
-   - Pushes to ECR
-
-5. **Deploys** CloudFormation
-   - Fargate infrastructure stack
-   - Lambda control plane stack
-   - Creates or updates automatically
-
-6. **Outputs** Credentials
-   - API Endpoint and Key ID
-   - Configuration instructions
-
-#### Configuration (Agent Setup)
-
-After deployment, configure your agent with the Function URLs from step 3:
-
-```yaml
-server_host: "<SERVER_PUBLIC_IP>"
-server_port: 8443
-wake_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
-kill_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
-connection_timeout: "90s"
-connection_retry_interval: "5s"
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_file: "./certs/ca.crt"
-```
-
-To get the Function URLs:
-```bash
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs' \
-  --output table
-```
-
-#### Advanced: Force Clean Slate
-
-To delete and recreate all infrastructure:
-
-```bash
-./scripts/deploy-fluidity.sh deploy --force
-```
-
-This deletes existing stacks and creates fresh ones.
-
-#### Troubleshooting
-
-**View deployment logs:**
-```bash
-./scripts/deploy-fluidity.sh deploy --debug
-```
-
-**Check stack status:**
-```bash
-aws cloudformation describe-stacks --stack-name fluidity-fargate --query 'Stacks[0].StackStatus'
-```
-
-**View CloudWatch logs:**
-```bash
-aws logs tail /ecs/fluidity/server --follow
-```
-
-**Rollback:**
 ```bash
 ./scripts/deploy-fluidity.sh delete
-./scripts/deploy-fluidity.sh deploy --force
 ```
 
-**Why use this option:**
-- Infrastructure as Code (repeatable, version-controlled)
-- Single command deployment
-- Intelligent auto-detection with fallback
-- Secrets Manager integration
-- Certificates managed securely
-- Clean stack lifecycle
+Interactive confirmation required. Note: Agent files remain on system.
 
-**See also:** [Infrastructure Guide](infrastructure.md) for CloudFormation templates
-
----
-
-### Option D: Lambda Control Plane (Cost Optimization Add-on)
-
-Add automated lifecycle management to Option C for 90% cost reduction.
-
-**Prerequisites:**
-- Option C already deployed
-- Server metrics enabled
-
-#### Quick Setup
+### Get Lambda Endpoint URLs
 
 ```bash
-# Enable metrics in server config
-# Edit configs/server.yaml: emit_metrics: true
-
-# Deploy Lambda control plane
-./scripts/deploy-fluidity.sh deploy --force
-
-# Get Function URLs from deployment output
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs' \
-  --output table
+./scripts/deploy-server.sh outputs
 ```
 
-#### What It Does
-
-- **Wake Function URL:** Starts server on agent connection (~60s startup)
-- **Kill Function URL:** Stops server on agent disconnect (saves ~$8.88/month)
-- **Sleep Function URL:** Auto-stops idle server after 15 minutes
-- **Scheduled Kill:** Optional daily shutdown via EventBridge
-
-#### Configuration
-
-After deploying Lambda stack, update agent config:
-
-```yaml
-server_host: "<SERVER_PUBLIC_IP>"
-server_port: 8443
-wake_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
-kill_api_endpoint: "https://xxxxx.lambda-url.us-east-1.on.aws/"
-connection_timeout: "90s"
-connection_retry_interval: "5s"
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_file: "./certs/ca.crt"
-```
-
-See **[Lambda Functions](lambda.md)** for detailed documentation.
-
----
-
-## Certificate Rotation
-
-To rotate certificates (recommended every 6-12 months):
-
-```bash
-# Generate new certificates
-./scripts/manage-certs.sh
-
-# Redeploy with new certificates
-./scripts/deploy-fluidity.sh deploy --force
-```
-
-The script will:
-- Read new certificates from `./certs/`
-- Update CloudFormation stack
-- Update Secrets Manager secret
-- Fargate service pulls new certificates on next deployment
+Or after deployment completes, endpoints are displayed automatically.
 
 ---
 
@@ -428,6 +453,18 @@ sudo apt-get install jq
 ./scripts/manage-certs.sh
 ```
 
+**"Required configuration missing: server_ip"**
+
+Solution: Provide server IP:
+```bash
+./scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
+```
+
+Or if using orchestrator:
+```bash
+./scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
+```
+
 **"Failed to get AWS parameters"**
 ```bash
 # Configure AWS credentials
@@ -435,6 +472,14 @@ aws configure
 
 # Or verify existing credentials
 aws sts get-caller-identity
+```
+
+**"Region could not be auto-detected"**
+```bash
+aws configure set region us-east-1
+
+# Or provide explicitly:
+./scripts/deploy-fluidity.sh deploy --region us-east-1
 ```
 
 **"Stack creation failed"**
@@ -477,19 +522,107 @@ aws cloudformation continue-update-rollback --stack-name fluidity-fargate
 ./scripts/deploy-fluidity.sh deploy
 ```
 
-**High AWS costs**
-- Implement Option D (Lambda control plane) for 98% cost reduction
-- Or manually stop server: `aws ecs update-service --cluster fluidity --service fluidity-server --desired-count 0`
+**Server not responding**
+- Manually stop server: `aws ecs update-service --cluster fluidity --service fluidity-server --desired-count 0`
+
+### View Detailed Logs
+
+```bash
+./scripts/deploy-fluidity.sh deploy --debug
+```
+
+Shows:
+- Configuration parameter values
+- Script execution details
+- Endpoint collection process
+- Agent configuration updates
+
+### Check Agent Status
+
+```bash
+./scripts/deploy-agent.sh status
+```
+
+Shows:
+- Installation path
+- Configuration file location and content
+- Running processes
+- PATH environment status
+
+### Check Server Status
+
+```bash
+./scripts/deploy-server.sh status
+```
+
+Shows CloudFormation stack status.
+
+### Verify Endpoints
+
+```bash
+./scripts/deploy-server.sh outputs
+```
+
+Shows all CloudFormation outputs including Lambda endpoints.
 
 ---
 
 ## Security Best Practices
 
-1. **Restrict ingress:** Use your IP `/32` in `AllowedIngressCidr`
+1. **Restrict ingress:** Use your IP `/32` in `--allowed-cidr`
+   ```bash
+   ./scripts/deploy-fluidity.sh deploy --allowed-cidr 203.0.113.45/32
+   ```
+
 2. **Protect certificate files:** `.gitignore` already excludes `certs/*.key`
-3. **Enable CloudWatch Logs retention:** Set 7-30 days
+
+3. **Enable CloudWatch Logs retention:** Set 7-30 days in CloudFormation
+
 4. **Rotate certificates:** At least annually
+   ```bash
+   ./scripts/manage-certs.sh
+   ./scripts/deploy-fluidity.sh deploy --force
+   ```
+
 5. **Use stack policies:** Prevent accidental deletions (included in deploy script)
+
+6. **Store configuration securely:** 
+   - Don't commit `agent.yaml` with sensitive data
+   - Use AWS Secrets Manager for production credentials
+
+---
+
+## Post-Deployment Steps
+
+After running deployment:
+
+**Step 1: Verify Agent Configuration**
+```bash
+./scripts/deploy-agent.sh status
+```
+
+**Step 2: Start Agent** (if not auto-started)
+```bash
+# Windows
+C:\Program Files\fluidity\fluidity-agent.exe
+
+# macOS/Linux
+/opt/fluidity/fluidity-agent
+```
+
+**Step 3: Start Fargate Task** (if not auto-started)
+```bash
+aws ecs update-service \
+  --cluster fluidity \
+  --service fluidity-server \
+  --desired-count 1 \
+  --region us-east-1
+```
+
+**Step 4: Test Connection**
+```bash
+curl -x http://127.0.0.1:8080 http://example.com -I
+```
 
 ---
 
@@ -501,128 +634,5 @@ aws cloudformation continue-update-rollback --stack-name fluidity-fargate
 - **[Lambda Functions](lambda.md)** - Control plane architecture
 - **[Infrastructure Guide](infrastructure.md)** - CloudFormation templates
 - **[Architecture](architecture.md)** - System design overview
-
----
-
-## Post-Deployment Steps
-
-After running the deployment script:
-
-**Step 1: Get Function URLs** (if using Lambda control plane)
-```bash
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs' \
-  --output table
-```
-
-This displays:
-- Wake Function URL
-- Kill Function URL
-
-**Step 2: Configure agent**
-
-Update `configs/agent.yaml` with the Function URLs:
-```yaml
-server_host: "<SERVER_PUBLIC_IP>"
-server_port: 8443
-wake_api_endpoint: "<Wake Function URL>"
-kill_api_endpoint: "<Kill Function URL>"
-connection_timeout: "90s"
-connection_retry_interval: "5s"
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_file: "./certs/ca.crt"
-```
-
-**Step 3: Deploy agent**
-```bash
-./scripts/build-core.sh --agent
-./build/fluidity-agent -config configs/agent.yaml
-```
-
----
-
-## Deployment Script Reference
-
-### Actions
-
-| Action | Purpose | Example |
-|--------|---------|---------|
-| `deploy` | Create or update infrastructure | `./deploy-fluidity.sh deploy` |
-| `status` | Show CloudFormation stack status | `./deploy-fluidity.sh status` |
-| `delete` | Remove all infrastructure | `./deploy-fluidity.sh delete` |
-
-### Options
-
-| Option | Purpose | Example |
-|--------|---------|---------|
-| `--region` | AWS region | `--region us-west-2` |
-| `--vpc-id` | VPC ID | `--vpc-id vpc-12345678` |
-| `--public-subnets` | Subnets (comma-separated) | `--public-subnets subnet-1,subnet-2` |
-| `--allowed-cidr` | Ingress CIDR | `--allowed-cidr 203.0.113.45/32` |
-| `--debug` | Verbose logging | `--debug` |
-| `--force` | Delete and recreate | `--force` |
-| `--help` | Show help | `--help` |
-
-### Examples
-
-**Basic deployment (auto-detects everything)**
-```bash
-./scripts/deploy-fluidity.sh deploy
-```
-
-**With debug output**
-```bash
-./scripts/deploy-fluidity.sh deploy --debug
-```
-
-**Explicit parameters (no prompts)**
-```bash
-./scripts/deploy-fluidity.sh deploy \
-  --region us-east-1 \
-  --vpc-id vpc-12345678 \
-  --public-subnets subnet-111,subnet-222 \
-  --allowed-cidr 203.0.113.45/32
-```
-
-**Force clean slate (delete + recreate)**
-```bash
-./scripts/deploy-fluidity.sh deploy --force
-```
-
-**Check status**
-```bash
-./scripts/deploy-fluidity.sh status
-```
-
-**Get Function URLs**
-```bash
-aws cloudformation describe-stacks \
-  --stack-name fluidity-lambda \
-  --query 'Stacks[0].Outputs' \
-  --output table
-```
-
-**Delete all infrastructure**
-```bash
-./scripts/deploy-fluidity.sh delete
-```
-
----
-
-## Script Help
-
-For comprehensive help:
-
-```bash
-./scripts/deploy-fluidity.sh --help
-```
-
-This shows:
-- All available actions
-- All command-line options
-- Usage examples
-- Feature descriptions
 
 ---

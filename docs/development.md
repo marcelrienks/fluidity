@@ -223,5 +223,5 @@ Agent reconnects automatically on connection loss (5s intervals, 90s max).
 
 - [Testing Guide](testing.md) - Test strategy
 - [Architecture](architecture.md) - System design
-- [Certificate Management](certificate-management.md) - TLS setup
+- [Certificate Management](certificate.md) - TLS setup
 - [Deployment Guide](deployment.md) - Deployment options

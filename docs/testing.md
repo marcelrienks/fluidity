@@ -1,363 +1,177 @@
-# Testing Guide# Testing Guide
+# Testing Guide
 
+Comprehensive testing strategy for the Fluidity secure tunnel system.
 
+---
 
-Three-tier testing strategy: Unit, Integration, and E2E tests.Comprehensive testing strategy for the Fluidity secure tunnel system.
+## Testing Strategy
 
-
-
-## Quick Start---
-
-
-
-```bash## Testing Strategy
-
-# All tests
-
-go test ./internal/... -vThree-tier approach for complete system validation:
-
-./scripts/test-local.sh              # Linux/macOS
-
-.\scripts\test-local.ps1             # Windows```
-
-```         ┌────────────┐
-
-         │  E2E (6)   │  ← Full system, real binaries
-
-## Test Layers         │  Slowest   │
-
-         └────────────┘
-
-```       ┌───────────────┐
-
-E2E Tests (6)          ← Full system, real binaries       │Integration(30)│  ← Component interaction
-
-├── HTTP/HTTPS/WebSocket       │   Medium      │
-
-├── Local + Docker environments       └───────────────┘
-
-└── ~30-120s execution   ┌──────────────────────┐
-
-   │   Unit Tests (17)    │  ← Individual functions
-
-Integration Tests (30+) ← Component interaction   │      Fastest         │
-
-├── In-memory servers   └──────────────────────┘
-
-├── Real TLS```
-
-└── ~3-10s execution
-
-**Total: 53+ tests** covering all system aspects
-
-Unit Tests (17)        ← Individual functions
-
-├── Circuit breaker---
-
-├── Retry logic
-
-└── <1s execution## Quick Start
+Three-tier approach for complete system validation:
 
 ```
+         ┌────────────┐
+         │  E2E (6)   │  ← Full system, real binaries
+         │  Slowest   │
+         └────────────┘
+       ┌───────────────┐
+       │Integration(30)│  ← Component interaction
+       │   Medium      │
+       └───────────────┘
+     ┌──────────────────────┐
+     │   Unit Tests (17)    │  ← Individual functions
+     │      Fastest         │
+     └──────────────────────┘
+```
+
+**Total: 53+ tests** covering all system aspects  
+**Coverage: ~77%** with focus on critical paths
+
+---
+
+## Quick Start
 
 ```bash
-
-**Total: 53+ tests, ~77% coverage**# All tests
-
+# All tests
 go test ./internal/... -v -timeout 5m
 
-## Unit Tests./scripts/test-local.sh
-
-./scripts/test-docker.sh
-
-**Location:** `internal/shared/*/`  ```
-
-**Coverage:** Circuit breaker, retry logic
-
-```powershell
-
-```bash# Windows
-
-# Rungo test ./internal/... -v -timeout 5m
-
-go test ./internal/shared/... -v.\scripts\test-local.ps1
-
-.\scripts\test-docker.ps1
-
-# With coverage```
-
-go test ./internal/shared/... -cover -coverprofile=coverage.out
-
-go tool cover -html=coverage.out**Or run specific types:**
-
-```
-
-```bash
-
-## Integration Tests# Unit tests (fastest, < 1s)
-
+# Unit tests (fastest, < 1s)
 go test ./internal/shared/... -v
 
-**Location:** `internal/integration/`  
-
-**Tests:** Tunnel, proxy, WebSocket, circuit breaker# Integration tests (~3-10s)
-
+# Integration tests (~3-10s)
 go test ./internal/integration/... -v -timeout 5m
 
-```bash
-
-# Run all# E2E tests (30-120s)
-
-go test ./internal/integration/... -v -timeout 5m./scripts/test-local.sh
-
+# E2E tests (30-120s)
+./scripts/test-local.sh
 ```
 
-# Specific test
+**Windows:**
+```powershell
+.\scripts\test-local.ps1
+.\scripts\test-docker.ps1
+```
 
-go test ./internal/integration -run TestTunnelConnection -v---
+---
 
+## Unit Tests
 
-
-# With race detection## Unit Tests
-
-go test ./internal/integration/... -race -v
-
-```**Location:** `internal/shared/*/`  
-
+**Location:** `internal/shared/*/`  
 **Count:** 17 tests  
+**Coverage:** 100% for critical paths  
+**Execution:** < 1 second
 
-**Structure:****Coverage:** 100% for circuit breaker and retry logic  
+### What They Test
 
-- `testutil.go` - Shared test utilities**Execution:** < 1 second
-
-- `tunnel_test.go` - Tunnel connection tests
-
-- `http_proxy_test.go` - Proxy functionality### What They Test
-
-- `websocket_test.go` - WebSocket support
-
-- `circuitbreaker_integration_test.go` - Circuit breaker**Circuit Breaker:**
-
+**Circuit Breaker:**
 - State transitions (Closed → Open → Half-Open → Closed)
-
-## E2E Tests- Failure threshold detection
-
+- Failure threshold detection
 - Automatic recovery
+- Concurrent request handling
 
-**Location:** `scripts/test-*.sh`, `scripts/test-*.ps1`- Concurrent request handling
-
-
-
-**Local binaries:****Retry Mechanism:**
-
-```bash- Successful operations
-
-./scripts/test-local.sh- Transient failure retry
-
-.\scripts\test-local.ps1             # Windows- Maximum attempts limit
-
-```- Exponential backoff timing
-
+**Retry Mechanism:**
+- Successful operations
+- Transient failure retry
+- Maximum attempts limit
+- Exponential backoff timing
 - Context cancellation
 
-**Docker containers:**
-
-```bash### Running Unit Tests
-
-./scripts/test-docker.sh
-
-.\scripts\test-docker.ps1            # Windows```bash
-
-```# All unit tests
-
-go test ./internal/shared/... -v
-
-**Tests:**
-
-- HTTP tunneling# Specific package
-
-- HTTPS CONNECTgo test ./internal/shared/circuitbreaker -v
-
-- WebSocketgo test ./internal/shared/retry -v
-
-
-
-## Coverage# With coverage
-
-go test ./internal/shared/... -cover
+### Running Unit Tests
 
 ```bash
+# All unit tests
+go test ./internal/shared/... -v
 
-# All packages# HTML coverage report
+# Specific package
+go test ./internal/shared/circuitbreaker -v
+go test ./internal/shared/retry -v
 
-go test ./... -coverprofile=coverage.outgo test ./internal/shared/... -coverprofile=coverage.out
+# With coverage
+go test ./internal/shared/... -cover
 
+# HTML coverage report
+go test ./internal/shared/... -coverprofile=coverage.out
 go tool cover -html=coverage.out
-
-# View by package```
-
-go tool cover -func=coverage.out
+```
 
 **Expected output:**
-
-# HTML report```
-
-go tool cover -html=coverage.out--- PASS: TestCircuitBreakerStateTransitions (0.12s)
-
-```--- PASS: TestRetryExponentialBackoff (0.05s)
-
+```
+--- PASS: TestCircuitBreakerStateTransitions (0.12s)
+--- PASS: TestRetryExponentialBackoff (0.05s)
 PASS
+coverage: 100.0% of statements
+```
 
-**Targets:**coverage: 100.0% of statements
+---
 
-- Unit: 100% (critical paths)```
+## Integration Tests
 
-- Integration: 80%+
-
-- E2E: Full system validation---
-
-
-
-## CI/CD Example## Integration Tests
-
-
-
-```yaml**Location:** `internal/integration/`  
-
-# .github/workflows/test.yml**Count:** 30+ tests  
-
-name: Tests**Coverage:** Full component interaction  
-
+**Location:** `internal/integration/`  
+**Count:** 30+ tests  
+**Coverage:** Full component interaction  
 **Execution:** ~3-10 seconds (parallel)
-
-on: [push, pull_request]
 
 ### Test Organization
 
-jobs:
+```
+internal/integration/
+├── README.md                          # Test documentation
+├── testutil.go                        # Shared test utilities and helpers
+├── tunnel_test.go                     # Agent <-> Server tunnel integration
+├── http_proxy_test.go                 # HTTP proxy functionality
+├── connect_test.go                    # HTTPS CONNECT tunneling
+├── websocket_test.go                  # WebSocket tunneling
+└── circuitbreaker_integration_test.go # Circuit breaker integration
+```
 
-  test:```
+### Integration Test Approach
 
-    runs-on: ubuntu-latestinternal/integration/
-
-    steps:├── README.md                          # Test documentation
-
-      - uses: actions/checkout@v3├── testutil.go                        # Shared test utilities and helpers
-
-      - uses: actions/setup-go@v4├── tunnel_test.go                     # Agent <-> Server tunnel integration
-
-        with:├── http_proxy_test.go                 # HTTP proxy functionality
-
-          go-version: '1.21'├── connect_test.go                    # HTTPS CONNECT tunneling
-
-      ├── websocket_test.go                  # WebSocket tunneling
-
-      - name: Unit Tests└── circuitbreaker_integration_test.go # Circuit breaker integration
-
-        run: go test ./internal/shared/... -v -cover```
-
-      
-
-      - name: Integration Tests### Integration Test Approach
-
-        run: go test ./internal/integration/... -v -timeout 5m
-
-      1. **Start in-memory servers**: No external processes needed
-
-      - name: E2E Tests2. **Use real TLS certificates**: Tests with actual mTLS
-
-        run: ./scripts/test-local.sh3. **Mock external HTTP calls**: Fast and reliable
-
-```4. **Test component interactions**: Focus on integration points
-
+1. **Start in-memory servers**: No external processes needed
+2. **Use real TLS certificates**: Tests with actual mTLS
+3. **Mock external HTTP calls**: Fast and reliable
+4. **Test component interactions**: Focus on integration points
 5. **Clean up resources**: Proper teardown in defer statements
-
-## Troubleshooting
 
 ### Key Differences from E2E Tests
 
-**Connection refused:**
-
-- Increase wait time in E2E scripts| Aspect | Integration Tests | E2E Tests (scripts) |
-
-- Check port availability|--------|------------------|---------------------|
-
+| Aspect | Integration Tests | E2E Tests (scripts) |
+|--------|------------------|---------------------|
 | **Scope** | Component interactions | Full system deployment |
-
-**Timeout:**| **Speed** | Fast (< 1s per test) | Slow (10-30s) |
-
-```bash| **Dependencies** | In-memory only | Requires binaries/Docker |
-
-go test ./internal/integration/... -timeout 10m -v| **Network** | Mocked/local only | Real external services |
-
-```| **Purpose** | Development feedback | Deployment validation |
-
+| **Speed** | Fast (< 1s per test) | Slow (10-30s) |
+| **Dependencies** | In-memory only | Requires binaries/Docker |
+| **Network** | Mocked/local only | Real external services |
+| **Purpose** | Development feedback | Deployment validation |
 | **When to run** | Every commit | Before deploy/PR merge |
 
-**Certificate errors:**
+### What They Test
 
-```bash### What They Test
-
-# Integration tests auto-generate
-
-# For E2E, regenerate:**Tunnel Tests:**
-
-./scripts/manage-certs.sh- Connection establishment/disconnection
-
-```- Automatic reconnection after failure
-
+**Tunnel Tests:**
+- Connection establishment/disconnection
+- Automatic reconnection after failure
 - HTTP request forwarding
-
-**Flaky tests:**- Request timeout handling
-
-```bash- Concurrent requests (10 simultaneous)
-
-# Run with race detector- Multiple HTTP methods (GET, POST, PUT, DELETE, PATCH)
-
-go test ./internal/integration/... -race -v- Large payload transfer (1MB)
-
+- Request timeout handling
+- Concurrent requests (10 simultaneous)
+- Multiple HTTP methods (GET, POST, PUT, DELETE, PATCH)
+- Large payload transfer (1MB)
 - Disconnect during active request
 
-# Run multiple times
-
-go test ./internal/integration -run TestName -count 10 -v**Proxy Tests:**
-
-```- HTTP proxy functionality
-
+**Proxy Tests:**
+- HTTP proxy functionality
 - HTTPS CONNECT tunneling
-
-## Performance Profiling- Invalid target error handling
-
+- Invalid target error handling
 - Concurrent client connections (10 simultaneous)
+- Large response handling (1MB)
+- Custom header forwarding
 
-```bash- Large response handling (1MB)
-
-# CPU profiling- Custom header forwarding
-
-go test ./internal/integration/... -cpuprofile=cpu.out -v
-
-go tool pprof cpu.out**Circuit Breaker Integration:**
-
+**Circuit Breaker Integration:**
 - Circuit trips after consecutive failures
+- Automatic recovery after timeout
+- Protection from cascading failures
+- Metrics collection and tracking
+- Complete state transition verification
 
-# Memory profiling- Automatic recovery after timeout
-
-go test ./internal/integration/... -memprofile=mem.out -v- Protection from cascading failures
-
-go tool pprof mem.out- Metrics collection and tracking
-
-```- Complete state transition verification
-
-
-
-## Related Documentation**WebSocket Tests:**
-
+**WebSocket Tests:**
 - WebSocket connection through tunnel
-
-- [Development Guide](development.md) - Local setup- Multiple message exchange (text/binary)
-
-- [Architecture](architecture.md) - System design- Ping/pong keepalive
-
+- Multiple message exchange (text/binary)
+- Ping/pong keepalive
 - Concurrent connections (5 simultaneous)
 - Large message handling (100KB)
 - Proper connection cleanup
