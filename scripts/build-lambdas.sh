@@ -49,7 +49,6 @@ log_info "Building Lambda functions..."
 FUNCTIONS=("wake" "sleep" "kill")
 
 for func in "${FUNCTIONS[@]}"; do
-    echo ""
     log_substep "Building $func Lambda"
     
     FUNC_DIR="$LAMBDAS_DIR/$func"
@@ -84,11 +83,9 @@ for func in "${FUNCTIONS[@]}"; do
     log_success "Created $ZIP_NAME ($SIZE)"
 done
 
-echo ""
 log_substep "Build Summary"
 ls -lh "$BUILD_DIR"/*.zip
 log_info "Build version: $BUILD_VERSION"
 
-echo ""
 log_success "All Lambda functions built successfully"
 log_info "Output directory: $BUILD_DIR"
