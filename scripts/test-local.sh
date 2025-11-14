@@ -49,16 +49,15 @@ LOG_DIR="$PROJECT_ROOT/logs"
 SERVER_PID=""
 AGENT_PID=""
 
-# Color definitions (progressive light blue)
-LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
-LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
-LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+# Color definitions (light pastel palette)
+PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
+PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
+PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
+WHITE='\033[1;37m'               # Standard white (info logs)
+RED='\033[0;31m'                 # Standard red (errors)
 RESET='\033[0m'
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
+YELLOW_OLD='\033[1;33m'
 MAGENTA='\033[0;35m'
-WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # ============================================================================
@@ -68,15 +67,15 @@ NC='\033[0m' # No Color
 log_section() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_2}$*${RESET}"
-    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_3}$*${RESET}"
-    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}-------------------------------------${RESET}"
 }
 
 log_info() {

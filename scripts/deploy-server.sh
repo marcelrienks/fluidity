@@ -78,13 +78,13 @@ TEMP_PARAMS_DIR="/tmp/fluidity-deploy-server-$$"
 # Storage for error logs
 ERROR_LOG=""
 
-# Color definitions (progressive light blue)
-LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
-LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
-LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+# Color definitions (light pastel palette)
+PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
+PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
+PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
+WHITE='\033[1;37m'               # Standard white (info logs)
+RED='\033[0;31m'                 # Standard red (errors)
 RESET='\033[0m'
-GREEN='\033[0;32m'
-RED='\033[0;31m'
 
 # ============================================================================
 # LOGGING FUNCTIONS
@@ -102,28 +102,28 @@ log_debug() {
 
 log_error_start() {
     echo ""
-    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
-    echo -e "${LIGHT_BLUE_1}ERROR${RESET}"
-    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
+    echo -e "${RED}================================================================================${RESET}"
+    echo -e "${RED}ERROR${RESET}"
+    echo -e "${RED}================================================================================${RESET}"
 }
 
 log_error_end() {
-    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
+    echo -e "${RED}================================================================================${RESET}"
     echo ""
 }
 
 log_section() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_2}$*${RESET}"
-    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_3}$*${RESET}"
-    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}-------------------------------------${RESET}"
 }
 
 log_success() {

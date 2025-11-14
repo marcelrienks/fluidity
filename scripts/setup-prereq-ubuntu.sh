@@ -29,15 +29,15 @@ NC='\033[0m' # No Color
 log_section() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_2}$*${RESET}"
-    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_3}$*${RESET}"
-    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}-------------------------------------${RESET}"
 }
 
 log_info() {
@@ -49,7 +49,7 @@ log_success() {
 }
 
 log_error() {
-    echo "[ERROR] $*" >&2
+    echo -e "${RED}[ERROR] $*${RESET}" >&2
 }
 
 log_debug() {

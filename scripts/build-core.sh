@@ -34,35 +34,35 @@ CMD_DIR="$PROJECT_ROOT/cmd/core"
 BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
 echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
 
-# Color definitions (progressive light blue)
-LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
-LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
-LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+# Color definitions (light pastel palette)
+PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
+PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
+PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
+WHITE='\033[1;37m'               # Standard white (info logs)
+RED='\033[0;31m'                 # Standard red (errors)
 RESET='\033[0m'
-GREEN='\033[0;32m'
-RED='\033[0;31m'
 
 # Logging functions (consistent with deploy-fluidity.sh)
 log_header() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
-    echo -e "${LIGHT_BLUE_1}$*${RESET}"
-    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
 }
 
 log_minor() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_2}$*${RESET}"
-    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
     echo ""
-    echo -e "${LIGHT_BLUE_3}$*${RESET}"
-    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}-------------------------------------${RESET}"
 }
 
 log_info() {
@@ -74,7 +74,7 @@ log_success() {
 }
 
 log_error() {
-    echo "[ERROR] $*" >&2
+    echo -e "${RED}[ERROR] $*${RESET}" >&2
 }
 
 log_debug() {
