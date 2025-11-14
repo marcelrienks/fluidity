@@ -89,7 +89,7 @@ case "$(uname -s)" in
         ;;
     Darwin)
         OS_TYPE="darwin"
-        DEFAULT_INSTALL_PATH="/usr/local/opt/fluidity"
+        DEFAULT_INSTALL_PATH="/usr/local/bin"
         DEFAULT_CONFIG_DIR="$HOME/.config/fluidity"
         AGENT_BINARY="fluidity-agent"
         ;;
