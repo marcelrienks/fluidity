@@ -56,11 +56,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 
-# Colors
-RED='\033[0;31m'
+# Color definitions (progressive light blue)
+LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
+LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
+LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+RESET='\033[0m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
+RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # Default options
@@ -82,21 +84,22 @@ GOARCH=""
 # ============================================================================
 
 log_header() {
-    echo "================================================================================"
-    echo "$*"
-    echo "================================================================================"
+    echo ""
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
+    echo -e "${LIGHT_BLUE_1}$*${RESET}"
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
 }
 
 log_minor() {
     echo ""
-    echo "$*"
-    echo "=========================================="
+    echo -e "${LIGHT_BLUE_2}$*${RESET}"
+    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
-    echo "$*"
-    echo "-------------------------------------------"
+    echo -e "${LIGHT_BLUE_3}$*${RESET}"
+    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
 }
 
 log_info() {
@@ -411,12 +414,20 @@ build_docker_image() {
     log_debug "Platform: $TARGET_PLATFORM"
 
     # Build with explicit platform (use plain progress to avoid PowerShell parsing issues with buildkit format)
-    if docker build \
+    local build_output
+    build_output=$(docker build \
         --platform "$TARGET_PLATFORM" \
         --progress=plain \
         -f "$dockerfile" \
         -t "$image_name:$BUILD_VERSION" \
-        "$PROJECT_ROOT" 2>&1 | grep -v -E '^#[0-9]'; then
+        "$PROJECT_ROOT" 2>&1)
+    
+    local build_status=$?
+    
+    # Filter and display output (remove buildkit format lines and blank lines)
+    echo "$build_output" | grep -v -E '^#[0-9]|^$' || true
+    
+    if [[ $build_status -eq 0 ]]; then
         
         log_success "Docker image built: $image_name:$BUILD_VERSION"
         

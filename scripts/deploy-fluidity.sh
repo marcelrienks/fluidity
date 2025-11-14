@@ -118,6 +118,14 @@ esac
 INSTALL_PATH="${INSTALL_PATH:-$DEFAULT_INSTALL_PATH}"
 LOCAL_PROXY_PORT="${LOCAL_PROXY_PORT:-$DEFAULT_LOCAL_PROXY_PORT}"
 
+# Color definitions (progressive light blue)
+LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
+LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
+LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+RESET='\033[0m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+
 # ============================================================================
 # LOGGING FUNCTIONS
 # ============================================================================
@@ -138,26 +146,28 @@ log_warn() {
 
 log_error_start() {
     echo ""
-    echo "================================================================================"
-    echo "ERROR"
-    echo "================================================================================"
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
+    echo -e "${LIGHT_BLUE_1}ERROR${RESET}"
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
 }
 
 log_error_end() {
-    echo "================================================================================"
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
     echo ""
 }
 
 log_section() {
     echo ""
-    echo "$*"
-    echo "=========================================="
+    echo ""
+    echo -e "${LIGHT_BLUE_2}$*${RESET}"
+    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
-    echo "$*"
-    echo "-------------------------------------------"
+    echo ""
+    echo -e "${LIGHT_BLUE_3}$*${RESET}"
+    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
 }
 
 log_success() {

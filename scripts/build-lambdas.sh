@@ -14,23 +14,35 @@ BUILD_DIR="$PROJECT_ROOT/build/lambdas"
 LAMBDAS_DIR="$PROJECT_ROOT/cmd/lambdas"
 BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
 
+# Color definitions (progressive light blue)
+LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
+LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
+LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+RESET='\033[0m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+
 # Logging functions (consistent with other build scripts)
 log_header() {
-    echo "================================================================================"
-    echo "$*"
-    echo "================================================================================"
+    echo ""
+    echo ""
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
+    echo -e "${LIGHT_BLUE_1}$*${RESET}"
+    echo -e "${LIGHT_BLUE_1}================================================================================${RESET}"
 }
 
 log_minor() {
     echo ""
-    echo "$*"
-    echo "=========================================="
+    echo ""
+    echo -e "${LIGHT_BLUE_2}$*${RESET}"
+    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
-    echo "$*"
-    echo "-------------------------------------------"
+    echo ""
+    echo -e "${LIGHT_BLUE_3}$*${RESET}"
+    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
 }
 
 log_info() {

@@ -49,11 +49,14 @@ LOG_DIR="$PROJECT_ROOT/logs"
 SERVER_PID=""
 AGENT_PID=""
 
-# Color codes
-RED='\033[0;31m'
+# Color definitions (progressive light blue)
+LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
+LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
+LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
+RESET='\033[0m'
 GREEN='\033[0;32m'
+RED='\033[0;31m'
 YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 WHITE='\033[1;37m'
 NC='\033[0m' # No Color
@@ -64,14 +67,16 @@ NC='\033[0m' # No Color
 
 log_section() {
     echo ""
-    echo "==="
-    echo "$*"
-    echo "==="
+    echo ""
+    echo -e "${LIGHT_BLUE_2}$*${RESET}"
+    echo -e "${LIGHT_BLUE_2}==========================================${RESET}"
 }
 
 log_substep() {
     echo ""
-    echo "--- $*"
+    echo ""
+    echo -e "${LIGHT_BLUE_3}$*${RESET}"
+    echo -e "${LIGHT_BLUE_3}-------------------------------------${RESET}"
 }
 
 log_info() {
