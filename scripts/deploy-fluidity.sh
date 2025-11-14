@@ -90,6 +90,7 @@ WAKE_ENDPOINT=""
 KILL_ENDPOINT=""
 SERVER_REGION=""
 SERVER_PORT="8443"
+SERVER_IP_COMMAND=""
 
 # Detect OS and set defaults
 case "$(uname -s)" in
@@ -154,6 +155,21 @@ log_error_start() {
 log_error_end() {
     echo -e "${RED}================================================================================${RESET}"
     echo ""
+}
+
+check_sudo_requirement() {
+    # Check if action requires sudo
+    if [[ "$ACTION" == "deploy" || "$ACTION" == "deploy-agent" ]]; then
+        if [[ "$EUID" -ne 0 ]]; then
+            log_error_start
+            echo "Sudo privileges required for agent deployment"
+            echo ""
+            echo "Please run this script with sudo:"
+            echo "  sudo $0 $@"
+            log_error_end
+            exit 1
+        fi
+    fi
 }
 
 log_section() {
@@ -306,15 +322,28 @@ deploy_server() {
         log_success "Server deployment completed"
         
         # Extract endpoints from export_endpoints output
-        local endpoints
-        endpoints=$(echo "$output" | grep "export " | grep -E "ENDPOINT|REGION|PORT" || true)
+        local temp_exports="/tmp/fluidity-exports-$$.sh"
+        echo "$output" | grep "^export " > "$temp_exports" 2>/dev/null || true
         
-        if [[ -n "$endpoints" ]]; then
-            log_debug "Extracted endpoints:"
-            log_debug "$endpoints"
+        if [[ -s "$temp_exports" ]]; then
+            log_debug "Extracted endpoints from server deployment"
             
-            # Source the endpoints
-            eval "$endpoints"
+            # Extract each variable individually to avoid shell metacharacter issues
+            SERVER_REGION=$(grep "^export SERVER_REGION=" "$temp_exports" | cut -d"'" -f2)
+            WAKE_ENDPOINT=$(grep "^export WAKE_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            KILL_ENDPOINT=$(grep "^export KILL_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
+            
+            # For SERVER_IP_COMMAND, extract everything between the quotes (handling the complex command)
+            SERVER_IP_COMMAND=$(sed -n 's/^export SERVER_IP_COMMAND="\(.*\)"$/\1/p' "$temp_exports")
+            
+            log_debug "Extracted SERVER_REGION: $SERVER_REGION"
+            log_debug "Extracted WAKE_ENDPOINT: $WAKE_ENDPOINT"
+            log_debug "Extracted KILL_ENDPOINT: $KILL_ENDPOINT"
+            log_debug "Extracted SERVER_PORT: $SERVER_PORT"
+            log_debug "Extracted SERVER_IP_COMMAND length: ${#SERVER_IP_COMMAND}"
+            
+            rm -f "$temp_exports"
         fi
         
         return 0
@@ -339,6 +368,12 @@ deploy_agent() {
         echo "Agent deployment script not found: $agent_script"
         log_error_end
         exit 1
+    fi
+    
+    # If SERVER_IP not provided via command line, try to extract from running Fargate task
+    # (optional - agent will get it from wake function)
+    if [[ -z "$SERVER_IP" && -n "$SERVER_IP_COMMAND" ]]; then
+        log_debug "Fargate task detection skipped - IP will be obtained from wake function"
     fi
     
     local args=("deploy")
@@ -374,7 +409,7 @@ deploy_agent() {
     
     log_debug "Calling agent deployment script with: ${args[*]}"
     
-    # Run script and display output
+    # Run script (already running as sudo)
     if bash "$agent_script" "${args[@]}"; then
         log_success "Agent deployment completed"
         return 0
@@ -458,6 +493,9 @@ main() {
     validate_action
     parse_arguments "$@"
     
+    # Check sudo requirement early
+    check_sudo_requirement
+    
     log_section "Fluidity Complete Deployment"
     log_info "Operating System: $OS_TYPE"
     log_info "Default install path: $DEFAULT_INSTALL_PATH"
@@ -469,7 +507,7 @@ main() {
                 exit 1
             fi
             
-            # Deploy agent with collected endpoints
+            # Deploy agent with collected endpoints (IP can be provided manually or obtained from wake function later)
             if ! deploy_agent; then
                 exit 1
             fi
@@ -482,8 +520,13 @@ main() {
             log_info "  - Configuration: $INSTALL_PATH/agent.yaml"
             log_info ""
             log_info "Next steps:"
-            log_info "1. Start the Fargate task in AWS Console (set DesiredCount=1)"
-            log_info "2. Run the agent: $INSTALL_PATH/$([[ "$OS_TYPE" == "windows" ]] && echo "fluidity-agent.exe" || echo "fluidity-agent")"
+            log_info "1. Update agent config with server IP (optional - can be obtained from wake function):"
+            log_info "   - Edit: $INSTALL_PATH/agent.yaml"
+            log_info "   - Set server_ip to the Fargate task public IP"
+            log_info "   - Or let the agent obtain it from the wake function on first run"
+            log_info ""
+            log_info "2. Run the agent:"
+            log_info "   $INSTALL_PATH/$([[ "$OS_TYPE" == "windows" ]] && echo "fluidity-agent.exe" || echo "fluidity-agent")"
             log_info ""
             ;;
         
@@ -495,13 +538,13 @@ main() {
             log_success "Server deployment finished successfully"
             log_info ""
             log_info "To deploy agent with server endpoints, run:"
-            log_info "  ./deploy-fluidity.sh deploy-agent"
+            log_info "  sudo ./deploy-fluidity.sh deploy-agent"
             log_info ""
             ;;
         
         deploy-agent)
             if [[ -z "$SERVER_IP" ]]; then
-                log_warn "Server IP not provided, agent configuration will require manual input"
+                log_warn "Server IP not provided, agent configuration will require manual input or will be obtained from wake function"
             fi
             
             if ! deploy_agent; then

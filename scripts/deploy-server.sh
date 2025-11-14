@@ -480,7 +480,7 @@ build_lambda_functions() {
     fi
 
     if [ -n "$timeout_cmd" ]; then
-        if $timeout_cmd 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
+        if BUILD_VERSION="$BUILD_VERSION" $timeout_cmd 300 bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
             log_success "Lambda functions built"
             log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
             rm -f /tmp/lambda_build_$$.log
@@ -502,7 +502,7 @@ build_lambda_functions() {
             return 1
         fi
     else
-        if bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
+        if BUILD_VERSION="$BUILD_VERSION" bash "$SCRIPT_DIR/build-lambdas.sh" 2>&1 | tee /tmp/lambda_build_$$.log; then
             log_success "Lambda functions built"
             log_debug "Lambda build output saved to /tmp/lambda_build_$$.log"
             rm -f /tmp/lambda_build_$$.log
@@ -937,31 +937,20 @@ collect_endpoints() {
     log_debug "Wake endpoint: $WAKE_ENDPOINT"
     log_debug "Kill endpoint: $KILL_ENDPOINT"
     log_debug "Sleep endpoint: $SLEEP_ENDPOINT"
+    
+    log_info "Wake Lambda URL: $WAKE_ENDPOINT"
+    log_info "Kill Lambda URL: $KILL_ENDPOINT"
 }
 
 output_stack_info() {
     log_section "Deployment Complete"
-    log_substep "Stack Outputs"
-
-    for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
-        if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" &>/dev/null 2>&1; then
-            aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table 2>/dev/null || true
-        fi
-    done
-    
-    log_substep "Endpoint Summary"
     collect_endpoints
-    
-    log_info "Server: You will need to get the public IP of the running Fargate task"
-    log_info "  Command: $SERVER_IP_COMMAND"
-    log_info "Wake Lambda URL: $WAKE_ENDPOINT"
-    log_info "Kill Lambda URL: $KILL_ENDPOINT"
-    log_info "Sleep Schedule: Available as EventBridge rule in AWS Console"
 }
 
 export_endpoints() {
     # Export endpoints as environment variables that can be sourced
     echo "export SERVER_REGION='$REGION'"
+    echo "export SERVER_IP_COMMAND=\"$SERVER_IP_COMMAND\""
     echo "export WAKE_ENDPOINT='$WAKE_ENDPOINT'"
     echo "export KILL_ENDPOINT='$KILL_ENDPOINT'"
     echo "export SERVER_PORT='8443'"
