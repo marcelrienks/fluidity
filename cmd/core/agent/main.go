@@ -28,6 +28,7 @@ var (
 	certFile   string
 	keyFile    string
 	caCertFile string
+	saveConfig bool
 )
 
 func main() {
@@ -49,6 +50,7 @@ func main() {
 	rootCmd.Flags().StringVar(&certFile, "cert", "", "Client certificate file")
 	rootCmd.Flags().StringVar(&keyFile, "key", "", "Client private key file")
 	rootCmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
+	rootCmd.Flags().BoolVar(&saveConfig, "save", false, "Persist supplied overrides back to the configuration file")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -84,7 +86,12 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		overrides["ca_cert_file"] = caCertFile
 	}
 
-	// Load configuration
+	// Load configuration (resolve fallback only once)
+	if configFile == "" {
+		if _, err := os.Stat("./build/agent.yaml"); err == nil {
+			configFile = "./build/agent.yaml"
+		}
+	}
 	cfg, err := config.LoadConfig[agent.Config](configFile, overrides)
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
@@ -103,12 +110,21 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("server IP address is required (use --server-ip or config file)")
 	}
 
-	// Save updated configuration if server IP was provided via CLI
-	if serverIP != "" && configFile != "" {
-		if err := config.SaveConfig(configFile, cfg); err != nil {
-			logger.Warn("Failed to save updated configuration", "error", err.Error())
+	// Persist merged configuration only if --save specified
+	if saveConfig {
+		finalPath := configFile
+		if finalPath == "" { // choose a creation target if no file was resolved
+			if _, err := os.Stat("./build"); err == nil {
+				finalPath = "./build/agent.yaml"
+			} else {
+				home, _ := os.UserHomeDir()
+				finalPath = home + "/.config/fluidity/agent.yaml"
+			}
+		}
+		if err := config.SaveConfig(finalPath, cfg); err != nil {
+			logger.Warn("Failed to persist configuration", "file", finalPath, "error", err.Error())
 		} else {
-			logger.Info("Updated configuration saved", "file", configFile)
+			logger.Info("Configuration saved", "file", finalPath)
 		}
 	}
 

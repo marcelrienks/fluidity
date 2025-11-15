@@ -41,6 +41,9 @@
 #   --key-path <path>              Path to client key (optional)
 #   --ca-cert-path <path>          Path to CA certificate (optional)
 #   --install-path <path>          Custom agent installation path (optional)
+#   --log-level <level>            Agent log level (info|debug|warn|error)
+#   --wake-endpoint <url>          Override wake function endpoint
+#   --kill-endpoint <url>          Override kill function endpoint
 #   --skip-build                   Skip building agent, use existing binary
 #   --debug                        Enable debug logging
 #   --force                        Delete and recreate resources (server only)
@@ -74,11 +77,13 @@ ALLOWED_CIDR=""
 
 # Agent Configuration
 SERVER_IP=""
+SERVER_PORT="8443"  # Allow override though server binary listens 8443
 LOCAL_PROXY_PORT=""
 CERT_PATH=""
 KEY_PATH=""
 CA_CERT_PATH=""
 INSTALL_PATH=""
+LOG_LEVEL=""
 
 # Feature Flags
 DEBUG=false
@@ -243,6 +248,18 @@ parse_arguments() {
                 INSTALL_PATH="$2"
                 shift 2
                 ;;
+            --log-level)
+                LOG_LEVEL="$2"
+                shift 2
+                ;;
+            --wake-endpoint)
+                WAKE_ENDPOINT="$2"
+                shift 2
+                ;;
+            --kill-endpoint)
+                KILL_ENDPOINT="$2"
+                shift 2
+                ;;
             --skip-build)
                 SKIP_BUILD=true
                 shift
@@ -393,6 +410,11 @@ deploy_agent() {
     
     if [[ -n "$KILL_ENDPOINT" ]]; then
         args+=(--kill-endpoint "$KILL_ENDPOINT")
+    fi
+
+    # Pass log level if provided
+    if [[ -n "$LOG_LEVEL" ]]; then
+        args+=(--log-level "$LOG_LEVEL")
     fi
     
     # Pass certificate paths if provided

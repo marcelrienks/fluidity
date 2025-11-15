@@ -229,6 +229,24 @@ if [[ "$BUILD_AGENT" == true ]]; then
     
     SIZE=$(du -h "$BUILD_DIR/$AGENT_BINARY" | cut -f1)
     log_success "Agent built successfully ($SIZE)"
+
+    # Provide a default development config alongside the built binary
+    DEFAULT_CONFIG_SOURCE="${PROJECT_ROOT}/configs/agent.local.yaml"
+    FALLBACK_CONFIG_SOURCE="${PROJECT_ROOT}/configs/agent.yaml"
+    TARGET_CONFIG="${BUILD_DIR}/agent.yaml"
+    if [[ -f "$TARGET_CONFIG" ]]; then
+        log_info "Existing build config retained: $TARGET_CONFIG"
+    else
+        if [[ -f "$DEFAULT_CONFIG_SOURCE" ]]; then
+            cp "$DEFAULT_CONFIG_SOURCE" "$TARGET_CONFIG"
+            log_success "Copied development config to build directory (agent.yaml)"
+        elif [[ -f "$FALLBACK_CONFIG_SOURCE" ]]; then
+            cp "$FALLBACK_CONFIG_SOURCE" "$TARGET_CONFIG"
+            log_success "Copied fallback config to build directory (agent.yaml)"
+        else
+            log_info "No template agent config found to copy into build directory"
+        fi
+    fi
 fi
 
 # Build lambdas if --all was specified
