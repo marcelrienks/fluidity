@@ -244,6 +244,25 @@ check_prerequisites() {
     fi
     log_debug "Docker found: $(docker --version)"
 
+    # Helper: portable timed docker check (supports timeout, gtimeout, or plain)
+    docker_ready() {
+        local timeout_cmd=""
+        if command -v timeout >/dev/null 2>&1; then
+            timeout_cmd="timeout"
+        elif command -v gtimeout >/dev/null 2>&1; then
+            timeout_cmd="gtimeout"
+        fi
+
+        if [[ -n "$timeout_cmd" ]]; then
+            $timeout_cmd 5 docker ps >/dev/null 2>&1
+            return $?
+        else
+            # Most platforms return quickly when daemon is unavailable
+            docker ps >/dev/null 2>&1
+            return $?
+        fi
+    }
+
     # Check Docker daemon and attempt to start if not running
     if ! docker ps &>/dev/null 2>&1; then
         log_info "Docker daemon is not accessible, attempting to start..."
@@ -291,33 +310,28 @@ check_prerequisites() {
         log_info "Waiting for Docker daemon to start (up to 180 seconds)..."
         (
             local wait_time=0
-            local max_wait=180
+            local max_wait=${FLUIDITY_DOCKER_WAIT_SECS:-180}
             local retry_count=0
             while [[ $wait_time -lt $max_wait ]]; do
-                # Try to connect to docker daemon with explicit timeout
-                # Suppress all errors including I/O errors during startup
-                if timeout 5 docker ps >/dev/null 2>&1; then
+                if docker_ready; then
                     echo ""  # newline after progress dots
                     log_success "Docker daemon is now accessible"
                     break
                 fi
-                
+
                 # For WSL, also check if Docker socket is accessible
-                if [[ -S /var/run/docker.sock ]]; then
-                    # Socket exists, try one more time with explicit socket check
-                    if timeout 5 docker ps >/dev/null 2>&1; then
-                        echo ""  # newline after progress dots
-                        log_success "Docker daemon is now accessible"
-                        break
-                    fi
+                if [[ -S /var/run/docker.sock ]] && docker_ready; then
+                    echo ""  # newline after progress dots
+                    log_success "Docker daemon is now accessible"
+                    break
                 fi
-                
-                sleep 3
-                wait_time=$((wait_time + 3))
+
+                sleep 1
+                wait_time=$((wait_time + 1))
                 retry_count=$((retry_count + 1))
-                
-                # Show progress every 15 seconds
-                if [[ $((retry_count % 5)) -eq 0 ]]; then
+
+                # Show progress and occasional debug
+                if [[ $((retry_count % 15)) -eq 0 ]]; then
                     echo ""  # newline before debug message
                     log_debug "Still waiting for Docker daemon ($wait_time/${max_wait}s)..."
                     printf "."
@@ -326,11 +340,11 @@ check_prerequisites() {
                 fi
             done
             echo ""
-            
+
             # Final check with better error messaging
             if ! docker ps &>/dev/null 2>&1; then
                 log_error "Docker daemon failed to start within ${max_wait}s"
-                
+
                 # Provide WSL-specific troubleshooting
                 if grep -qi microsoft /proc/version 2>/dev/null; then
                     echo "WSL-specific troubleshooting steps:"
