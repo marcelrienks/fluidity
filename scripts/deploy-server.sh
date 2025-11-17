@@ -90,6 +90,14 @@ RESET='\033[0m'
 # LOGGING FUNCTIONS
 # ============================================================================
 
+log_header() {
+    echo ""
+    echo ""
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+}
+
 log_info() {
     echo "[INFO] $*"
 }
@@ -112,7 +120,7 @@ log_error_end() {
     echo ""
 }
 
-log_section() {
+log_minor() {
     echo ""
     echo ""
     echo -e "${PALE_YELLOW}$*${RESET}"
@@ -817,7 +825,7 @@ wait_for_stack_creation() {
 # ============================================================================
 
 set_retention_policies() {
-    log_section "Step 8: Configure Retention Policies"
+    log_minor "Step 8: Configure Retention Policies"
     
     log_substep "Setting CloudWatch Logs Retention"
     local log_group="/ecs/fluidity/server"
@@ -947,7 +955,7 @@ collect_endpoints() {
 }
 
 output_stack_info() {
-    log_section "Deployment Complete"
+    log_minor "Deployment Complete"
     log_substep "Stack Outputs"
 
     for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
@@ -985,7 +993,7 @@ cleanup() {
 action_deploy() {
     mkdir -p "$TEMP_PARAMS_DIR"
 
-    log_section "Step 2: Build and Upload Lambda Functions to S3"
+    log_minor "Step 2: Build and Upload Lambda Functions to S3"
     log_substep "Building Lambda Functions"
     if ! build_lambda_functions; then
         return 1
@@ -997,13 +1005,13 @@ action_deploy() {
     fi
     lambda_s3_bucket="$LAMBDA_S3_BUCKET"
 
-    log_section "Step 3: Build and Push Fargate Docker Image to ECR"
+    log_minor "Step 3: Build and Push Fargate Docker Image to ECR"
     if ! build_and_push_docker_image "$BUILD_VERSION"; then
         return 1
     fi
     docker_image=$(echo "$DOCKER_IMAGE_URI" | tail -1)
 
-    log_section "Step 4: Prepare Certificates and Store in Secrets Manager"
+    log_minor "Step 4: Prepare Certificates and Store in Secrets Manager"
     log_substep "Ensuring Certificates Exist"
     ensure_certificates
     
@@ -1011,7 +1019,7 @@ action_deploy() {
     secret_arn=$(store_certificates_in_secrets_manager) || return 1
     secret_arn=$(echo "$secret_arn" | tail -1)
 
-    log_section "Step 5: Deploy Fargate Server Stack"
+    log_minor "Step 5: Deploy Fargate Server Stack"
     local fargate_params="$TEMP_PARAMS_DIR/fargate-params.json"
     cat > "$fargate_params" << EOF
 [
@@ -1033,10 +1041,10 @@ action_deploy() {
 EOF
     deploy_cloudformation_stack "$FARGATE_STACK_NAME" "$FARGATE_TEMPLATE" "$fargate_params" || return 1
 
-    log_section "Step 6: Verify S3 Lambda Artifacts are Available"
+    log_minor "Step 6: Verify S3 Lambda Artifacts are Available"
     verify_s3_resources "$BUILD_VERSION" "$lambda_s3_bucket" || return 1
 
-    log_section "Step 7: Deploy Lambda Control Plane Stack"
+    log_minor "Step 7: Deploy Lambda Control Plane Stack"
     
     log_substep "Cleaning up existing Lambda log groups (idempotent)"
     for log_group in "/aws/lambda/fluidity-lambda-kill" "/aws/lambda/fluidity-lambda-sleep" "/aws/lambda/fluidity-lambda-wake"; do
@@ -1070,7 +1078,7 @@ EOF
 }
 
 action_delete() {
-    log_section "Step 1: Delete CloudFormation Stacks"
+    log_minor "Step 1: Delete CloudFormation Stacks"
 
     for stack_name in "$LAMBDA_STACK_NAME" "$FARGATE_STACK_NAME"; do
         if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" &>/dev/null 2>&1; then
@@ -1086,7 +1094,7 @@ action_delete() {
         fi
     done
 
-    log_section "Step 2: Delete ECR Repository"
+    log_minor "Step 2: Delete ECR Repository"
     if aws ecr describe-repositories --repository-names fluidity-server --region "$REGION" &>/dev/null 2>&1; then
         log_info "Deleting ECR repository: fluidity-server"
         if aws ecr delete-repository --repository-name fluidity-server --region "$REGION" --force >/dev/null 2>&1; then
@@ -1098,7 +1106,7 @@ action_delete() {
         log_info "ECR repository not found"
     fi
 
-    log_section "Step 3: Delete S3 Bucket and Contents"
+    log_minor "Step 3: Delete S3 Bucket and Contents"
     local lambda_s3_bucket="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
     if aws s3 ls "s3://$lambda_s3_bucket" --region "$REGION" &>/dev/null 2>&1; then
         log_info "Deleting S3 bucket and contents: $lambda_s3_bucket"
@@ -1112,7 +1120,7 @@ action_delete() {
         log_info "S3 bucket not found"
     fi
 
-    log_section "Step 4: Delete Secrets Manager Secret"
+    log_minor "Step 4: Delete Secrets Manager Secret"
     if aws secretsmanager describe-secret --secret-id fluidity-certificates --region "$REGION" &>/dev/null 2>&1; then
         log_info "Deleting Secrets Manager secret: fluidity-certificates"
         if aws secretsmanager delete-secret --secret-id fluidity-certificates --region "$REGION" --force-delete-without-recovery >/dev/null 2>&1; then
@@ -1124,7 +1132,7 @@ action_delete() {
         log_info "Secrets Manager secret not found"
     fi
 
-    log_section "Step 5: Delete CloudWatch Log Groups"
+    log_minor "Step 5: Delete CloudWatch Log Groups"
     local log_patterns=("/ecs/fluidity" "/aws/lambda/fluidity" "API-Gateway-Execution-Logs" "scheduler-")
     
     for pattern in "${log_patterns[@]}"; do
@@ -1149,7 +1157,7 @@ action_delete() {
 }
 
 action_status() {
-    log_section "Stack Status"
+    log_minor "Stack Status"
 
     for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
         local status
@@ -1162,7 +1170,7 @@ action_status() {
 }
 
 action_outputs() {
-    log_section "Stack Outputs"
+    log_minor "Stack Outputs"
 
     for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
         log_substep "$stack_name"
@@ -1188,7 +1196,9 @@ main() {
     parse_arguments "$@"
     trap cleanup EXIT
 
-    log_section "Step 1: Check Prerequisites and Detect AWS Parameters"
+    log_header "Fluidity Server Deployment"
+
+    log_minor "Step 1: Check Prerequisites and Detect AWS Parameters"
     check_prerequisites
 
     if [[ -z "$REGION" ]]; then

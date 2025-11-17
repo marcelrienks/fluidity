@@ -134,6 +134,21 @@ RESET='\033[0m'
 # LOGGING FUNCTIONS
 # ============================================================================
 
+log_header() {
+    echo ""
+    echo ""
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+}
+
+log_minor() {
+    echo ""
+    echo ""
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}================================================================================${RESET}"
+}
+
 log_info() {
     echo "[INFO] $*"
 }
@@ -148,6 +163,10 @@ log_warn() {
     echo "[WARN] $*" >&2
 }
 
+log_success() {
+    echo "✓ $*"
+}
+
 log_error_start() {
     echo ""
     echo -e "${RED}================================================================================${RESET}"
@@ -158,13 +177,6 @@ log_error_start() {
 log_error_end() {
     echo -e "${RED}================================================================================${RESET}"
     echo ""
-}
-
-log_section() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
 }
 
 log_substep() {
@@ -490,7 +502,7 @@ check_prerequisites() {
 # ============================================================================
 
 build_agent() {
-    log_section "Step 2: Build Agent"
+    log_minor "Step 2: Build Agent"
     
     if [[ "$SKIP_BUILD" == "true" ]]; then
         log_info "Skipping build as requested"
@@ -551,7 +563,7 @@ build_agent() {
 # ============================================================================
 
 install_agent() {
-    log_section "Step 3: Install Agent"
+    log_minor "Step 3: Install Agent"
     
     local binary_path="$BUILD_DIR/$AGENT_BINARY"
     
@@ -644,7 +656,7 @@ install_agent() {
 # ============================================================================
 
 setup_configuration() {
-    log_section "Step 4: Configure Agent"
+    log_minor "Step 4: Configure Agent"
  
     # Load existing config if available (for potential merging)
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -692,7 +704,7 @@ EOF
 # ============================================================================
 
 verify_installation() {
-    log_section "Step 5: Verify Installation"
+    log_minor "Step 5: Verify Installation"
     
     log_substep "Checking Agent Binary"
     
@@ -734,7 +746,7 @@ verify_installation() {
 # ============================================================================
 
 uninstall_agent() {
-    log_section "Uninstalling Agent"
+    log_minor "Uninstalling Agent"
     
     log_substep "Stopping Agent Processes"
     
@@ -776,7 +788,7 @@ uninstall_agent() {
 # ============================================================================
 
 show_status() {
-    log_section "Agent Status"
+    log_minor "Agent Status"
     
     log_substep "Installation Status"
     
@@ -828,7 +840,7 @@ main() {
     # Check for sudo/root access
     check_sudo
     
-    log_section "Fluidity Agent Deployment"
+    log_header "Fluidity Agent Deployment"
     log_info "OS: $OS_TYPE"
     if [[ "$IS_WSL" == "true" ]]; then
         log_info "Environment: WSL (Windows Subsystem for Linux)"
@@ -837,7 +849,7 @@ main() {
     
     case "$ACTION" in
         deploy)
-            log_section "Step 1: Check Prerequisites"
+            log_minor "Step 1: Check Prerequisites"
             check_prerequisites
             
             build_agent

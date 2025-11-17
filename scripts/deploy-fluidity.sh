@@ -140,6 +140,28 @@ RESET='\033[0m'
 # LOGGING FUNCTIONS
 # ============================================================================
 
+log_header() {
+    echo ""
+    echo ""
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+}
+
+log_minor() {
+    echo ""
+    echo ""
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}================================================================================${RESET}"
+}
+
+log_substep() {
+    echo ""
+    echo ""
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
+}
+
 log_info() {
     echo "[INFO] $*"
 }
@@ -152,6 +174,10 @@ log_debug() {
 
 log_warn() {
     echo "[WARN] $*" >&2
+}
+
+log_success() {
+    echo "✓ $*"
 }
 
 log_error_start() {
@@ -573,7 +599,7 @@ main() {
     # Check AWS credentials availability
     check_aws_credentials
     
-    log_section "Fluidity Complete Deployment"
+    log_header "Fluidity Complete Deployment"
     log_info "Operating System: $OS_TYPE"
     log_info "Default install path: $DEFAULT_INSTALL_PATH"
     log_info "Default proxy port: $DEFAULT_LOCAL_PROXY_PORT"
@@ -589,7 +615,7 @@ main() {
             
             log_success "Complete Fluidity deployment finished successfully"
             log_info ""
-            log_section "Deployment Summary"
+            log_minor "Deployment Summary"
             
             log_substep "AWS Server Deployment"
             log_info "Region: $SERVER_REGION"
