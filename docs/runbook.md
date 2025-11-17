@@ -2,7 +2,7 @@
 
 Daily operations and troubleshooting for production Fluidity deployments.
 
-**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
+**Cross-Platform Note:** All AWS CLI commands and deployment scripts in this guide can be run from any OS (Windows/macOS/Linux). On Windows, prefix bash scripts with `wsl bash` when using PowerShell. For example: `wsl bash scripts/generate-certs.sh`
 
 ---
 

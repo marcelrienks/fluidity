@@ -106,10 +106,17 @@ curl -x http://127.0.0.1:8080 http://example.com
 
 Deploy server to AWS with automated scripts. Full details in [Infrastructure Guide](infrastructure.md).
 
-**Single command:**
-```bash
-./scripts/deploy-fluidity.sh deploy
+**Windows (PowerShell):**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy
 ```
+
+**macOS/Linux (Bash):**
+```bash
+sudo -E bash scripts/deploy-fluidity.sh deploy
+```
+
+**Important (for sudo users):** Use `sudo -E` to preserve environment variables (including AWS credentials). Without the `-E` flag, AWS credentials won't be passed to the script and deployment will fail.
 
 This automatically:
 - Detects AWS region, VPC, subnets, and your IP
@@ -118,9 +125,20 @@ This automatically:
 - Deploys CloudFormation stacks  
 - Deploys and configures agent with endpoints
 
-**With explicit parameters:**
+**With explicit parameters (Windows PowerShell):**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy `
+  --region us-east-1 `
+  --vpc-id vpc-12345678 `
+  --public-subnets subnet-11111111,subnet-22222222 `
+  --allowed-cidr 203.0.113.45/32 `
+  --server-ip 203.0.113.50 `
+  --local-proxy-port 8080
+```
+
+**With explicit parameters (macOS/Linux):**
 ```bash
-./scripts/deploy-fluidity.sh deploy \
+sudo -E bash scripts/deploy-fluidity.sh deploy \
   --region us-east-1 \
   --vpc-id vpc-12345678 \
   --public-subnets subnet-11111111,subnet-22222222 \
@@ -129,21 +147,35 @@ This automatically:
   --local-proxy-port 8080
 ```
 
-**Check status:**
-```bash
-./scripts/deploy-fluidity.sh status
+**Check status (Windows PowerShell):**
+```powershell
+wsl bash scripts/deploy-fluidity.sh status
 ```
 
-**Delete infrastructure:**
+**Check status (macOS/Linux):**
 ```bash
-./scripts/deploy-fluidity.sh delete
+sudo -E bash scripts/deploy-fluidity.sh status
+```
+
+**Delete infrastructure (Windows PowerShell):**
+```powershell
+wsl bash scripts/deploy-fluidity.sh delete
+```
+
+**Delete infrastructure (macOS/Linux):**
+```bash
+sudo -E bash scripts/deploy-fluidity.sh delete
 ```
 
 ---
 
 ## Deployment Automation Scripts
 
-The deployment automation system provides three modular bash scripts that work together:
+**Cross-Platform Compatibility:**
+The deployment automation system provides three modular bash scripts that work together. While these scripts can be run from any OS (Windows/macOS/Linux), they are **primarily intended for Windows users running PowerShell with WSL prefix**. The examples in this guide default to Windows PowerShell syntax, with alternative commands provided for macOS/Linux where relevant.
+
+**Windows PowerShell:** Use `wsl bash` prefix to run scripts in WSL  
+**macOS/Linux:** Run scripts directly without prefix
 
 ### Architecture Overview
 
@@ -196,13 +228,22 @@ User runs: deploy-fluidity.sh deploy
 --debug                     # Enable debug logging
 ```
 
-**Examples:**
+**Examples (Windows PowerShell):**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy                    # Full deployment
+wsl bash scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
+wsl bash scripts/deploy-fluidity.sh deploy --debug             # With debug output
+wsl bash scripts/deploy-fluidity.sh status                     # Check status
+wsl bash scripts/deploy-fluidity.sh delete                     # Delete infrastructure
+```
+
+**Examples (macOS/Linux):**
 ```bash
-./scripts/deploy-fluidity.sh deploy                    # Full deployment
-./scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
-./scripts/deploy-fluidity.sh deploy --debug             # With debug output
-./scripts/deploy-fluidity.sh status                     # Check status
-./scripts/deploy-fluidity.sh delete                     # Delete infrastructure
+sudo -E bash scripts/deploy-fluidity.sh deploy                    # Full deployment
+sudo -E bash scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
+sudo -E bash scripts/deploy-fluidity.sh deploy --debug             # With debug output
+sudo -E bash scripts/deploy-fluidity.sh status                     # Check status
+sudo -E bash scripts/deploy-fluidity.sh delete                     # Delete infrastructure
 ```
 
 ---
@@ -326,8 +367,14 @@ cat ~/.config/fluidity/agent.yaml
 
 Deploys everything with automatic defaults:
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh deploy
+sudo -E bash scripts/deploy-fluidity.sh deploy
 ```
 
 Output:
@@ -338,9 +385,29 @@ Output:
 
 ### Step-by-Step Deployment
 
+**Windows PowerShell:**
+
+**Step 1: Deploy server to AWS**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy-server --region us-west-2
+```
+
+**Step 2: Get server IP**
+```powershell
+# Wait for Fargate task to start, then get its public IP
+$SERVER_IP = "203.0.113.42"
+```
+
+**Step 3: Deploy agent with server**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
+```
+
+**macOS/Linux:**
+
 **Step 1: Deploy server to AWS**
 ```bash
-./scripts/deploy-fluidity.sh deploy-server --region us-west-2
+sudo -E bash scripts/deploy-fluidity.sh deploy-server --region us-west-2
 ```
 
 **Step 2: Get server IP**
@@ -351,47 +418,83 @@ SERVER_IP=203.0.113.42
 
 **Step 3: Deploy agent with server**
 ```bash
-./scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
+sudo -E bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
 ```
 
 ### Manual Server IP Deployment
 
 If server IP changes or Fargate task restarts:
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
+sudo -E bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
 ```
 
 Configuration updates automatically.
 
 ### Custom Installation Path
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
+sudo -E bash scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
 ```
 
 ### With Debug Logging
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy --debug
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh deploy --debug
+sudo -E bash scripts/deploy-fluidity.sh deploy --debug
 ```
 
 ### Deploy to Specific AWS Region
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy --region eu-west-1
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh deploy --region eu-west-1
+sudo -E bash scripts/deploy-fluidity.sh deploy --region eu-west-1
 ```
 
 ### Skip Agent Build (Use Existing Binary)
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy --skip-build
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh deploy --skip-build
+sudo -E bash scripts/deploy-fluidity.sh deploy --skip-build
 ```
 
 ### Check Deployment Status
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh status
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh status
+sudo -E bash scripts/deploy-fluidity.sh status
 ```
 
 Shows:
@@ -402,16 +505,28 @@ Shows:
 
 ### Delete AWS Infrastructure
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh delete
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-fluidity.sh delete
+sudo -E bash scripts/deploy-fluidity.sh delete
 ```
 
 Interactive confirmation required. Note: Agent files remain on system.
 
 ### Get Lambda Endpoint URLs
 
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-server.sh outputs
+```
+
+**macOS/Linux:**
 ```bash
-./scripts/deploy-server.sh outputs
+sudo -E bash scripts/deploy-server.sh outputs
 ```
 
 Or after deployment completes, endpoints are displayed automatically.
@@ -423,46 +538,70 @@ Or after deployment completes, endpoints are displayed automatically.
 ### Prerequisites Issues
 
 **"AWS CLI not found"**
-```bash
-# macOS
-brew install awscli
 
-# Linux
-sudo apt-get install awscli
-
-# Windows (WSL)
+Windows (PowerShell with WSL):
+```powershell
 wsl sudo apt-get install awscli
+```
+
+macOS:
+```bash
+brew install awscli
+```
+
+Linux:
+```bash
+sudo apt-get install awscli
 ```
 
 **"Docker not found"**
 - Install Docker Desktop: https://www.docker.com/products/docker-desktop
 
 **"jq not found"**
-```bash
-# macOS
-brew install jq
 
-# Linux
+Windows (PowerShell with WSL):
+```powershell
+wsl sudo apt-get install jq
+```
+
+macOS:
+```bash
+brew install jq
+```
+
+Linux:
+```bash
 sudo apt-get install jq
 ```
 
 ### Deployment Script Issues
 
 **"Certificates not found"**
+
+Windows (PowerShell with WSL):
+```powershell
+wsl bash scripts/generate-certs.sh
+```
+
+macOS/Linux:
 ```bash
 ./scripts/generate-certs.sh
 ```
 
 **"Required configuration missing: server_ip"**
 
-Solution: Provide server IP:
-```bash
-./scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
+Windows (PowerShell with WSL):
+```powershell
+wsl bash scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
+# Or if using orchestrator:
+wsl bash scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
 ```
 
-Or if using orchestrator:
+macOS/Linux:
 ```bash
-./scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
+sudo -E bash scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
+# Or if using orchestrator:
+sudo -E bash scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
 ```
 
 **"Failed to get AWS parameters"**
@@ -475,21 +614,39 @@ aws sts get-caller-identity
 ```
 
 **"Region could not be auto-detected"**
+
+Windows (PowerShell with WSL):
+```powershell
+wsl bash -c "aws configure set region us-east-1"
+# Or provide explicitly:
+wsl bash scripts/deploy-fluidity.sh deploy --region us-east-1
+```
+
+macOS/Linux:
 ```bash
 aws configure set region us-east-1
-
 # Or provide explicitly:
-./scripts/deploy-fluidity.sh deploy --region us-east-1
+sudo -E bash scripts/deploy-fluidity.sh deploy --region us-east-1
 ```
 
 **"Stack creation failed"**
+
+Windows (PowerShell with WSL):
+```powershell
+# Check CloudFormation events
+wsl aws cloudformation describe-stack-events --stack-name fluidity-fargate
+# Check with debug output
+wsl bash scripts/deploy-fluidity.sh deploy --debug
+# View detailed logs
+wsl aws logs tail /ecs/fluidity/server --follow
+```
+
+macOS/Linux:
 ```bash
 # Check CloudFormation events
 aws cloudformation describe-stack-events --stack-name fluidity-fargate
-
 # Check with debug output
-./scripts/deploy-fluidity.sh deploy --debug
-
+sudo -E bash scripts/deploy-fluidity.sh deploy --debug
 # View detailed logs
 aws logs tail /ecs/fluidity/server --follow
 ```

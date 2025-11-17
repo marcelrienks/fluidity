@@ -46,6 +46,8 @@ For detailed setup, see the [Deployment Guide](docs/deployment.md).
 ./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 ```
 
+**Note:** These commands use bash syntax. On Windows, run with WSL: `wsl bash scripts/generate-certs.sh` etc.
+
 ## Architecture
 **→ Full details:** [Architecture Documentation](docs/architecture.md)
 Fluidity uses a **client-server architecture** with mTLS authentication for secure tunneling through restrictive firewalls.

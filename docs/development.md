@@ -11,6 +11,8 @@ Quick setup:
 
 Installs: Go 1.21+, Make, Docker, OpenSSL, Node.js 18+, npm
 
+**Note for Windows Users:** All bash commands in this guide should be prefixed with `wsl bash` when running from PowerShell. For example: `wsl bash ./scripts/generate-certs.sh`
+
 ---
 
 ## Quick Setup

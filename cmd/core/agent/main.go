@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -86,12 +87,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		overrides["ca_cert_file"] = caCertFile
 	}
 
-	// Load configuration (resolve fallback only once)
-	if configFile == "" {
-		if _, err := os.Stat("./build/agent.yaml"); err == nil {
-			configFile = "./build/agent.yaml"
-		}
-	}
+	// Load configuration from deployment location
+	// The deployment script ensures agent.yaml is in the same directory as the binary
 	cfg, err := config.LoadConfig[agent.Config](configFile, overrides)
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
@@ -112,19 +109,17 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 	// Persist merged configuration only if --save specified
 	if saveConfig {
-		finalPath := configFile
-		if finalPath == "" { // choose a creation target if no file was resolved
-			if _, err := os.Stat("./build"); err == nil {
-				finalPath = "./build/agent.yaml"
-			} else {
-				home, _ := os.UserHomeDir()
-				finalPath = home + "/.config/fluidity/agent.yaml"
-			}
-		}
-		if err := config.SaveConfig(finalPath, cfg); err != nil {
-			logger.Warn("Failed to persist configuration", "file", finalPath, "error", err.Error())
+		// Save in same directory as binary
+		exePath, err := os.Executable()
+		if err != nil {
+			logger.Warn("Failed to determine binary location", "error", err.Error())
 		} else {
-			logger.Info("Configuration saved", "file", finalPath)
+			finalPath := filepath.Join(filepath.Dir(exePath), "agent.yaml")
+			if err := config.SaveConfig(finalPath, cfg); err != nil {
+				logger.Warn("Failed to persist configuration", "file", finalPath, "error", err.Error())
+			} else {
+				logger.Info("Configuration saved", "file", finalPath)
+			}
 		}
 	}
 

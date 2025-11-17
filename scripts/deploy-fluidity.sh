@@ -97,6 +97,10 @@ SERVER_REGION=""
 SERVER_PORT="8443"
 SERVER_IP_COMMAND=""
 
+# Agent installation details
+AGENT_INSTALL_PATH=""
+AGENT_CONFIG_PATH=""
+
 # Detect OS and set defaults
 case "$(uname -s)" in
     MINGW64_NT*|MSYS_NT*|CYGWIN*)
@@ -170,7 +174,32 @@ check_sudo_requirement() {
             echo "Sudo privileges required for agent deployment"
             echo ""
             echo "Please run this script with sudo:"
-            echo "  sudo $0 $@"
+            echo "  sudo -E $0 $@"
+            log_error_end
+            exit 1
+        fi
+    fi
+}
+
+check_aws_credentials() {
+    # Check if action requires AWS credentials
+    if [[ "$ACTION" == "deploy" || "$ACTION" == "deploy-server" || "$ACTION" == "delete" ]]; then
+        # Test if AWS credentials are available
+        if ! aws sts get-caller-identity &>/dev/null; then
+            log_error_start
+            echo "AWS credentials not found or not configured"
+            echo ""
+            echo "This can happen if:"
+            echo "  1. AWS credentials are not configured"
+            echo "  2. Running with sudo without the -E flag (environment variables not preserved)"
+            echo ""
+            echo "Solutions:"
+            echo "  Option 1: Configure AWS credentials first"
+            echo "    aws configure"
+            echo ""
+            echo "  Option 2: Run script with sudo -E to preserve environment variables"
+            echo "    sudo -E $0 $@"
+            echo ""
             log_error_end
             exit 1
         fi
@@ -370,6 +399,11 @@ deploy_server() {
         
         log_error_start
         echo "Server deployment failed"
+        echo ""
+        echo "If the error mentions AWS credentials, ensure you ran this command with:"
+        echo "  sudo -E $0 deploy"
+        echo ""
+        echo "The -E flag preserves environment variables including AWS credentials."
         log_error_end
         return 1
     fi
@@ -431,11 +465,29 @@ deploy_agent() {
     
     log_debug "Calling agent deployment script with: ${args[*]}"
     
-    # Run script (already running as sudo)
-    if bash "$agent_script" "${args[@]}"; then
+    # Run script and capture output (already running as sudo)
+    local agent_output
+    local temp_agent_output="/tmp/fluidity-deploy-agent-$$.log"
+    
+    if bash "$agent_script" "${args[@]}" 2>&1 | tee "$temp_agent_output"; then
+        agent_output=$(cat "$temp_agent_output")
+        rm -f "$temp_agent_output"
+        
+        # Extract agent installation details from output
+        AGENT_INSTALL_PATH=$(echo "$agent_output" | grep -oP 'Agent binary installed: \K[^\/\\]*(?:\/|\\).*' | head -1)
+        AGENT_CONFIG_PATH=$(echo "$agent_output" | grep -oP 'Configuration file (?:created|written): \K.*' | head -1)
+        
+        # Fallback to using INSTALL_PATH if extraction fails
+        if [[ -z "$AGENT_INSTALL_PATH" ]]; then
+            AGENT_INSTALL_PATH="$INSTALL_PATH"
+        fi
+        
         log_success "Agent deployment completed"
         return 0
     else
+        agent_output=$(cat "$temp_agent_output")
+        rm -f "$temp_agent_output"
+        
         log_error_start
         echo "Agent deployment failed"
         log_error_end
@@ -518,6 +570,9 @@ main() {
     # Check sudo requirement early
     check_sudo_requirement
     
+    # Check AWS credentials availability
+    check_aws_credentials
+    
     log_section "Fluidity Complete Deployment"
     log_info "Operating System: $OS_TYPE"
     log_info "Default install path: $DEFAULT_INSTALL_PATH"
@@ -530,25 +585,41 @@ main() {
             fi
             
             # Deploy agent with collected endpoints (IP can be provided manually or obtained from wake function later)
-            if ! deploy_agent; then
-                exit 1
-            fi
+        deploy_agent
             
             log_success "Complete Fluidity deployment finished successfully"
             log_info ""
-            log_info "Summary:"
-            log_info "  - Server deployed to AWS"
-            log_info "  - Agent deployed to: $INSTALL_PATH"
-            log_info "  - Configuration: $INSTALL_PATH/agent.yaml"
+            log_section "Deployment Summary"
+            
+            log_substep "AWS Server Deployment"
+            log_info "Region: $SERVER_REGION"
+            log_info "Wake Lambda: $WAKE_ENDPOINT"
+            log_info "Kill Lambda: $KILL_ENDPOINT"
+            log_info "Server Port: $SERVER_PORT"
+            log_info "Server IP: (Obtain from AWS console or use wake function)"
+            
+            log_substep "Local Agent Deployment"
+            log_info "Installation Path: $AGENT_INSTALL_PATH"
+            log_info "Configuration File: $AGENT_CONFIG_PATH"
+            log_info "Proxy Port: $LOCAL_PROXY_PORT"
+            
+            log_substep "Next Steps"
+            log_info "1. Update agent configuration with server IP (if not auto-detected):"
+            log_info "   Edit: $AGENT_CONFIG_PATH"
+            log_info "   Set server_ip to the Fargate task public IP"
             log_info ""
-            log_info "Next steps:"
-            log_info "1. Update agent config with server IP (optional - can be obtained from wake function):"
-            log_info "   - Edit: $INSTALL_PATH/agent.yaml"
-            log_info "   - Set server_ip to the Fargate task public IP"
-            log_info "   - Or let the agent obtain it from the wake function on first run"
+            log_info "2. Start the server (Fargate task):"
+            log_info "   aws ecs update-service --cluster fluidity --service fluidity-server --desired-count 1 --region $SERVER_REGION"
             log_info ""
-            log_info "2. Run the agent:"
-            log_info "   $INSTALL_PATH/$([[ "$OS_TYPE" == "windows" ]] && echo "fluidity-agent.exe" || echo "fluidity-agent")"
+            log_info "3. Start the agent:"
+            if [[ "$OS_TYPE" == "windows" ]]; then
+                log_info "   $AGENT_INSTALL_PATH\\fluidity-agent.exe"
+            else
+                log_info "   $AGENT_INSTALL_PATH/fluidity-agent"
+            fi
+            log_info ""
+            log_info "4. Test the connection:"
+            log_info "   curl -x http://127.0.0.1:$LOCAL_PROXY_PORT http://example.com"
             log_info ""
             ;;
         
@@ -575,8 +646,10 @@ main() {
             
             log_success "Agent deployment finished successfully"
             log_info ""
-            log_info "Agent installed to: $INSTALL_PATH"
-            log_info "Configuration: $INSTALL_PATH/agent.yaml"
+            log_section "Agent Deployment Summary"
+            log_info "Installation Path: $AGENT_INSTALL_PATH"
+            log_info "Configuration File: $AGENT_CONFIG_PATH"
+            log_info "Proxy Port: $LOCAL_PROXY_PORT"
             log_info ""
             ;;
         

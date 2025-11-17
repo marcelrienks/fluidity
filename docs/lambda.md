@@ -2,7 +2,7 @@
 
 Three Lambda functions manage Fluidity server lifecycle using **Lambda Function URLs** (no API Gateway) for on-demand operation.
 
-**Note for Windows users:** All commands in this guide should be run in WSL (Windows Subsystem for Linux).
+**Cross-Platform Note:** All bash scripts in this guide can be run from any OS (Windows/macOS/Linux). On Windows, prefix scripts with `wsl bash` when using PowerShell. For example: `wsl bash ./scripts/build-lambdas.sh`
 
 ---
 

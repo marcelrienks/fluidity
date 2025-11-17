@@ -236,13 +236,23 @@ validate_options() {
 check_prerequisites() {
     log_minor "Checking Prerequisites"
 
-    # Check Docker
-    if ! command -v docker &>/dev/null; then
-        log_error "Docker not found"
-        echo "Install from: https://www.docker.com/products/docker-desktop"
-        exit 1
+    # Detect if running in WSL
+    local is_wsl=false
+    if [[ "$(uname -s)" == "Linux" ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+        is_wsl=true
     fi
-    log_debug "Docker found: $(docker --version)"
+
+    # Check Docker - skip in WSL since Docker is Windows-only and accessed via daemon
+    if [[ "$is_wsl" == false ]]; then
+        if ! command -v docker &>/dev/null; then
+            log_error "Docker not found"
+            echo "Install from: https://www.docker.com/products/docker-desktop"
+            exit 1
+        fi
+        log_debug "Docker found: $(docker --version)"
+    else
+        log_debug "Running in WSL - Docker will be accessed via Windows Docker Desktop daemon"
+    fi
 
     # Helper: portable timed docker check (supports timeout, gtimeout, or plain)
     docker_ready() {
@@ -268,30 +278,22 @@ check_prerequisites() {
         log_info "Docker daemon is not accessible, attempting to start..."
         
         # Detect OS and attempt to start Docker
-        if [[ "$(uname -s)" == "Linux" ]]; then
-            # Linux: Check if running in WSL
-            if grep -qi microsoft /proc/version 2>/dev/null; then
-                log_info "WSL detected - attempting to start Docker Desktop via PowerShell"
-                # Run PowerShell in background to avoid blocking and signal issues
-                # Use nohup to completely detach from parent process
-                nohup powershell.exe -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe' -WindowStyle Hidden" >/dev/null 2>&1 &
-                local ps_pid=$!
-                log_debug "Docker Desktop start command sent (PID: $ps_pid)"
-                log_info "Giving Docker Desktop time to initialize..."
-                sleep 10
-            else
-                # Native Linux
-                log_info "Attempting to start Docker service..."
-                if command -v systemctl &>/dev/null; then
-                    sudo systemctl start docker
-                elif command -v service &>/dev/null; then
-                    sudo service docker start
-                else
-                    log_error "Cannot start Docker service automatically"
-                    echo "Please start Docker manually: sudo systemctl start docker"
-                    exit 1
-                fi
+        if [[ "$is_wsl" == true ]]; then
+            # WSL: Start Docker Desktop via PowerShell
+            log_info "WSL detected - attempting to start Docker Desktop via PowerShell"
+            # Use full path to powershell.exe (available in Windows system32)
+            local ps_exe="/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe"
+            if [[ ! -f "$ps_exe" ]]; then
+                ps_exe="powershell.exe"  # Fallback if path doesn't exist
             fi
+            # Start Docker Desktop silently in background
+            if ! "$ps_exe" -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe' -WindowStyle Hidden"; then
+                log_error "Failed to start Docker Desktop via PowerShell"
+                exit 1
+            fi
+            log_info "Docker Desktop startup command sent"
+            log_info "Giving Docker Desktop time to initialize..."
+            sleep 10
         elif [[ "$(uname -s)" == "Darwin" ]]; then
             # macOS
             log_info "macOS detected - attempting to start Docker Desktop"
@@ -300,6 +302,18 @@ check_prerequisites() {
                 echo "Please start Docker Desktop manually from Applications"
                 exit 1
             }
+        elif [[ "$(uname -s)" == "Linux" ]]; then
+            # Native Linux (non-WSL)
+            log_info "Attempting to start Docker service..."
+            if command -v systemctl &>/dev/null; then
+                sudo systemctl start docker
+            elif command -v service &>/dev/null; then
+                sudo service docker start
+            else
+                log_error "Cannot start Docker service automatically"
+                echo "Please start Docker manually: sudo systemctl start docker"
+                exit 1
+            fi
         else
             log_error "Docker daemon is not accessible"
             echo "Please start Docker Desktop manually"
