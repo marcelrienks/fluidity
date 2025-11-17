@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Fluidity - AWS Fargate (ECS) deployment for tunnel server with mTLS certificate management via AWS Secrets Manager.
-  Run ./scripts/manage-certs.sh to generate certificates before deploying.
+  Run ./scripts/generate-certs.sh to generate certificates before deploying.
   Set DesiredCount=0 when not in use (no charges), DesiredCount=1 to start (~$9/month for 24/7).
 
 Metadata:
@@ -93,38 +93,15 @@ Parameters:
     Description: CloudWatch Logs group name
   LogRetentionDays:
     Type: Number
-    Default: 14
+    Default: 7
     AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
-    Description: Log retention in days
-  CertPem:
+    Description: Log retention in days (7 recommended to minimize costs)
+  CertificatesSecretArn:
     Type: String
-    NoEcho: true
-    Description: Server certificate PEM (JSON-encoded string from deployment script)
-  KeyPem:
-    Type: String
-    NoEcho: true
-    Description: Server private key PEM (JSON-encoded string from deployment script)
-  CaPem:
-    Type: String
-    NoEcho: true
-    Description: CA certificate PEM (JSON-encoded string from deployment script)
+    Description: ARN of the Secrets Manager secret containing certificates (created externally)
 
 Resources:
-  # ============================================================================
-  # CERTIFICATE MANAGEMENT
-  # ============================================================================
-  
-  CertificatesSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub '${AWS::StackName}-certificates'
-      Description: TLS certificates for Fluidity server
-      SecretString: !Sub |
-        {
-          "cert_pem": ${CertPem},
-          "key_pem": ${KeyPem},
-          "ca_pem": ${CaPem}
-        }
+
   
   # ============================================================================
   # LOGGING
@@ -161,7 +138,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
-                Resource: !Ref CertificatesSecret
+                Resource: !Ref CertificatesSecretArn
       Path: '/'
 
   TaskRole:
@@ -225,22 +202,11 @@ Resources:
               Protocol: tcp
           Secrets:
             - Name: CERT_PEM
-              ValueFrom: !Sub '${CertificatesSecret}:cert_pem::'
+              ValueFrom: !Sub '${CertificatesSecretArn}:cert_pem::'
             - Name: KEY_PEM
-              ValueFrom: !Sub '${CertificatesSecret}:key_pem::'
+              ValueFrom: !Sub '${CertificatesSecretArn}:key_pem::'
             - Name: CA_PEM
-              ValueFrom: !Sub '${CertificatesSecret}:ca_pem::'
-          Environment:
-            - Name: USE_SECRETS_MANAGER
-              Value: 'true'
-          HealthCheck:
-            Command:
-              - CMD-SHELL
-              - curl -f http://localhost:8443/ || exit 1
-            Interval: 30
-            Timeout: 5
-            Retries: 3
-            StartPeriod: 60
+              ValueFrom: !Sub '${CertificatesSecretArn}:ca_pem::'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -250,12 +216,21 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
+    DependsOn:
+      - Cluster
+      - TaskDefinition
     Properties:
       Cluster: !Ref Cluster
       ServiceName: !Ref ServiceName
       LaunchType: FARGATE
       DesiredCount: !Ref DesiredCount
       TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: false
       NetworkConfiguration:
         AwsvpcConfiguration:
           Subnets: !Ref PublicSubnets
@@ -263,6 +238,7 @@ Resources:
           AssignPublicIp: !Ref AssignPublicIp
 
 Outputs:
+
   ClusterArn:
     Description: ECS Cluster ARN
     Value: !Ref Cluster
@@ -306,8 +282,8 @@ Outputs:
       Name: !Sub '${AWS::StackName}-ExecutionRoleArn'
   
   CertificateSecretArn:
-    Description: ARN of the Secrets Manager secret containing certificates
-    Value: !Ref CertificatesSecret
+    Description: ARN of the Secrets Manager secret containing certificates (externally managed)
+    Value: !Ref CertificatesSecretArn
     Export:
       Name: !Sub '${AWS::StackName}-CertificateSecretArn'
   

@@ -18,23 +18,26 @@ func LoadConfig[T any](configFile string, overrides map[string]interface{}) (*T,
 	if configFile != "" {
 		v.SetConfigFile(configFile)
 	} else {
-		// Look for config in current directory and home directory
-		v.SetConfigName("config")
-		v.SetConfigType("yaml")
-		v.AddConfigPath(".")
-		v.AddConfigPath("./configs")
-		v.AddConfigPath("$HOME/.fluidity")
+		// Look for config in installation directory (same location as binary)
+		// This is the standard location set by the deployment script
+		exePath, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine binary location: %w", err)
+		}
+		exeDir := filepath.Dir(exePath)
+		configPath := filepath.Join(exeDir, "agent.yaml")
+		v.SetConfigFile(configPath)
 	}
 
 	// Set defaults
 	setDefaults(v)
 
-	// Read config file if it exists
+	// Read config file (required - config must be in installation directory)
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-		// Config file not found is OK, we'll use defaults and environment variables
+		return nil, fmt.Errorf("configuration file not found at expected location. The binary expects 'agent.yaml' in the same directory as the executable")
 	}
 
 	// Apply CLI overrides

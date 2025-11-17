@@ -11,6 +11,10 @@ Parameters:
     Type: String
     Description: S3 key prefix for Lambda packages
     Default: 'fluidity/'
+  BuildVersion:
+    Type: String
+    Description: Build version for Lambda ZIP filenames
+    Default: ''
   
   ECSClusterName:
     Type: String
@@ -90,26 +94,7 @@ Parameters:
     MinValue: 1
     MaxValue: 100
   
-  APIThrottleBurstLimit:
-    Type: Number
-    Description: Maximum API request burst rate
-    Default: 20
-    MinValue: 1
-    MaxValue: 10000
-  
-  APIThrottleRateLimit:
-    Type: Number
-    Description: Steady-state API request rate limit (requests per second)
-    Default: 3
-    MinValue: 1
-    MaxValue: 10000
-  
-  APIQuotaLimit:
-    Type: Number
-    Description: Maximum requests per month per API key
-    Default: 300
-    MinValue: 1
-    MaxValue: 1000000
+
 
 Resources:
   # ============================================================
@@ -183,9 +168,6 @@ Resources:
                 Action:
                   - cloudwatch:GetMetricData
                 Resource: '*'
-                Condition:
-                  StringEquals:
-                    cloudwatch:namespace: Fluidity
       Tags:
         - Key: Application
           Value: Fluidity
@@ -229,6 +211,7 @@ Resources:
   
   WakeLambdaFunction:
     Type: AWS::Lambda::Function
+    DependsOn: WakeLambdaLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-wake'
       Description: 'Wakes the Fluidity ECS service by setting DesiredCount to 1'
@@ -244,7 +227,7 @@ Resources:
           LOG_LEVEL: info
       Code:
         S3Bucket: !Ref LambdaS3Bucket
-        S3Key: !Sub '${LambdaS3KeyPrefix}wake.zip'
+        S3Key: !Sub '${LambdaS3KeyPrefix}wake-${BuildVersion}.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -255,6 +238,7 @@ Resources:
   
   SleepLambdaFunction:
     Type: AWS::Lambda::Function
+    DependsOn: SleepLambdaLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-sleep'
       Description: 'Checks CloudWatch metrics and scales down ECS service if idle'
@@ -272,7 +256,7 @@ Resources:
           LOG_LEVEL: info
       Code:
         S3Bucket: !Ref LambdaS3Bucket
-        S3Key: !Sub '${LambdaS3KeyPrefix}sleep.zip'
+        S3Key: !Sub '${LambdaS3KeyPrefix}sleep-${BuildVersion}.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -283,6 +267,7 @@ Resources:
   
   KillLambdaFunction:
     Type: AWS::Lambda::Function
+    DependsOn: KillLambdaLogGroup
     Properties:
       FunctionName: !Sub '${AWS::StackName}-kill'
       Description: 'Immediately stops the Fluidity ECS service by setting DesiredCount to 0'
@@ -298,7 +283,7 @@ Resources:
           LOG_LEVEL: info
       Code:
         S3Bucket: !Ref LambdaS3Bucket
-        S3Key: !Sub '${LambdaS3KeyPrefix}kill.zip'
+        S3Key: !Sub '${LambdaS3KeyPrefix}kill-${BuildVersion}.zip'
       Tags:
         - Key: Application
           Value: Fluidity
@@ -404,264 +389,67 @@ Resources:
       SourceArn: !GetAtt KillScheduleRule.Arn
   
   # ============================================================
-  # API Gateway - REST API with Full Features
+  # CloudWatch Log Groups
   # ============================================================
   
-  # CloudWatch Logs Role for API Gateway
-  APIGatewayLogsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${AWS::StackName}-api-gateway-logs-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: apigateway.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
-  
-  # Account-level setting for API Gateway logging
-  APIGatewayAccount:
-    Type: AWS::ApiGateway::Account
-    Properties:
-      CloudWatchRoleArn: !GetAtt APIGatewayLogsRole.Arn
-  
-  # CloudWatch Log Groups
-  APIExecutionLogGroup:
+  WakeLambdaLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
     Properties:
-      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-execution'
-      RetentionInDays: 30
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-wake'
+      RetentionInDays: 7
   
-  APIAccessLogGroup:
+  SleepLambdaLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
     Properties:
-      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}-access'
-      RetentionInDays: 30
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-sleep'
+      RetentionInDays: 7
   
-  # REST API
-  FluidityAPI:
-    Type: AWS::ApiGateway::RestApi
-    DependsOn: APIGatewayAccount
+  KillLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
     Properties:
-      Name: !Sub '${AWS::StackName}-api'
-      Description: 'Fluidity Lambda Control Plane REST API'
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
-      ApiKeySourceType: HEADER
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-kill'
+      RetentionInDays: 7
   
-  # Request Validator
-  RequestValidator:
-    Type: AWS::ApiGateway::RequestValidator
-    Properties:
-      Name: !Sub '${AWS::StackName}-request-validator'
-      RestApiId: !Ref FluidityAPI
-      ValidateRequestBody: true
-      ValidateRequestParameters: true
+  # ============================================================
+  # Lambda Function URLs
+  # ============================================================
   
-  # Request/Response Models
-  WakeRequestModel:
-    Type: AWS::ApiGateway::Model
+  # Wake Lambda Function URL
+  WakeLambdaFunctionUrl:
+    Type: AWS::Lambda::Url
     Properties:
-      RestApiId: !Ref FluidityAPI
-      Name: WakeRequest
-      Description: 'Wake Lambda request schema'
-      ContentType: application/json
-      Schema:
-        $schema: 'http://json-schema.org/draft-04/schema#'
-        type: object
-        properties:
-          clusterName:
-            type: string
-            minLength: 1
-          serviceName:
-            type: string
-            minLength: 1
+      TargetFunctionArn: !GetAtt WakeLambdaFunction.Arn
+      AuthType: NONE  # Public URL; authentication handled at agent level with x-api-key header
+      Cors:
+        AllowCredentials: true
+        AllowMethods:
+          - POST
+        AllowOrigins:
+          - '*'
+        ExposeHeaders:
+          - Content-Length
+          - Content-Type
+        MaxAge: 300
   
-  KillRequestModel:
-    Type: AWS::ApiGateway::Model
+  # Kill Lambda Function URL
+  KillLambdaFunctionUrl:
+    Type: AWS::Lambda::Url
     Properties:
-      RestApiId: !Ref FluidityAPI
-      Name: KillRequest
-      Description: 'Kill Lambda request schema'
-      ContentType: application/json
-      Schema:
-        $schema: 'http://json-schema.org/draft-04/schema#'
-        type: object
-        properties:
-          clusterName:
-            type: string
-            minLength: 1
-          serviceName:
-            type: string
-            minLength: 1
-  
-  ResponseModel:
-    Type: AWS::ApiGateway::Model
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      Name: LambdaResponse
-      Description: 'Lambda response schema'
-      ContentType: application/json
-      Schema:
-        $schema: 'http://json-schema.org/draft-04/schema#'
-        type: object
-        required:
-          - statusCode
-        properties:
-          statusCode:
-            type: integer
-          message:
-            type: string
-          estimatedStartTime:
-            type: string
-  
-  # /wake Resource
-  WakeResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      ParentId: !GetAtt FluidityAPI.RootResourceId
-      PathPart: wake
-  
-  WakeMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      ResourceId: !Ref WakeResource
-      HttpMethod: POST
-      AuthorizationType: NONE
-      ApiKeyRequired: true
-      RequestValidatorId: !Ref RequestValidator
-      RequestModels:
-        application/json: !Ref WakeRequestModel
-      MethodResponses:
-        - StatusCode: 200
-          ResponseModels:
-            application/json: !Ref ResponseModel
-        - StatusCode: 400
-        - StatusCode: 500
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WakeLambdaProdAlias}/invocations'
-        IntegrationResponses:
-          - StatusCode: 200
-  
-  WakeLambdaAPIPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WakeLambdaProdAlias
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${FluidityAPI}/*/POST/wake'
-  
-  # /kill Resource
-  KillResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      ParentId: !GetAtt FluidityAPI.RootResourceId
-      PathPart: kill
-  
-  KillMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      ResourceId: !Ref KillResource
-      HttpMethod: POST
-      AuthorizationType: NONE
-      ApiKeyRequired: true
-      RequestValidatorId: !Ref RequestValidator
-      RequestModels:
-        application/json: !Ref KillRequestModel
-      MethodResponses:
-        - StatusCode: 200
-          ResponseModels:
-            application/json: !Ref ResponseModel
-        - StatusCode: 400
-        - StatusCode: 500
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${KillLambdaProdAlias}/invocations'
-        IntegrationResponses:
-          - StatusCode: 200
-  
-  KillLambdaAPIPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref KillLambdaProdAlias
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${FluidityAPI}/*/POST/kill'
-  
-  # API Deployment
-  APIDeployment:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn:
-      - WakeMethod
-      - KillMethod
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      Description: 'Production deployment'
-  
-  # API Stage with Logging and Throttling
-  APIStage:
-    Type: AWS::ApiGateway::Stage
-    Properties:
-      RestApiId: !Ref FluidityAPI
-      DeploymentId: !Ref APIDeployment
-      StageName: prod
-      Description: 'Production stage with full logging and throttling'
-      MethodSettings:
-        - ResourcePath: '/*'
-          HttpMethod: '*'
-          LoggingLevel: INFO
-          DataTraceEnabled: true
-          MetricsEnabled: true
-          ThrottlingBurstLimit: !Ref APIThrottleBurstLimit
-          ThrottlingRateLimit: !Ref APIThrottleRateLimit
-      AccessLogSetting:
-        DestinationArn: !GetAtt APIAccessLogGroup.Arn
-        Format: '$context.requestId $context.identity.sourceIp $context.identity.caller $context.identity.user [$context.requestTime] "$context.httpMethod $context.resourcePath $context.protocol" $context.status $context.responseLength $context.error.message $context.error.messageString'
-  
-  # API Key
-  FluidityAPIKey:
-    Type: AWS::ApiGateway::ApiKey
-    DependsOn: APIStage
-    Properties:
-      Name: !Sub '${AWS::StackName}-api-key'
-      Description: 'API key for Fluidity Lambda Control Plane'
-      Enabled: true
-  
-  # Usage Plan with Quota and Throttling
-  FluidityUsagePlan:
-    Type: AWS::ApiGateway::UsagePlan
-    DependsOn: APIStage
-    Properties:
-      UsagePlanName: !Sub '${AWS::StackName}-usage-plan'
-      Description: 'Usage plan for Fluidity API with quotas and throttling'
-      ApiStages:
-        - ApiId: !Ref FluidityAPI
-          Stage: !Ref APIStage
-      Throttle:
-        BurstLimit: !Ref APIThrottleBurstLimit
-        RateLimit: !Ref APIThrottleRateLimit
-      Quota:
-        Limit: !Ref APIQuotaLimit
-        Period: MONTH
-  
-  # Associate API Key with Usage Plan
-  UsagePlanKey:
-    Type: AWS::ApiGateway::UsagePlanKey
-    Properties:
-      KeyId: !Ref FluidityAPIKey
-      KeyType: API_KEY
-      UsagePlanId: !Ref FluidityUsagePlan
+      TargetFunctionArn: !GetAtt KillLambdaFunction.Arn
+      AuthType: NONE  # Public URL; authentication handled at agent level with x-api-key header
+      Cors:
+        AllowCredentials: true
+        AllowMethods:
+          - POST
+        AllowOrigins:
+          - '*'
+        ExposeHeaders:
+          - Content-Length
+          - Content-Type
+        MaxAge: 300
 
   # ========================================
   # Monitoring & Observability
@@ -831,39 +619,17 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-kill-lambda-prod-alias-arn'
   
-  APIEndpoint:
-    Description: API Gateway endpoint URL
-    Value: !Sub 'https://${FluidityAPI}.execute-api.${AWS::Region}.amazonaws.com/prod'
-    Export:
-      Name: !Sub '${AWS::StackName}-api-endpoint'
-  
   WakeAPIEndpoint:
-    Description: Full URL to invoke Wake Lambda
-    Value: !Sub 'https://${FluidityAPI}.execute-api.${AWS::Region}.amazonaws.com/prod/wake'
+    Description: Full URL to invoke Wake Lambda Function URL
+    Value: !GetAtt WakeLambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-wake-api-endpoint'
   
   KillAPIEndpoint:
-    Description: Full URL to invoke Kill Lambda
-    Value: !Sub 'https://${FluidityAPI}.execute-api.${AWS::Region}.amazonaws.com/prod/kill'
-  
-  APIKeyId:
-    Description: API Key ID (use AWS CLI to get the actual key value)
-    Value: !Ref FluidityAPIKey
+    Description: Full URL to invoke Kill Lambda Function URL
+    Value: !GetAtt KillLambdaFunctionUrl.FunctionUrl
     Export:
-      Name: !Sub '${AWS::StackName}-api-key-id'
-  
-  UsagePlanId:
-    Description: API Usage Plan ID
-    Value: !Ref FluidityUsagePlan
-    Export:
-      Name: !Sub '${AWS::StackName}-usage-plan-id'
-  
-  APIExecutionLogGroup:
-    Description: CloudWatch Log Group for API Gateway execution logs
-    Value: !Ref APIExecutionLogGroup
-  
-  APIAccessLogGroup:
-    Description: CloudWatch Log Group for API Gateway access logs
-    Value: !Ref APIAccessLogGroup
+      Name: !Sub '${AWS::StackName}-kill-api-endpoint'
   
   SleepScheduleRuleName:
     Description: Name of the EventBridge rule for Sleep Lambda

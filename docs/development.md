@@ -1,22 +1,41 @@
 # Development Guide
 
+## Prerequisites
+
+**See [Deployment Guide](deployment.md) for complete setup.**
+
+Quick setup:
+```bash
+./scripts/setup-prereq-<platform>.sh  # Windows (WSL), Linux, macOS
+```
+
+Installs: Go 1.21+, Make, Docker, OpenSSL, Node.js 18+, npm
+
+**Note for Windows Users:** All bash commands in this guide should be prefixed with `wsl bash` when running from PowerShell. For example: `wsl bash ./scripts/generate-certs.sh`
+
+---
+
 ## Quick Setup
 
 **1. Generate certificates:**
 ```bash
-./scripts/manage-certs.sh              # Linux/macOS
-.\scripts\manage-certs.ps1             # Windows
+./scripts/generate-certs.sh
 ```
 
 **2. Build:**
 ```bash
-make -f Makefile.<platform> build      # platform: win, macos, linux
+./scripts/build-core.sh                # Build both server and agent
+# Or build individually:
+./scripts/build-core.sh --server       # Build only server
+./scripts/build-core.sh --agent        # Build only agent
+# Or build for Linux (Docker/deployment):
+./scripts/build-core.sh --linux
 ```
 
 **3. Run:**
 ```bash
-make -f Makefile.<platform> run-server-local  # Terminal 1
-make -f Makefile.<platform> run-agent-local   # Terminal 2
+./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
+./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 ```
 
 **4. Test:**
@@ -112,8 +131,7 @@ go test ./internal/integration/... -v
 
 **E2E tests:**
 ```bash
-./scripts/test-local.sh               # Linux/macOS
-.\scripts\test-local.ps1              # Windows
+./scripts/test-local.sh               # All platforms (use WSL on Windows)
 ```
 
 See [Testing Guide](testing.md) for details.
@@ -132,8 +150,13 @@ See [Testing Guide](testing.md) for details.
 
 **Test changes:**
 ```bash
-./scripts/test-local.sh              # Quick local test
-./scripts/test-docker.sh             # Docker validation
+# Run tests
+go test ./... -v
+
+# Build and run locally
+./scripts/build-core.sh
+./build/fluidity-server -config configs/server.local.yaml
+./build/fluidity-agent -config configs/agent.local.yaml
 ```
 
 ### Debugging
@@ -189,5 +212,5 @@ Agent reconnects automatically on connection loss (5s intervals, 90s max).
 
 - [Testing Guide](testing.md) - Test strategy
 - [Architecture](architecture.md) - System design
-- [Certificate Management](certificate-management.md) - TLS setup
+- [Certificate Management](certificate.md) - TLS setup
 - [Deployment Guide](deployment.md) - Deployment options

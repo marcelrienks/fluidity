@@ -2,6 +2,10 @@
 
 Daily operations and troubleshooting for production Fluidity deployments.
 
+**Cross-Platform Note:** All AWS CLI commands and deployment scripts in this guide can be run from any OS (Windows/macOS/Linux). On Windows, prefix bash scripts with `wsl bash` when using PowerShell. For example: `wsl bash scripts/generate-certs.sh`
+
+---
+
 ## Daily Operations
 
 ### Start Server
@@ -101,18 +105,9 @@ aws logs tail /aws/lambda/fluidity-wake --since 10m
 - ECS service name mismatch
 - API Gateway authentication
 
-### High Costs
+### Resource Optimization
 
-**Check usage:**
-```bash
-aws ce get-cost-and-usage \
-  --time-period Start=2025-10-01,End=2025-10-31 \
-  --granularity DAILY \
-  --metrics UnblendedCost \
-  --filter file://filter.json
-```
-
-**Optimize:**
+**Best practices:**
 - Ensure Sleep Lambda is running
 - Set `desiredCount=0` when not in use
 - Adjust idle threshold
@@ -123,10 +118,14 @@ aws ce get-cost-and-usage \
 
 ```bash
 # Generate new certificates
-./scripts/manage-certs.sh --save-to-secrets
+./scripts/generate-certs.sh
 
-# Rebuild and push image
-make -f Makefile.<platform> docker-build-server
+# Build Linux binary and Docker image
+./scripts/build-core.sh --server --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+
+# Tag and push to ECR
+docker tag fluidity-server:latest <ecr-uri>
 docker push <ecr-uri>
 
 # Update service (forces new deployment)
@@ -152,7 +151,6 @@ cd scripts
 **Set up CloudWatch Alarms:**
 - Lambda errors > 5 in 5 minutes
 - ECS service unhealthy
-- High cost anomaly
 
 ## Backup
 

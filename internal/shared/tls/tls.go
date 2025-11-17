@@ -93,6 +93,38 @@ func LoadServerTLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) 
 	return config, nil
 }
 
+// LoadServerTLSConfigFromPEM loads server-side mTLS configuration from PEM bytes (e.g., from environment variables)
+func LoadServerTLSConfigFromPEM(certPEM, keyPEM, caPEM []byte) (*tls.Config, error) {
+	// Load server certificate from PEM bytes
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load server certificate from PEM: %w", err)
+	}
+
+	// Create CA cert pool from PEM bytes
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("failed to parse CA certificate from PEM")
+	}
+
+	config := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caCertPool,
+		MinVersion:   tls.VersionTLS13, // Enforce TLS 1.3 (matches docs)
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"num_certificates": len(config.Certificates),
+		"client_auth":      "RequireAndVerifyClientCert",
+		"has_client_cas":   config.ClientCAs != nil,
+		"min_version":      "TLS 1.3",
+		"source":           "PEM bytes (environment variables)",
+	}).Info("Created server TLS config")
+
+	return config, nil
+}
+
 // GetCertificateInfo extracts certificate information for logging
 func GetCertificateInfo(cert *x509.Certificate) map[string]interface{} {
 	return map[string]interface{}{

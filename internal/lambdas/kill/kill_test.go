@@ -2,6 +2,7 @@ package kill
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -51,12 +52,28 @@ func TestKillSuccess(t *testing.T) {
 		t.Error("Expected UpdateService to be called")
 	}
 
-	if response.Status != "killed" {
-		t.Errorf("Expected status 'killed', got: %s", response.Status)
+	// Response is wrapped in FunctionURLResponse
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
 	}
 
-	if response.DesiredCount != 0 {
-		t.Errorf("Expected desiredCount 0, got: %d", response.DesiredCount)
+	if functionURLResp.StatusCode != 200 {
+		t.Errorf("Expected StatusCode 200, got %d", functionURLResp.StatusCode)
+	}
+
+	// Parse the wrapped response
+	var killResp KillResponse
+	if err := json.Unmarshal([]byte(functionURLResp.Body), &killResp); err != nil {
+		t.Fatalf("Failed to parse response body: %v", err)
+	}
+
+	if killResp.Status != "killed" {
+		t.Errorf("Expected status 'killed', got '%s'", killResp.Status)
+	}
+
+	if killResp.DesiredCount != 0 {
+		t.Errorf("Expected DesiredCount=0, got %d", killResp.DesiredCount)
 	}
 }
 
@@ -78,12 +95,12 @@ func TestKillWithOverrides(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "default-cluster", "default-service")
 
-	request := KillRequest{
-		ClusterName: "override-cluster",
-		ServiceName: "override-service",
+	requestJSON := map[string]interface{}{
+		"cluster_name": "override-cluster",
+		"service_name": "override-service",
 	}
 
-	_, err := handler.HandleRequest(context.Background(), request)
+	_, err := handler.HandleRequest(context.Background(), requestJSON)
 	if err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
@@ -99,14 +116,20 @@ func TestKillECSError(t *testing.T) {
 
 	handler := NewHandlerWithClient(mockECS, "test-cluster", "test-service")
 
-	_, err := handler.HandleRequest(context.Background(), KillRequest{})
-	if err == nil {
-		t.Fatal("Expected error from ECS API, got nil")
+	response, err := handler.HandleRequest(context.Background(), map[string]interface{}{})
+	if err != nil {
+		// Errors are returned wrapped in FunctionURLResponse with statusCode 500
+		t.Fatalf("Expected error wrapped in response, got error: %v", err)
 	}
 
-	expectedError := "failed to update ECS service: ECS service not found"
-	if err.Error() != expectedError {
-		t.Errorf("Expected error '%s', got: %v", expectedError, err)
+	// Check if response is error response
+	functionURLResp, ok := response.(FunctionURLResponse)
+	if !ok {
+		t.Fatalf("Expected FunctionURLResponse, got %T", response)
+	}
+
+	if functionURLResp.StatusCode != 500 {
+		t.Errorf("Expected error status 500, got %d", functionURLResp.StatusCode)
 	}
 }
 
@@ -131,8 +154,18 @@ func TestKillIdempotency(t *testing.T) {
 			t.Fatalf("Call %d: Expected no error, got: %v", i+1, err)
 		}
 
-		if response.Status != "killed" {
-			t.Errorf("Call %d: Expected status 'killed', got: %s", i+1, response.Status)
+		functionURLResp, ok := response.(FunctionURLResponse)
+		if !ok {
+			t.Fatalf("Call %d: Expected FunctionURLResponse, got %T", i+1, response)
+		}
+
+		var killResp KillResponse
+		if err := json.Unmarshal([]byte(functionURLResp.Body), &killResp); err != nil {
+			t.Fatalf("Call %d: Failed to parse response body: %v", i+1, err)
+		}
+
+		if killResp.Status != "killed" {
+			t.Errorf("Call %d: Expected status 'killed', got: %s", i+1, killResp.Status)
 		}
 	}
 

@@ -102,7 +102,23 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Load TLS configuration (with Secrets Manager support if enabled)
 	var tlsConfig *tls.Config
 
-	if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
+	// First, check if certificates are provided via environment variables (from ECS Secrets)
+	certPEM := os.Getenv("CERT_PEM")
+	keyPEM := os.Getenv("KEY_PEM")
+	caPEM := os.Getenv("CA_PEM")
+
+	if certPEM != "" && keyPEM != "" && caPEM != "" {
+		logger.Info("Using TLS certificates from environment variables (ECS Secrets)")
+		var tlsErr error
+		tlsConfig, tlsErr = tlsutil.LoadServerTLSConfigFromPEM(
+			[]byte(certPEM),
+			[]byte(keyPEM),
+			[]byte(caPEM),
+		)
+		if tlsErr != nil {
+			return fmt.Errorf("failed to load TLS configuration from environment variables: %w", tlsErr)
+		}
+	} else if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
 		logger.Info("Using AWS Secrets Manager for TLS certificates",
 			"secret_name", cfg.SecretsManagerName)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

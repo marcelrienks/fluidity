@@ -1,16 +1,35 @@
 # AWS Fargate Deployment
 
-Deploy Fluidity server to AWS ECS using Fargate.
+Deploy Fluidity server to AWS ECS using Fargate for serverless container execution.
+
+---
 
 ## Architecture
 
-- ECS Cluster (Fargate)
-- Task Definition (0.25 vCPU, 512 MB)
-- Service with dynamic `desiredCount` (0 = stopped, 1 = running)
-- Public IP + Security Group (port 8443)
-- CloudWatch Logs
+```
+┌─────────────────────────────────────┐
+│  AWS VPC                             │
+│  ┌───────────────────────────────┐  │
+│  │  ECS Cluster (Fargate)        │  │
+│  │  ┌─────────────────────────┐  │  │
+│  │  │ ECS Service             │  │  │
+│  │  │ ├─ Fargate Task         │  │  │
+│  │  │ │  └─ fluidity-server   │  │  │
+│  │  │ │     (0.25 vCPU, 512MB)│  │  │
+│  │  │ └─ Public IP            │  │  │
+│  │  └─────────────────────────┘  │  │
+│  ├─ CloudWatch Logs                │  │
+│  └─ Security Group (port 8443)     │  │
+└─────────────────────────────────────┘
+```
 
-**Cost:** ~$0.012/hour (~$0.50-3/month depending on usage)
+**Benefits:**
+- No EC2 instance management
+- Automatic scaling
+- Pay per second
+- CloudWatch integration
+
+---
 
 ## Quick Deployment
 
@@ -25,7 +44,8 @@ aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
 
 # Build and push
-make -f Makefile.<platform> docker-build-server
+./scripts/build-core.sh --linux
+docker build -f deployments/server/Dockerfile -t fluidity-server .
 docker tag fluidity-server:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
 ```
@@ -38,52 +58,43 @@ cd scripts
 .\deploy-fluidity.ps1 -Environment prod -Action deploy  # Windows
 ```
 
-Or manually create:
-- ECS Cluster
-- Task Definition (see template below)
-- Service
-
-### 3. Start/Stop
-
-**Start:**
-```bash
-aws ecs update-service \
-  --cluster fluidity \
-  --service fluidity-server \
-  --desired-count 1
-```
-
-**Stop:**
-```bash
-aws ecs update-service \
-  --cluster fluidity \
-  --service fluidity-server \
-  --desired-count 0
-```
-
-### 4. Get Public IP
+### 3. Get Public IP
 
 ```bash
-# Get task ARN
-TASK_ARN=$(aws ecs list-tasks \
-  --cluster fluidity \
-  --service-name fluidity-server \
-  --query 'taskArns[0]' \
-  --output text)
+# Get ENI from task
+aws ecs describe-tasks \
+  --cluster fluidity-prod \
+  --tasks $(aws ecs list-tasks --cluster fluidity-prod --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].attachments[0].details[1].value' \
+  --output text
 
-# Get ENI ID
-ENI_ID=$(aws ecs describe-tasks \
-  --cluster fluidity \
-  --tasks $TASK_ARN \
-  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
-  --output text)
-
-# Get public IP
+# Get IP from ENI
 aws ec2 describe-network-interfaces \
-  --network-interface-ids $ENI_ID \
+  --network-interface-ids <eni-id> \
   --query 'NetworkInterfaces[0].Association.PublicIp' \
   --output text
 ```
+
+### 4. Configure Local Agent
+
+**`configs/agent.yaml`:**
+```yaml
+server_ip: "<fargate-public-ip>"
+server_port: 8443
+local_proxy_port: 8080
+cert_file: "./certs/client.crt"
+key_file: "./certs/client.key"
+ca_cert_file: "./certs/ca.crt"
+```
+
+### 5. Test
+
+```bash
+./build/fluidity-agent -config configs/agent.yaml
+curl -x http://127.0.0.1:8080 http://example.com
+```
+
+---
 
 ## Task Definition Template
 
@@ -101,6 +112,7 @@ aws ec2 describe-network-interfaces \
     "essential": true,
     "portMappings": [{
       "containerPort": 8443,
+      "hostPort": 8443,
       "protocol": "tcp"
     }],
     "logConfiguration": {
@@ -110,10 +122,28 @@ aws ec2 describe-network-interfaces \
         "awslogs-region": "us-east-1",
         "awslogs-stream-prefix": "ecs"
       }
-    }
+    },
+    "mountPoints": [{
+      "sourceVolume": "certs",
+      "containerPath": "/root/certs",
+      "readOnly": true
+    }, {
+      "sourceVolume": "config",
+      "containerPath": "/root/config",
+      "readOnly": true
+    }]
+  }],
+  "volumes": [{
+    "name": "certs",
+    "host": {}
+  }, {
+    "name": "config",
+    "host": {}
   }]
 }
 ```
+
+---
 
 ## Manual Setup Steps
 
@@ -163,40 +193,136 @@ aws ecs create-service \
   --task-definition fluidity-server \
   --desired-count 0 \
   --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[$SG_ID],assignPublicIp=ENABLED}"
+  --network-configuration "awsvpcConfiguration={subnets=[<subnet-id>],securityGroups=[<sg-id>],assignPublicIp=ENABLED}" \
+  --load-balancers targetGroupArn=<target-group-arn>,containerName=fluidity-server,containerPort=8443
 ```
 
-## Configure Local Agent
+---
 
-```yaml
-# configs/agent.yaml
-server_ip: "<public-ip-from-step-4>"
-server_port: 8443
-local_proxy_port: 8080
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_cert_file: "./certs/ca.crt"
+## Start/Stop Server
+
+### Start Server
+
+```bash
+aws ecs update-service \
+  --cluster fluidity \
+  --service fluidity-server \
+  --desired-count 1
 ```
 
-## Troubleshooting
+### Stop Server
 
-**Task stuck in PENDING:**
-- Check subnets are public
-- Verify `assignPublicIp=ENABLED`
-- Check Fargate capacity
+```bash
+aws ecs update-service \
+  --cluster fluidity \
+  --service fluidity-server \
+  --desired-count 0
+```
 
-**Cannot connect:**
-- Verify Security Group allows your IP
-- Check task is RUNNING
-- Verify certificates match
+### Check Status
 
-**View logs:**
+```bash
+aws ecs describe-services \
+  --cluster fluidity \
+  --services fluidity-server \
+  --query 'services[0].{Running:runningCount,Desired:desiredCount}'
+```
+
+---
+
+## Monitoring
+
+### View Logs
+
 ```bash
 aws logs tail /ecs/fluidity/server --follow
 ```
 
+### CloudWatch Metrics
+
+```bash
+aws cloudwatch list-metrics \
+  --namespace AWS/ECS \
+  --dimensions Name=ServiceName,Value=fluidity-server
+```
+
+### Health Checks
+
+```bash
+aws ecs describe-tasks \
+  --cluster fluidity \
+  --tasks $(aws ecs list-tasks --cluster fluidity --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].{Status:lastStatus,Health:healthStatus}'
+```
+
+---
+
+## Troubleshooting
+
+### Task Won't Start
+
+**Check logs:**
+```bash
+aws logs tail /ecs/fluidity/server --follow
+```
+
+**Common issues:**
+- Image not found in ECR
+- Insufficient capacity (try different AZ)
+- Security group blocks required ports
+
+### No Public IP
+
+```bash
+# Ensure task has ENI attached
+aws ec2 describe-network-interfaces \
+  --filters "Name=vpc-id,Values=$VPC_ID" \
+  --query 'NetworkInterfaces[*].{IP:Association.PublicIp,Status:Status}'
+```
+
+### Certificate Errors
+
+Regenerate certificates and redeploy:
+```bash
+./scripts/generate-certs.sh
+docker build -f deployments/server/Dockerfile -t fluidity-server .
+docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/fluidity-server:latest
+aws ecs update-service --cluster fluidity --service fluidity-server --force-new-deployment
+```
+
+### Slow Startup
+
+First cold start (pulling image) takes 20-30s. Subsequent starts are faster.
+
+---
+
+## Scaling
+
+### Increase Desired Count
+
+```bash
+aws ecs update-service \
+  --cluster fluidity \
+  --service fluidity-server \
+  --desired-count 3
+```
+
+### Change Task Size
+
+```bash
+aws ecs register-task-definition \
+  --family fluidity-server \
+  --cpu "512" \
+  --memory "1024"
+```
+
+Then update service to use new revision.
+
+---
+
 ## Related Documentation
 
-- [Docker Guide](docker.md) - Building images
-- [Infrastructure Guide](infrastructure.md) - CloudFormation deployment
-- [Lambda Functions](lambda.md) - Automated lifecycle
+- [Deployment Guide](deployment.md) - Complete deployment options
+- [Infrastructure as Code](infrastructure.md) - CloudFormation details
+- [Lambda Functions](lambda.md) - Control plane guide
+- [Docker Guide](docker.md) - Container details

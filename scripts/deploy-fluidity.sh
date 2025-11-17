@@ -1,871 +1,703 @@
 #!/usr/bin/env bash
+
+###############################################################################
+# Fluidity Complete Deployment Script
+# 
+# Orchestrates deployment of both Fluidity server (to AWS) and agent (to local system).
+# Automatically detects OS-specific defaults and passes server endpoints to agent.
+#
+# FUNCTION:
+#   Coordinates end-to-end Fluidity deployment:
+#   - Detects OS and sets appropriate defaults (install path, port)
+#   - Deploys server and Lambda to AWS
+#   - Collects endpoint information from CloudFormation outputs
+#   - Deploys and configures agent with server details
+#
+# DEPLOYMENT FLOW:
+#   1. Validate prerequisites and OS
+#   2. Deploy server to AWS (CloudFormation + ECS + Lambda)
+#   3. Collect server and Lambda endpoints from CloudFormation
+#   4. Deploy agent to local system with collected endpoints
+#   5. Verify complete deployment
+#
+# USAGE:
+#   ./deploy-fluidity.sh [action] [options]
+#
+# ACTIONS:
+#   deploy           Deploy both server and agent (default)
+#   deploy-server    Deploy only server to AWS
+#   deploy-agent     Deploy only agent to local system
+#   delete           Delete AWS infrastructure only
+#   status           Show deployment status
+#
+# OPTIONS:
+#   --region <region>              AWS region (auto-detect from AWS config)
+#   --vpc-id <vpc>                 VPC ID (auto-detect default VPC)
+#   --public-subnets <subnets>     Comma-separated subnet IDs (auto-detect)
+#   --allowed-cidr <cidr>          Allowed ingress CIDR (auto-detect your IP)
+#   --server-ip <ip>               Server IP (for agent, defaults to Fargate task public IP)
+#   --local-proxy-port <port>      Agent listening port (default: 8080 on Windows, 8080 on Linux/macOS)
+#   --cert-path <path>             Path to client certificate (optional)
+#   --key-path <path>              Path to client key (optional)
+#   --ca-cert-path <path>          Path to CA certificate (optional)
+#   --install-path <path>          Custom agent installation path (optional)
+#   --log-level <level>            Agent log level (info|debug|warn|error)
+#   --wake-endpoint <url>          Override wake function endpoint
+#   --kill-endpoint <url>          Override kill function endpoint
+#   --skip-build                   Skip building agent, use existing binary
+#   --debug                        Enable debug logging
+#   --force                        Delete and recreate resources (server only)
+#   -h, --help                     Show this help message
+#
+# EXAMPLES:
+#   ./deploy-fluidity.sh deploy
+#   ./deploy-fluidity.sh deploy --local-proxy-port 8080
+#   ./deploy-fluidity.sh deploy-server --region us-west-2
+#   ./deploy-fluidity.sh deploy-agent --server-ip 192.168.1.100
+#   ./deploy-fluidity.sh status
+#   ./deploy-fluidity.sh delete
+#
+###############################################################################
+
 set -euo pipefail
 
-#
-# deploy-fluidity.sh - Deploy Fluidity infrastructure to AWS using CloudFormation
-#
-# Usage:
-#   ./deploy-fluidity.sh [OPTIONS]
-#
-# Options:
-#   -a, --action ACTION        Action to perform: deploy, delete, status, outputs (default: deploy)
-#   -s, --stack-name NAME      CloudFormation stack name (default: fluidity)
-#   -f, --force                Skip confirmation prompts
-#   -h, --help                 Show this help message
-#
-# Required Parameters:
-#   --account-id ID            [OPTIONAL if AWS CLI configured] AWS Account ID (12 digits)
-#                              Auto-detected from AWS credentials if not provided
-#                              Get: aws sts get-caller-identity --query Account --output text
-#   --region REGION            [REQUIRED] AWS Region (e.g., us-east-1)
-#   --vpc-id VPC               [REQUIRED] VPC ID
-#                              Get: aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text
-#   --public-subnets SUBNETS   [REQUIRED] Comma-separated list of public subnet IDs (minimum 2)
-#                              Get: aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID> --query 'Subnets[*].SubnetId' --output text | tr '\t' ','
-#   --allowed-cidr CIDR        [REQUIRED] Allowed ingress CIDR (e.g., 1.2.3.4/32)
-#                              Get: curl -s https://ifconfig.me && echo '/32'
-#
-# Optional Parameters (with defaults):
-#   --container-image IMAGE    Container image URI (default: <account-id>.dkr.ecr.<region>.amazonaws.com/fluidity-server:latest)
-#   --cluster-name NAME        ECS cluster name (default: fluidity)
-#   --service-name NAME        ECS service name (default: fluidity-server)
-#   --container-port PORT      Container port (default: 8443)
-#   --cpu CPU                  CPU units - 256=0.25vCPU, 512=0.5vCPU, 1024=1vCPU (default: 256)
-#   --memory MEMORY            Memory in MB (default: 512)
-#   --desired-count COUNT      Initial desired task count, 0=stopped (default: 0)
-#
-# Examples:
-#   # Deploy with required parameters (Account ID auto-detected)
-#   ./deploy-fluidity.sh -a deploy --region us-east-1 --vpc-id vpc-abc123 --public-subnets subnet-1,subnet-2 --allowed-cidr 1.2.3.4/32
-#
-#   # Quick deploy using AWS CLI to gather values
-#   VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)
-#   SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$VPC_ID --query 'Subnets[*].SubnetId' --output text | tr '\t' ',')
-#   MY_IP=$(curl -s ifconfig.me)/32
-#   ./deploy-fluidity.sh -a deploy --region us-east-1 --vpc-id $VPC_ID --public-subnets $SUBNETS --allowed-cidr $MY_IP
-#
-#   # Deploy with custom optional parameters
-#   ./deploy-fluidity.sh -a deploy --region us-east-1 --vpc-id vpc-abc123 --public-subnets subnet-1,subnet-2 --allowed-cidr 1.2.3.4/32 --cpu 512 --memory 1024 --desired-count 1
-#
-#   # Check stack status
-#   ./deploy-fluidity.sh -a status
-#
-#   # Delete stack
-#   ./deploy-fluidity.sh -a delete -f
-#
+# ============================================================================
+# CONFIGURATION & DEFAULTS
+# ============================================================================
 
-# Default values
-ACTION="${ACTION:-deploy}"
-STACK_NAME="${STACK_NAME:-fluidity}"
-FORCE=false
+ACTION="${1:-deploy}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLOUDFORMATION_DIR="$(dirname "$SCRIPT_DIR")/deployments/cloudformation"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # AWS Configuration
-ACCOUNT_ID=""
-REGION=""
+AWS_REGION=""
 VPC_ID=""
 PUBLIC_SUBNETS=""
 ALLOWED_CIDR=""
 
-# Container Configuration
-CONTAINER_IMAGE=""
-CLUSTER_NAME="fluidity"
-SERVICE_NAME="fluidity-server"
-CONTAINER_PORT="8443"
-CPU="256"
-MEMORY="512"
-DESIRED_COUNT="0"
+# Agent Configuration
+SERVER_IP=""
+SERVER_PORT="8443"  # Allow override though server binary listens 8443
+LOCAL_PROXY_PORT=""
+CERT_PATH=""
+KEY_PATH=""
+CA_CERT_PATH=""
+INSTALL_PATH=""
+LOG_LEVEL=""
 
-# Logging Configuration
-LOG_GROUP_NAME="/ecs/fluidity/server"
-LOG_RETENTION_DAYS="30"
+# Feature Flags
+DEBUG=false
+FORCE=false
+SKIP_BUILD=false
 
-# Lambda Configuration
-IDLE_THRESHOLD_MINUTES="15"
-LOOKBACK_PERIOD_MINUTES="10"
-SLEEP_CHECK_INTERVAL_MINUTES="5"
-DAILY_KILL_TIME="cron(0 23 * * ? *)"
-WAKE_LAMBDA_TIMEOUT="30"
-SLEEP_LAMBDA_TIMEOUT="60"
-KILL_LAMBDA_TIMEOUT="30"
+# Endpoints from server deployment
+WAKE_ENDPOINT=""
+KILL_ENDPOINT=""
+SERVER_REGION=""
+SERVER_PORT="8443"
+SERVER_IP_COMMAND=""
 
-# API Gateway Configuration
-API_THROTTLE_BURST_LIMIT="20"
-API_THROTTLE_RATE_LIMIT="3"
-API_QUOTA_LIMIT="300"
+# Agent installation details
+AGENT_INSTALL_PATH=""
+AGENT_CONFIG_PATH=""
 
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        -a|--action)
-            ACTION="$2"
-            shift 2
-            ;;
-        -s|--stack-name)
-            STACK_NAME="$2"
-            shift 2
-            ;;
-        -p|--parameters)
-            PARAMETERS_FILE="$2"
-            shift 2
-            ;;
-        -f|--force)
-            FORCE=true
-            shift
-            ;;
-        --account-id)
-            ACCOUNT_ID="$2"
-            shift 2
-            ;;
-        --region)
-            REGION="$2"
-            shift 2
-            ;;
-        --vpc-id)
-            VPC_ID="$2"
-            shift 2
-            ;;
-        --public-subnets)
-            PUBLIC_SUBNETS="$2"
-            shift 2
-            ;;
-        --allowed-cidr)
-            ALLOWED_CIDR="$2"
-            shift 2
-            ;;
-        --container-image)
-            CONTAINER_IMAGE="$2"
-            shift 2
-            ;;
-        --cluster-name)
-            CLUSTER_NAME="$2"
-            shift 2
-            ;;
-        --service-name)
-            SERVICE_NAME="$2"
-            shift 2
-            ;;
-        --container-port)
-            CONTAINER_PORT="$2"
-            shift 2
-            ;;
-        --cpu)
-            CPU="$2"
-            shift 2
-            ;;
-        --memory)
-            MEMORY="$2"
-            shift 2
-            ;;
-        --desired-count)
-            DESIRED_COUNT="$2"
-            shift 2
-            ;;
-        -h|--help)
-            grep '^#' "$0" | tail -n +3 | head -n -1
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-    esac
-done
-
-# Validate action
-if [[ ! "$ACTION" =~ ^(deploy|delete|status|outputs)$ ]]; then
-    echo "Error: Action must be 'deploy', 'delete', 'status', or 'outputs'"
-    exit 1
-fi
-
-# Set defaults
-FARGATE_STACK_NAME="${STACK_NAME}-fargate"
-LAMBDA_STACK_NAME="${STACK_NAME}-lambda"
-FARGATE_TEMPLATE="$CLOUDFORMATION_DIR/fargate.yaml"
-LAMBDA_TEMPLATE="$CLOUDFORMATION_DIR/lambda.yaml"
-STACK_POLICY="$CLOUDFORMATION_DIR/stack-policy.json"
-CAPABILITIES="CAPABILITY_NAMED_IAM"
-
-# Check if AWS CLI is installed and configured
-echo "Checking AWS CLI configuration..."
-
-AWS_CONFIGURED=false
-if command -v aws &> /dev/null; then
-    CALLER_IDENTITY=$(aws sts get-caller-identity 2>&1)
-    if [[ $? -eq 0 ]]; then
-        AWS_CONFIGURED=true
-        CALLER_ACCOUNT=$(echo "$CALLER_IDENTITY" | jq -r '.Account')
-        CALLER_ARN=$(echo "$CALLER_IDENTITY" | jq -r '.Arn')
-        echo "[OK] AWS CLI is configured"
-        echo "  Account: $CALLER_ACCOUNT"
-        echo "  User: $CALLER_ARN"
-        
-        # Auto-populate ACCOUNT_ID if not provided
-        if [[ -z "$ACCOUNT_ID" ]]; then
-            ACCOUNT_ID="$CALLER_ACCOUNT"
-            echo "[OK] Using Account ID from AWS credentials: $ACCOUNT_ID"
-        fi
-    fi
-fi
-
-if [[ "$AWS_CONFIGURED" == false ]]; then
-    echo ""
-    echo "[ERROR] AWS CLI is not configured"
-    echo ""
-    echo "The AWS CLI needs to be configured with your credentials before running this script."
-    
-    echo ""
-    echo "To configure AWS CLI:"
-    echo "  1. Run: aws configure"
-    echo "  2. Enter your AWS Access Key ID"
-    echo "  3. Enter your AWS Secret Access Key"
-    echo "  4. Enter your default region (e.g., us-east-1)"
-    echo "  5. Enter default output format: json"
-    
-    echo ""
-    echo "To get AWS credentials:"
-    echo "  1. Log in to AWS Console: https://console.aws.amazon.com"
-    echo "  2. Go to: IAM > Users > [Your User] > Security Credentials"
-    echo "  3. Create Access Key > CLI"
-    echo "  4. Copy the Access Key ID and Secret Access Key"
-    
-    echo ""
-    echo "After configuring AWS CLI, run this script again."
-    echo ""
-    exit 1
-fi
-
-# Auto-gather missing required parameters from AWS
-echo "Checking required parameters..."
-
-USE_CMDLINE_PARAMS=true
-GATHERED_PARAMS=()
-
-# Try to auto-detect Region from AWS CLI default configuration if not provided
-if [[ -z "$REGION" ]]; then
-    echo "Region not provided, attempting to auto-detect..."
-    REGION=$(aws configure get region 2>&1)
-    if [[ $? -eq 0 ]] && [[ -n "$REGION" ]]; then
-        GATHERED_PARAMS+=("Region")
-        echo "[OK] Auto-detected Region: $REGION"
-    else
-        REGION=""
-    fi
-fi
-
-# Try to auto-detect VpcId from default VPC if not provided
-if [[ -z "$VPC_ID" ]] && [[ -n "$REGION" ]]; then
-    echo "VpcId not provided, attempting to auto-detect default VPC..."
-    VPC_ID=$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text 2>&1)
-    if [[ $? -eq 0 ]] && [[ -n "$VPC_ID" ]] && [[ "$VPC_ID" != "None" ]]; then
-        GATHERED_PARAMS+=("VpcId")
-        echo "[OK] Auto-detected VpcId: $VPC_ID"
-    else
-        VPC_ID=""
-    fi
-fi
-
-# Try to auto-detect PublicSubnets from VPC if not provided
-if [[ -z "$PUBLIC_SUBNETS" ]] && [[ -n "$VPC_ID" ]] && [[ -n "$REGION" ]]; then
-    echo "PublicSubnets not provided, attempting to auto-detect from VPC..."
-    SUBNET_LIST=$(aws ec2 describe-subnets --region "$REGION" --filters Name=vpc-id,Values="$VPC_ID" Name=map-public-ip-on-launch,Values=true --query 'Subnets[*].SubnetId' --output text 2>&1)
-    if [[ $? -eq 0 ]] && [[ -n "$SUBNET_LIST" ]]; then
-        PUBLIC_SUBNETS=$(echo "$SUBNET_LIST" | tr '\t' ',')
-        if [[ -n "$PUBLIC_SUBNETS" ]]; then
-            GATHERED_PARAMS+=("PublicSubnets")
-            echo "[OK] Auto-detected PublicSubnets: $PUBLIC_SUBNETS"
-        else
-            PUBLIC_SUBNETS=""
-        fi
-    else
-        PUBLIC_SUBNETS=""
-    fi
-fi
-
-# Try to auto-detect public IP for AllowedIngressCidr if not provided
-if [[ -z "$ALLOWED_CIDR" ]]; then
-    echo "AllowedIngressCidr not provided, attempting to auto-detect public IP..."
-    PUBLIC_IP=""
-    
-    # Try multiple IP services for reliability
-    IP_SERVICES=(
-        "https://api.ipify.org"
-        "https://ifconfig.me/ip"
-        "https://icanhazip.com"
-    )
-    
-    for service in "${IP_SERVICES[@]}"; do
-        PUBLIC_IP=$(curl -s --max-time 10 "$service" 2>/dev/null | tr -d '[:space:]')
-        if [[ "$PUBLIC_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-            break
-        fi
-        PUBLIC_IP=""
-    done
-    
-    if [[ -n "$PUBLIC_IP" ]] && [[ "$PUBLIC_IP" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        ALLOWED_CIDR="$PUBLIC_IP/32"
-        GATHERED_PARAMS+=("AllowedIngressCidr")
-        echo "[OK] Auto-detected AllowedIngressCidr: $ALLOWED_CIDR"
-    else
-        ALLOWED_CIDR=""
-    fi
-fi
-
-if [[ ${#GATHERED_PARAMS[@]} -gt 0 ]]; then
-    echo ""
-    echo "Auto-gathered parameters: ${GATHERED_PARAMS[*]}"
-fi
-
-# Validate all required parameters are now available
-MISSING_PARAMS=()
-[[ -z "$REGION" ]] && MISSING_PARAMS+=("--region")
-[[ -z "$VPC_ID" ]] && MISSING_PARAMS+=("--vpc-id")
-[[ -z "$PUBLIC_SUBNETS" ]] && MISSING_PARAMS+=("--public-subnets")
-[[ -z "$ALLOWED_CIDR" ]] && MISSING_PARAMS+=("--allowed-cidr")
-
-if [[ ${#MISSING_PARAMS[@]} -gt 0 ]]; then
-    echo ""
-    echo "[ERROR] Missing required parameters:"
-    for param in "${MISSING_PARAMS[@]}"; do
-        echo "  - $param"
-    done
-    
-    echo ""
-    echo "Unable to auto-detect all required parameters."
-    echo "Please provide these parameters as command-line arguments:"
-    echo "  --region          : Your AWS region (e.g., us-east-1, eu-west-1)"
-    echo "  --vpc-id          : aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text"
-    echo "  --public-subnets  : aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID> --query 'Subnets[*].SubnetId' --output text | tr '\t' ','"
-    echo "  --allowed-cidr    : Your public IP with /32 CIDR (e.g., 1.2.3.4/32)"
-    
-    echo ""
-    echo "Example usage:"
-    echo "  ./deploy-fluidity.sh -a deploy --region us-east-1 --vpc-id vpc-abc123 --public-subnets subnet-1,subnet-2 --allowed-cidr 1.2.3.4/32"
-    echo ""
-    echo "Note: Account ID is automatically detected from your AWS credentials"
-    
-    echo ""
-    echo "For detailed help: ./deploy-fluidity.sh --help"
-    echo ""
-    exit 1
-fi
-
-# Set ContainerImage default if not provided
-if [[ -z "$CONTAINER_IMAGE" ]]; then
-    CONTAINER_IMAGE="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/fluidity-server:latest"
-fi
-
-echo "[OK] All required parameters validated successfully"
-
-# Set Lambda S3 bucket name
-LAMBDA_S3_BUCKET="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
-LAMBDA_S3_KEY_PREFIX="fluidity/"
-
-# Build and upload Lambda functions
-echo ""
-echo "=== Building Lambda Functions ==="
-BUILD_SCRIPT="$SCRIPT_DIR/build-lambdas.sh"
-if [[ ! -f "$BUILD_SCRIPT" ]]; then
-    echo "[ERROR] Build script not found: $BUILD_SCRIPT"
-    exit 1
-fi
-
-# Build Lambdas
-bash "$BUILD_SCRIPT"
-
-# Ensure S3 bucket exists
-echo ""
-echo "=== Preparing Lambda Artifacts Bucket ==="
-BUCKET_CHECK=$(aws s3 ls "s3://$LAMBDA_S3_BUCKET" --region "$REGION" 2>&1)
-if echo "$BUCKET_CHECK" | grep -q 'NoSuchBucket'; then
-    echo "Creating S3 bucket: $LAMBDA_S3_BUCKET"
-    aws s3 mb "s3://$LAMBDA_S3_BUCKET" --region "$REGION"
-    if [[ $? -ne 0 ]]; then
-        echo "[ERROR] Failed to create S3 bucket"
-        exit 1
-    fi
-    echo "[OK] S3 bucket created successfully"
-else
-    echo "S3 bucket exists: $LAMBDA_S3_BUCKET"
-fi
-
-# Upload Lambda packages to S3
-echo ""
-echo "=== Uploading Lambda Packages to S3 ==="
-LAMBDA_BUILD_DIR="$(dirname "$SCRIPT_DIR")/build/lambdas"
-for func in wake sleep kill; do
-    echo "Uploading ${func}.zip..."
-    aws s3 cp "$LAMBDA_BUILD_DIR/${func}.zip" "s3://$LAMBDA_S3_BUCKET/${LAMBDA_S3_KEY_PREFIX}${func}.zip" --region "$REGION"
-done
-echo "[OK] Lambda packages uploaded"
-
-# Load TLS certificates for CloudFormation
-echo "Loading TLS certificates..."
-
-CERTS_DIR="$(dirname "$SCRIPT_DIR")/certs"
-SERVER_CERT_PATH="$CERTS_DIR/server.crt"
-SERVER_KEY_PATH="$CERTS_DIR/server.key"
-CA_CERT_PATH="$CERTS_DIR/ca.crt"
-
-if [[ ! -f "$SERVER_CERT_PATH" ]]; then
-    echo "[ERROR] Server certificate not found: $SERVER_CERT_PATH"
-    echo "Run the certificate generation script first:"
-    echo "  ./scripts/manage-certs.sh"
-    exit 1
-fi
-
-if [[ ! -f "$SERVER_KEY_PATH" ]]; then
-    echo "[ERROR] Server key not found: $SERVER_KEY_PATH"
-    exit 1
-fi
-
-if [[ ! -f "$CA_CERT_PATH" ]]; then
-    echo "[ERROR] CA certificate not found: $CA_CERT_PATH"
-    exit 1
-fi
-
-# Read certificate files as plain text (CloudFormation will handle storage in Secrets Manager)
-CERT_PEM=$(cat "$SERVER_CERT_PATH" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-KEY_PEM=$(cat "$SERVER_KEY_PATH" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-CA_PEM=$(cat "$CA_CERT_PATH" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-echo "[OK] Certificates loaded"
-
-# Skip the parameters file logic since we're using command-line/auto-detected params
-if false; then
-    # Use parameters file
-    PARAMETERS_FILE="${PARAMETERS_FILE:-$CLOUDFORMATION_DIR/params.json}"
-    
-    if [[ ! -f "$PARAMETERS_FILE" ]]; then
-        echo "Error: Parameters file not found: $PARAMETERS_FILE"
-        echo ""
-        echo "Either provide command-line parameters or create the parameters file."
-        exit 1
-    fi
-    
-    # Validate parameters file has been configured
-    echo "Validating parameters file..."
-    PARAMS_CONTENT=$(cat "$PARAMETERS_FILE")
-    PLACEHOLDERS=$(echo "$PARAMS_CONTENT" | grep -oE '<[A-Z_]+>' | sort -u || true)
-    
-    if [[ -n "$PLACEHOLDERS" ]]; then
-        echo ""
-        echo "[ERROR] Parameters file contains unconfigured placeholders"
-        echo ""
-        echo "Found placeholders in $PARAMETERS_FILE :"
-        
-        echo "$PLACEHOLDERS" | while IFS= read -r placeholder; do
-            echo "  - $placeholder"
-        done
-        
-        echo ""
-        echo "The params.json file is for reference only. You must provide parameters via command-line arguments:"
-        echo "  ./deploy-fluidity.sh -a deploy --account-id <id> --region <region> --vpc-id <vpc> --public-subnets <subnet1,subnet2> --allowed-cidr <ip>/32"
-        
-        echo ""
-        echo "How to get required parameter values:"
-        echo "  --account-id      : aws sts get-caller-identity --query Account --output text"
-        echo "  --region          : Your AWS region (e.g., us-east-1, eu-west-1)"
-        echo "  --vpc-id          : aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text"
-        echo "  --public-subnets  : aws ec2 describe-subnets --filters Name=vpc-id,Values=<VPC_ID> --query 'Subnets[*].SubnetId' --output text | tr '\t' ','"
-        echo "  --allowed-cidr    : curl -s https://ifconfig.me && echo '/32'"
-        
-        echo ""
-        echo "For detailed help: ./deploy-fluidity.sh --help"
-        echo ""
-        exit 1
-    fi
-    
-    echo "[OK] Parameters file validated successfully"
-fi
-
-if [[ ! -f "$FARGATE_TEMPLATE" ]]; then
-    echo "Error: Fargate template not found: $FARGATE_TEMPLATE"
-    exit 1
-fi
-
-if [[ ! -f "$LAMBDA_TEMPLATE" ]]; then
-    echo "Error: Lambda template not found: $LAMBDA_TEMPLATE"
-    exit 1
-fi
-
-# Helper functions
-get_stack_status() {
-    local stack_name="$1"
-    aws cloudformation describe-stacks \
-        --stack-name "$stack_name" \
-        --query 'Stacks[0].StackStatus' \
-        --output text 2>/dev/null || echo "DOES_NOT_EXIST"
-}
-
-wait_for_stack() {
-    local stack_name="$1"
-    local operation="$2"  # 'create' or 'update'
-    
-    echo "Monitoring stack events (Ctrl+C to stop monitoring, stack will continue)..."
-    echo ""
-    
-    local last_event_time=""
-    local status=""
-    local final_statuses=""
-    
-    if [[ "$operation" == "create" ]]; then
-        final_statuses="CREATE_COMPLETE|CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED"
-    else
-        final_statuses="UPDATE_COMPLETE|UPDATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED"
-    fi
-    
-    while true; do
-        # Get current stack status
-        status=$(get_stack_status "$stack_name")
-        
-        # Check if we've reached a final state
-        if echo "$status" | grep -qE "$final_statuses"; then
-            echo ""
-            if echo "$status" | grep -q "COMPLETE"; then
-                echo "[OK] Stack $operation completed: $status"
-                return 0
-            else
-                echo "[ERROR] Stack $operation failed: $status"
-                return 1
-            fi
-        fi
-        
-        # Get latest events (only new ones)
-        local events
-        if [[ -z "$last_event_time" ]]; then
-            # First iteration - get last 5 events
-            events=$(aws cloudformation describe-stack-events \
-                --stack-name "$stack_name" \
-                --region "$REGION" \
-                --max-items 5 \
-                --query 'StackEvents[].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
-                --output text 2>/dev/null | tail -r 2>/dev/null || tac 2>/dev/null || awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
-        else
-            # Subsequent iterations - get events newer than last seen
-            events=$(aws cloudformation describe-stack-events \
-                --stack-name "$stack_name" \
-                --region "$REGION" \
-                --query "StackEvents[?Timestamp>\`$last_event_time\`].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
-                --output text 2>/dev/null | tail -r 2>/dev/null || tac 2>/dev/null || awk '{a[i++]=$0} END {for (j=i-1; j>=0;) print a[j--] }')
-        fi
-        
-        # Display new events
-        if [[ -n "$events" ]]; then
-            while IFS=$'\t' read -r timestamp resource status reason; do
-                # Update last seen timestamp
-                last_event_time="$timestamp"
-                
-                # Format and display event
-                local short_time=$(echo "$timestamp" | cut -d'T' -f2 | cut -d'.' -f1)
-                local display_reason=""
-                if [[ -n "$reason" ]] && [[ "$reason" != "None" ]] && [[ "$reason" != "-" ]]; then
-                    display_reason=" - $reason"
-                fi
-                
-                # Color code based on status
-                if echo "$status" | grep -q "FAILED"; then
-                    echo "[$short_time] ❌ $resource: $status$display_reason"
-                elif echo "$status" | grep -q "COMPLETE"; then
-                    echo "[$short_time] ✓ $resource: $status"
-                elif echo "$status" | grep -q "IN_PROGRESS"; then
-                    echo "[$short_time] ⏳ $resource: $status"
-                else
-                    echo "[$short_time] ℹ️  $resource: $status$display_reason"
-                fi
-            done <<< "$events"
-        fi
-        
-        # Wait before next poll
-        sleep 3
-    done
-}
-
-deploy_stack() {
-    local stack_name="$1"
-    local template="$2"
-    local stack_type="$3"  # 'fargate' or 'lambda'
-    
-    echo ""
-    echo "=== Deploying $stack_name ==="
-    
-    local status
-    status=$(get_stack_status "$stack_name")
-    
-    # Build parameters based on stack type
-    local params_file=""
-    local params_arg=""
-    
-    if [[ "$stack_type" == "fargate" ]]; then
-        # Create parameters JSON file for certificates (too large for command-line)
-        params_file="/tmp/fluidity-fargate-params-$$.json"
-        
-        cat > "$params_file" << EOF
-[
-  {"ParameterKey": "ClusterName", "ParameterValue": "$CLUSTER_NAME"},
-  {"ParameterKey": "ServiceName", "ParameterValue": "$SERVICE_NAME"},
-  {"ParameterKey": "ContainerImage", "ParameterValue": "$CONTAINER_IMAGE"},
-  {"ParameterKey": "ContainerPort", "ParameterValue": "$CONTAINER_PORT"},
-  {"ParameterKey": "Cpu", "ParameterValue": "$CPU"},
-  {"ParameterKey": "Memory", "ParameterValue": "$MEMORY"},
-  {"ParameterKey": "DesiredCount", "ParameterValue": "$DESIRED_COUNT"},
-  {"ParameterKey": "VpcId", "ParameterValue": "$VPC_ID"},
-  {"ParameterKey": "PublicSubnets", "ParameterValue": "$PUBLIC_SUBNETS"},
-  {"ParameterKey": "AllowedIngressCidr", "ParameterValue": "$ALLOWED_CIDR"},
-  {"ParameterKey": "AssignPublicIp", "ParameterValue": "ENABLED"},
-  {"ParameterKey": "LogGroupName", "ParameterValue": "$LOG_GROUP_NAME"},
-  {"ParameterKey": "LogRetentionDays", "ParameterValue": "$LOG_RETENTION_DAYS"},
-  {"ParameterKey": "CertPem", "ParameterValue": $(echo "$CERT_PEM" | jq -Rs .)},
-  {"ParameterKey": "KeyPem", "ParameterValue": $(echo "$KEY_PEM" | jq -Rs .)},
-  {"ParameterKey": "CaPem", "ParameterValue": $(echo "$CA_PEM" | jq -Rs .)}
-]
-EOF
-        params_arg="file://$params_file"
-    elif [[ "$stack_type" == "lambda" ]]; then
-        # Lambda stack parameters - use JSON file for consistency
-        params_file="/tmp/fluidity-lambda-params-$$.json"
-        
-        cat > "$params_file" << EOF
-[
-  {"ParameterKey": "LambdaS3Bucket", "ParameterValue": "$LAMBDA_S3_BUCKET"},
-  {"ParameterKey": "LambdaS3KeyPrefix", "ParameterValue": "$LAMBDA_S3_KEY_PREFIX"},
-  {"ParameterKey": "ECSClusterName", "ParameterValue": "$CLUSTER_NAME"},
-  {"ParameterKey": "ECSServiceName", "ParameterValue": "$SERVICE_NAME"},
-  {"ParameterKey": "IdleThresholdMinutes", "ParameterValue": "$IDLE_THRESHOLD_MINUTES"},
-  {"ParameterKey": "LookbackPeriodMinutes", "ParameterValue": "$LOOKBACK_PERIOD_MINUTES"},
-  {"ParameterKey": "SleepCheckIntervalMinutes", "ParameterValue": "$SLEEP_CHECK_INTERVAL_MINUTES"},
-  {"ParameterKey": "DailyKillTime", "ParameterValue": "$DAILY_KILL_TIME"},
-  {"ParameterKey": "WakeLambdaTimeout", "ParameterValue": "$WAKE_LAMBDA_TIMEOUT"},
-  {"ParameterKey": "SleepLambdaTimeout", "ParameterValue": "$SLEEP_LAMBDA_TIMEOUT"},
-  {"ParameterKey": "KillLambdaTimeout", "ParameterValue": "$KILL_LAMBDA_TIMEOUT"},
-  {"ParameterKey": "APIThrottleBurstLimit", "ParameterValue": "$API_THROTTLE_BURST_LIMIT"},
-  {"ParameterKey": "APIThrottleRateLimit", "ParameterValue": "$API_THROTTLE_RATE_LIMIT"},
-  {"ParameterKey": "APIQuotaLimit", "ParameterValue": "$API_QUOTA_LIMIT"}
-]
-EOF
-        params_arg="file://$params_file"
-    fi
-    
-    if [[ "$status" == "DOES_NOT_EXIST" ]]; then
-        echo "Creating new stack: $stack_name"
-        
-        aws cloudformation create-stack \
-            --stack-name "$stack_name" \
-            --template-body "file://$template" \
-            --parameters $params_arg \
-            --capabilities "$CAPABILITIES" \
-            --region "$REGION" \
-            --tags \
-                "Key=Application,Value=Fluidity" \
-                "Key=ManagedBy,Value=CloudFormation" \
-            --output text
-        
-        wait_for_stack "$stack_name" "create"
-        
-        # Clean up temp file if Fargate
-        if [[ -n "$params_file" ]] && [[ -f "$params_file" ]]; then
-            rm -f "$params_file"
-        fi
-        
-        echo "[OK] Stack created successfully"
-    else
-        echo "Updating existing stack: $stack_name (Current status: $status)"
-        
-        local update_output
-        update_output=$(aws cloudformation update-stack \
-            --stack-name "$stack_name" \
-            --template-body "file://$template" \
-            --parameters $params_arg \
-            --capabilities "$CAPABILITIES" \
-            --region "$REGION" \
-            --tags \
-                "Key=Application,Value=Fluidity" \
-                "Key=ManagedBy,Value=CloudFormation" \
-            --output text 2>&1 || true)
-        
-        if echo "$update_output" | grep -q "No updates are to be performed"; then
-            # Clean up temp file
-            if [[ -n "$params_file" ]] && [[ -f "$params_file" ]]; then
-                rm -f "$params_file"
-            fi
-            echo "[OK] Stack is already up to date (no changes)"
-        else
-            wait_for_stack "$stack_name" "update"
-            
-            # Clean up temp file
-            if [[ -n "$params_file" ]] && [[ -f "$params_file" ]]; then
-                rm -f "$params_file"
-            fi
-            
-            echo "[OK] Stack updated successfully"
-        fi
-    fi
-}
-
-get_stack_outputs() {
-    local stack_name="$1"
-    
-    local outputs
-    outputs=$(aws cloudformation describe-stacks \
-        --stack-name "$stack_name" \
-        --query 'Stacks[0].Outputs' \
-        --output json 2>/dev/null || echo "null")
-    
-    if [[ "$outputs" == "null" ]] || [[ -z "$outputs" ]]; then
-        echo "No outputs found for stack: $stack_name"
-    else
-        echo ""
-        echo "=== Stack Outputs ===" 
-        echo "$outputs" | jq -r '.[] | "\(.OutputKey): \(.OutputValue)"'
-    fi
-}
-
-get_stack_drift_status() {
-    local stack_name="$1"
-    
-    echo ""
-    echo "=== Checking Stack Drift ==="
-    
-    local drift_id
-    drift_id=$(aws cloudformation detect-stack-drift \
-        --stack-name "$stack_name" \
-        --query 'StackDriftDetectionId' \
-        --output text)
-    
-    echo "Drift detection started: $drift_id"
-    echo "Checking status..."
-    
-    sleep 3
-    
-    local status
-    status=$(aws cloudformation describe-stack-drift-detection-status \
-        --stack-drift-detection-id "$drift_id" \
-        --query 'StackDriftDetectionStatus' \
-        --output text)
-    
-    if [[ "$status" == "DETECTION_COMPLETE" ]]; then
-        local drift
-        drift=$(aws cloudformation describe-stack-drift-detection-status \
-            --stack-drift-detection-id "$drift_id" \
-            --query 'StackDriftStatus' \
-            --output text)
-        
-        if [[ "$drift" == "DRIFTED" ]]; then
-            echo "[WARNING] DRIFTED: Stack has manual changes"
-        elif [[ "$drift" == "IN_SYNC" ]]; then
-            echo "[OK] IN_SYNC: Stack matches template"
-        else
-            echo "Status: $drift"
-        fi
-    else
-        echo "Detection status: $status"
-    fi
-}
-
-# Main execution
-case "$ACTION" in
-    deploy)
-        deploy_stack "$FARGATE_STACK_NAME" "$FARGATE_TEMPLATE" "fargate"
-        deploy_stack "$LAMBDA_STACK_NAME" "$LAMBDA_TEMPLATE" "lambda"
-        
-        echo ""
-        echo "=== Applying Stack Policies ==="
-        
-        # Apply Fargate stack policy
-        FARGATE_STACK_POLICY="$CLOUDFORMATION_DIR/stack-policy-fargate.json"
-        if [[ -f "$FARGATE_STACK_POLICY" ]]; then
-            echo "Applying policy to Fargate stack..."
-            aws cloudformation set-stack-policy \
-                --stack-name "$FARGATE_STACK_NAME" \
-                --stack-policy-body "file://$FARGATE_STACK_POLICY"
-            echo "[OK] Fargate stack policy applied"
-        fi
-        
-        # Apply Lambda stack policy
-        LAMBDA_STACK_POLICY="$CLOUDFORMATION_DIR/stack-policy-lambda.json"
-        if [[ -f "$LAMBDA_STACK_POLICY" ]]; then
-            echo "Applying policy to Lambda stack..."
-            aws cloudformation set-stack-policy \
-                --stack-name "$LAMBDA_STACK_NAME" \
-                --stack-policy-body "file://$LAMBDA_STACK_POLICY"
-            echo "[OK] Lambda stack policy applied"
-        fi
-        
-        get_stack_outputs "$FARGATE_STACK_NAME"
-        get_stack_outputs "$LAMBDA_STACK_NAME"
+# Detect OS and set defaults
+case "$(uname -s)" in
+    MINGW64_NT*|MSYS_NT*|CYGWIN*)
+        OS_TYPE="windows"
+        DEFAULT_INSTALL_PATH="C:\\Program Files\\fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
         ;;
-    delete)
-        if [[ "$FORCE" != true ]]; then
-            echo "Are you sure you want to DELETE $STACK_NAME? (type 'yes' to confirm)"
-            read -r confirm
-            if [[ "$confirm" != "yes" ]]; then
-                echo "Delete cancelled"
-                exit 0
-            fi
-        fi
-        
-        echo ""
-        echo "=== Deleting $STACK_NAME ==="
-        
-        # Remove stack policies first (they prevent deletion)
-        echo "Removing stack policies..."
-        aws cloudformation delete-stack-policy \
-            --stack-name "$FARGATE_STACK_NAME" --region "$REGION" 2>/dev/null || true
-        aws cloudformation delete-stack-policy \
-            --stack-name "$LAMBDA_STACK_NAME" --region "$REGION" 2>/dev/null || true
-        
-        # Delete CloudFormation stacks
-        echo "Deleting CloudFormation stacks..."
-        aws cloudformation delete-stack --stack-name "$FARGATE_STACK_NAME" --region "$REGION"
-        aws cloudformation delete-stack --stack-name "$LAMBDA_STACK_NAME" --region "$REGION"
-        
-        echo "Waiting for stacks to be deleted..."
-        aws cloudformation wait stack-delete-complete --stack-name "$FARGATE_STACK_NAME" --region "$REGION"
-        aws cloudformation wait stack-delete-complete --stack-name "$LAMBDA_STACK_NAME" --region "$REGION"
-        echo "[OK] Stacks deleted"
-        
-        # Clean up Lambda S3 bucket
-        echo ""
-        echo "=== Cleaning Up Lambda Artifacts ==="
-        LAMBDA_S3_BUCKET="fluidity-lambda-artifacts-${ACCOUNT_ID}-${REGION}"
-        
-        # Check if bucket exists
-        if aws s3 ls "s3://$LAMBDA_S3_BUCKET" --region "$REGION" 2>/dev/null; then
-            echo "Emptying S3 bucket: $LAMBDA_S3_BUCKET"
-            aws s3 rm "s3://$LAMBDA_S3_BUCKET" --recursive --region "$REGION"
-            
-            echo "Deleting S3 bucket: $LAMBDA_S3_BUCKET"
-            aws s3 rb "s3://$LAMBDA_S3_BUCKET" --region "$REGION"
-            echo "[OK] Lambda artifacts bucket deleted"
-        else
-            echo "S3 bucket does not exist or already deleted"
-        fi
-        
-        echo ""
-        echo "[OK] All resources deleted successfully"
+    Darwin)
+        OS_TYPE="darwin"
+        DEFAULT_INSTALL_PATH="/usr/local/opt/fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
         ;;
-    status)
-        echo ""
-        echo "=== Stack Status ==="
-        
-        local fargate_status
-        fargate_status=$(get_stack_status "$FARGATE_STACK_NAME")
-        local lambda_status
-        lambda_status=$(get_stack_status "$LAMBDA_STACK_NAME")
-        
-        echo "Fargate Stack: $fargate_status"
-        echo "Lambda Stack: $lambda_status"
-        
-        if [[ ! "$fargate_status" =~ DELETE ]] && [[ "$fargate_status" != "DOES_NOT_EXIST" ]]; then
-            get_stack_drift_status "$FARGATE_STACK_NAME"
-        fi
+    Linux)
+        OS_TYPE="linux"
+        DEFAULT_INSTALL_PATH="/opt/fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
         ;;
-    outputs)
-        get_stack_outputs "$FARGATE_STACK_NAME"
-        get_stack_outputs "$LAMBDA_STACK_NAME"
+    *)
+        OS_TYPE="unknown"
+        DEFAULT_INSTALL_PATH="/opt/fluidity"
+        DEFAULT_LOCAL_PROXY_PORT="8080"
         ;;
 esac
 
-echo ""
-echo "[OK] Operation completed successfully"
+INSTALL_PATH="${INSTALL_PATH:-$DEFAULT_INSTALL_PATH}"
+LOCAL_PROXY_PORT="${LOCAL_PROXY_PORT:-$DEFAULT_LOCAL_PROXY_PORT}"
+
+# Color definitions (light pastel palette)
+PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
+PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
+PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
+WHITE='\033[1;37m'               # Standard white (info logs)
+RED='\033[0;31m'                 # Standard red (errors)
+RESET='\033[0m'
+
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+log_header() {
+    echo ""
+    echo ""
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+}
+
+log_minor() {
+    echo ""
+    echo ""
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}================================================================================${RESET}"
+}
+
+log_substep() {
+    echo ""
+    echo ""
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_debug() {
+    if [[ "$DEBUG" == "true" ]]; then
+        echo "[DEBUG] $*" >&2
+    fi
+}
+
+log_warn() {
+    echo "[WARN] $*" >&2
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error_start() {
+    echo ""
+    echo -e "${RED}================================================================================${RESET}"
+    echo -e "${RED}ERROR${RESET}"
+    echo -e "${RED}================================================================================${RESET}"
+}
+
+log_error_end() {
+    echo -e "${RED}================================================================================${RESET}"
+    echo ""
+}
+
+check_sudo_requirement() {
+    # Check if action requires sudo
+    if [[ "$ACTION" == "deploy" || "$ACTION" == "deploy-agent" ]]; then
+        if [[ "$EUID" -ne 0 ]]; then
+            log_error_start
+            echo "Sudo privileges required for agent deployment"
+            echo ""
+            echo "Please run this script with sudo:"
+            echo "  sudo -E $0 $@"
+            log_error_end
+            exit 1
+        fi
+    fi
+}
+
+check_aws_credentials() {
+    # Check if action requires AWS credentials
+    if [[ "$ACTION" == "deploy" || "$ACTION" == "deploy-server" || "$ACTION" == "delete" ]]; then
+        # Test if AWS credentials are available
+        if ! aws sts get-caller-identity &>/dev/null; then
+            log_error_start
+            echo "AWS credentials not found or not configured"
+            echo ""
+            echo "This can happen if:"
+            echo "  1. AWS credentials are not configured"
+            echo "  2. Running with sudo without the -E flag (environment variables not preserved)"
+            echo ""
+            echo "Solutions:"
+            echo "  Option 1: Configure AWS credentials first"
+            echo "    aws configure"
+            echo ""
+            echo "  Option 2: Run script with sudo -E to preserve environment variables"
+            echo "    sudo -E $0 $@"
+            echo ""
+            log_error_end
+            exit 1
+        fi
+    fi
+}
+
+log_section() {
+    echo ""
+    echo ""
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}================================================================================${RESET}"
+}
+
+log_substep() {
+    echo ""
+    echo ""
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+# ============================================================================
+# HELP & VALIDATION
+# ============================================================================
+
+show_help() {
+    sed -n '3,/^###############################################################################$/p' "$0" | sed '$d' | sed 's/^# *//'
+    exit 0
+}
+
+parse_arguments() {
+    shift || true
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --region)
+                AWS_REGION="$2"
+                shift 2
+                ;;
+            --vpc-id)
+                VPC_ID="$2"
+                shift 2
+                ;;
+            --public-subnets)
+                PUBLIC_SUBNETS="$2"
+                shift 2
+                ;;
+            --allowed-cidr)
+                ALLOWED_CIDR="$2"
+                shift 2
+                ;;
+            --server-ip)
+                SERVER_IP="$2"
+                shift 2
+                ;;
+            --local-proxy-port)
+                LOCAL_PROXY_PORT="$2"
+                shift 2
+                ;;
+            --cert-path)
+                CERT_PATH="$2"
+                shift 2
+                ;;
+            --key-path)
+                KEY_PATH="$2"
+                shift 2
+                ;;
+            --ca-cert-path)
+                CA_CERT_PATH="$2"
+                shift 2
+                ;;
+            --install-path)
+                INSTALL_PATH="$2"
+                shift 2
+                ;;
+            --log-level)
+                LOG_LEVEL="$2"
+                shift 2
+                ;;
+            --wake-endpoint)
+                WAKE_ENDPOINT="$2"
+                shift 2
+                ;;
+            --kill-endpoint)
+                KILL_ENDPOINT="$2"
+                shift 2
+                ;;
+            --skip-build)
+                SKIP_BUILD=true
+                shift
+                ;;
+            --debug)
+                DEBUG=true
+                shift
+                ;;
+            --force)
+                FORCE=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                ;;
+            *)
+                log_error_start
+                echo "Unknown option: $1"
+                log_error_end
+                exit 1
+                ;;
+        esac
+    done
+}
+
+validate_action() {
+    case "$ACTION" in
+        deploy|deploy-server|deploy-agent|delete|status)
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            log_error_start
+            echo "Invalid action: $ACTION"
+            echo "Valid actions: deploy, deploy-server, deploy-agent, delete, status"
+            log_error_end
+            exit 1
+            ;;
+    esac
+}
+
+# ============================================================================
+# DEPLOYMENT FUNCTIONS
+# ============================================================================
+
+deploy_server() {
+    log_section "Deploying Server to AWS"
+    
+    local server_script="$SCRIPT_DIR/deploy-server.sh"
+    
+    if [[ ! -f "$server_script" ]]; then
+        log_error_start
+        echo "Server deployment script not found: $server_script"
+        log_error_end
+        exit 1
+    fi
+    
+    local args=("deploy")
+    [[ -n "$AWS_REGION" ]] && args+=(--region "$AWS_REGION")
+    [[ -n "$VPC_ID" ]] && args+=(--vpc-id "$VPC_ID")
+    [[ -n "$PUBLIC_SUBNETS" ]] && args+=(--public-subnets "$PUBLIC_SUBNETS")
+    [[ -n "$ALLOWED_CIDR" ]] && args+=(--allowed-cidr "$ALLOWED_CIDR")
+    [[ "$FORCE" == "true" ]] && args+=(--force)
+    [[ "$DEBUG" == "true" ]] && args+=(--debug)
+    
+    log_debug "Calling server deployment script with: ${args[*]}"
+    
+    # Run script and capture output for endpoint extraction
+    local output
+    local temp_output="/tmp/fluidity-deploy-server-$$.log"
+    
+    if bash "$server_script" "${args[@]}" 2>&1 | tee "$temp_output"; then
+        output=$(cat "$temp_output")
+        rm -f "$temp_output"
+        
+        log_success "Server deployment completed"
+        
+        # Extract endpoints from export_endpoints output
+        local temp_exports="/tmp/fluidity-exports-$$.sh"
+        echo "$output" | grep "^export " > "$temp_exports" 2>/dev/null || true
+        
+        if [[ -s "$temp_exports" ]]; then
+            log_debug "Extracted endpoints from server deployment"
+            
+            # Extract each variable individually to avoid shell metacharacter issues
+            SERVER_REGION=$(grep "^export SERVER_REGION=" "$temp_exports" | cut -d"'" -f2)
+            WAKE_ENDPOINT=$(grep "^export WAKE_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            KILL_ENDPOINT=$(grep "^export KILL_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
+            
+            # For SERVER_IP_COMMAND, extract everything between the quotes (handling the complex command)
+            SERVER_IP_COMMAND=$(sed -n 's/^export SERVER_IP_COMMAND="\(.*\)"$/\1/p' "$temp_exports")
+            
+            log_debug "Extracted SERVER_REGION: $SERVER_REGION"
+            log_debug "Extracted WAKE_ENDPOINT: $WAKE_ENDPOINT"
+            log_debug "Extracted KILL_ENDPOINT: $KILL_ENDPOINT"
+            log_debug "Extracted SERVER_PORT: $SERVER_PORT"
+            log_debug "Extracted SERVER_IP_COMMAND length: ${#SERVER_IP_COMMAND}"
+            
+            rm -f "$temp_exports"
+        fi
+        
+        return 0
+    else
+        output=$(cat "$temp_output")
+        rm -f "$temp_output"
+        
+        log_error_start
+        echo "Server deployment failed"
+        echo ""
+        echo "If the error mentions AWS credentials, ensure you ran this command with:"
+        echo "  sudo -E $0 deploy"
+        echo ""
+        echo "The -E flag preserves environment variables including AWS credentials."
+        log_error_end
+        return 1
+    fi
+}
+
+deploy_agent() {
+    log_section "Deploying Agent to Local System"
+    
+    local agent_script="$SCRIPT_DIR/deploy-agent.sh"
+    
+    if [[ ! -f "$agent_script" ]]; then
+        log_error_start
+        echo "Agent deployment script not found: $agent_script"
+        log_error_end
+        exit 1
+    fi
+    
+    # If SERVER_IP not provided via command line, try to extract from running Fargate task
+    # (optional - agent will get it from wake function)
+    if [[ -z "$SERVER_IP" && -n "$SERVER_IP_COMMAND" ]]; then
+        log_debug "Fargate task detection skipped - IP will be obtained from wake function"
+    fi
+    
+    local args=("deploy")
+    
+    # Pass server configuration
+    if [[ -n "$SERVER_IP" ]]; then
+        args+=(--server-ip "$SERVER_IP")
+    fi
+    
+    args+=(--server-port "$SERVER_PORT")
+    args+=(--local-proxy-port "$LOCAL_PROXY_PORT")
+    
+    # Pass Lambda endpoints if available
+    if [[ -n "$WAKE_ENDPOINT" ]]; then
+        args+=(--wake-endpoint "$WAKE_ENDPOINT")
+    fi
+    
+    if [[ -n "$KILL_ENDPOINT" ]]; then
+        args+=(--kill-endpoint "$KILL_ENDPOINT")
+    fi
+
+    # Pass log level if provided
+    if [[ -n "$LOG_LEVEL" ]]; then
+        args+=(--log-level "$LOG_LEVEL")
+    fi
+    
+    # Pass certificate paths if provided
+    [[ -n "$CERT_PATH" ]] && args+=(--cert-path "$CERT_PATH")
+    [[ -n "$KEY_PATH" ]] && args+=(--key-path "$KEY_PATH")
+    [[ -n "$CA_CERT_PATH" ]] && args+=(--ca-cert-path "$CA_CERT_PATH")
+    
+    # Pass installation path if specified
+    [[ -n "$INSTALL_PATH" && "$INSTALL_PATH" != "$DEFAULT_INSTALL_PATH" ]] && args+=(--install-path "$INSTALL_PATH")
+    
+    # Pass build/debug flags
+    [[ "$SKIP_BUILD" == "true" ]] && args+=(--skip-build)
+    [[ "$DEBUG" == "true" ]] && args+=(--debug)
+    
+    log_debug "Calling agent deployment script with: ${args[*]}"
+    
+    # Run script and capture output (already running as sudo)
+    local agent_output
+    local temp_agent_output="/tmp/fluidity-deploy-agent-$$.log"
+    
+    if bash "$agent_script" "${args[@]}" 2>&1 | tee "$temp_agent_output"; then
+        agent_output=$(cat "$temp_agent_output")
+        rm -f "$temp_agent_output"
+        
+        # Extract agent installation details from output
+        AGENT_INSTALL_PATH=$(echo "$agent_output" | grep -oP 'Agent binary installed: \K[^\/\\]*(?:\/|\\).*' | head -1)
+        AGENT_CONFIG_PATH=$(echo "$agent_output" | grep -oP 'Configuration file (?:created|written): \K.*' | head -1)
+        
+        # Fallback to using INSTALL_PATH if extraction fails
+        if [[ -z "$AGENT_INSTALL_PATH" ]]; then
+            AGENT_INSTALL_PATH="$INSTALL_PATH"
+        fi
+        
+        log_success "Agent deployment completed"
+        return 0
+    else
+        agent_output=$(cat "$temp_agent_output")
+        rm -f "$temp_agent_output"
+        
+        log_error_start
+        echo "Agent deployment failed"
+        log_error_end
+        return 1
+    fi
+}
+
+delete_server() {
+    log_section "Deleting AWS Infrastructure"
+    
+    local server_script="$SCRIPT_DIR/deploy-server.sh"
+    
+    if [[ ! -f "$server_script" ]]; then
+        log_error_start
+        echo "Server deployment script not found: $server_script"
+        log_error_end
+        exit 1
+    fi
+    
+    read -p "Are you sure you want to delete the AWS infrastructure? (yes/no): " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        log_warn "Deletion cancelled"
+        return 0
+    fi
+    
+    local args=("delete")
+    [[ -n "$AWS_REGION" ]] && args+=(--region "$AWS_REGION")
+    [[ "$DEBUG" == "true" ]] && args+=(--debug)
+    
+    log_debug "Calling server deletion with: ${args[*]}"
+    
+    # Run script and display output
+    if bash "$server_script" "${args[@]}"; then
+        log_success "Infrastructure deletion completed"
+        return 0
+    else
+        log_error_start
+        echo "Infrastructure deletion failed"
+        log_error_end
+        return 1
+    fi
+}
+
+show_status() {
+    log_section "Fluidity Deployment Status"
+    
+    log_substep "Server Status (AWS)"
+    
+    local server_script="$SCRIPT_DIR/deploy-server.sh"
+    
+    if [[ -f "$server_script" ]]; then
+        local args=("status")
+        [[ -n "$AWS_REGION" ]] && args+=(--region "$AWS_REGION")
+        [[ "$DEBUG" == "true" ]] && args+=(--debug)
+        
+        bash "$server_script" "${args[@]}" || true
+    else
+        log_info "Server deployment script not found"
+    fi
+    
+    log_substep "Agent Status"
+    
+    local agent_script="$SCRIPT_DIR/deploy-agent.sh"
+    
+    if [[ -f "$agent_script" ]]; then
+        bash "$agent_script" status || true
+    else
+        log_info "Agent deployment script not found"
+    fi
+}
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+main() {
+    validate_action
+    parse_arguments "$@"
+    
+    # Check sudo requirement early
+    check_sudo_requirement
+    
+    # Check AWS credentials availability
+    check_aws_credentials
+    
+    log_header "Fluidity Complete Deployment"
+    log_info "Operating System: $OS_TYPE"
+    log_info "Default install path: $DEFAULT_INSTALL_PATH"
+    log_info "Default proxy port: $DEFAULT_LOCAL_PROXY_PORT"
+    
+    case "$ACTION" in
+        deploy)
+            if ! deploy_server; then
+                exit 1
+            fi
+            
+            # Deploy agent with collected endpoints (IP can be provided manually or obtained from wake function later)
+        deploy_agent
+            
+            log_success "Complete Fluidity deployment finished successfully"
+            log_info ""
+            log_minor "Deployment Summary"
+            
+            log_substep "AWS Server Deployment"
+            log_info "Region: $SERVER_REGION"
+            log_info "Wake Lambda: $WAKE_ENDPOINT"
+            log_info "Kill Lambda: $KILL_ENDPOINT"
+            log_info "Server Port: $SERVER_PORT"
+            log_info "Server IP: (Obtain from AWS console or use wake function)"
+            
+            log_substep "Local Agent Deployment"
+            log_info "Installation Path: $AGENT_INSTALL_PATH"
+            log_info "Configuration File: $AGENT_CONFIG_PATH"
+            log_info "Proxy Port: $LOCAL_PROXY_PORT"
+            
+            log_substep "Next Steps"
+            log_info "1. Update agent configuration with server IP (if not auto-detected):"
+            log_info "   Edit: $AGENT_CONFIG_PATH"
+            log_info "   Set server_ip to the Fargate task public IP"
+            log_info ""
+            log_info "2. Start the server (Fargate task):"
+            log_info "   aws ecs update-service --cluster fluidity --service fluidity-server --desired-count 1 --region $SERVER_REGION"
+            log_info ""
+            log_info "3. Start the agent:"
+            if [[ "$OS_TYPE" == "windows" ]]; then
+                log_info "   $AGENT_INSTALL_PATH\\fluidity-agent.exe"
+            else
+                log_info "   $AGENT_INSTALL_PATH/fluidity-agent"
+            fi
+            log_info ""
+            log_info "4. Test the connection:"
+            log_info "   curl -x http://127.0.0.1:$LOCAL_PROXY_PORT http://example.com"
+            log_info ""
+            ;;
+        
+        deploy-server)
+            if ! deploy_server; then
+                exit 1
+            fi
+            
+            log_success "Server deployment finished successfully"
+            log_info ""
+            log_info "To deploy agent with server endpoints, run:"
+            log_info "  sudo ./deploy-fluidity.sh deploy-agent"
+            log_info ""
+            ;;
+        
+        deploy-agent)
+            if [[ -z "$SERVER_IP" ]]; then
+                log_warn "Server IP not provided, agent configuration will require manual input or will be obtained from wake function"
+            fi
+            
+            if ! deploy_agent; then
+                exit 1
+            fi
+            
+            log_success "Agent deployment finished successfully"
+            log_info ""
+            log_section "Agent Deployment Summary"
+            log_info "Installation Path: $AGENT_INSTALL_PATH"
+            log_info "Configuration File: $AGENT_CONFIG_PATH"
+            log_info "Proxy Port: $LOCAL_PROXY_PORT"
+            log_info ""
+            ;;
+        
+        delete)
+            if ! delete_server; then
+                exit 1
+            fi
+            
+            log_success "Deletion complete"
+            log_info ""
+            log_info "To uninstall the agent, run:"
+            log_info "  ./deploy-agent.sh uninstall"
+            log_info ""
+            ;;
+        
+        status)
+            show_status
+            ;;
+    esac
+    
+    echo ""
+}
+
+# Execute main
+main "$@"

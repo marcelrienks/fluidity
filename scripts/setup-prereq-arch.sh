@@ -4,19 +4,57 @@
 
 set -e
 
-echo "========================================"
-echo "Fluidity Prerequisites Setup (Arch/Hyprland)"
-echo "========================================"
-echo ""
-
 HAS_ERRORS=false
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Color definitions (light pastel palette)
+PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
+PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
+PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
+WHITE='\033[1;37m'               # Standard white (info logs)
+RED='\033[0;31m'                 # Standard red (errors)
+RESET='\033[0m'
+
+# ============================================================================
+# LOGGING FUNCTIONS
+# ============================================================================
+
+log_header() {
+    echo ""
+    echo ""
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+    echo -e "${PALE_BLUE}$*${RESET}"
+    echo -e "${PALE_BLUE}================================================================================${RESET}"
+}
+
+log_minor() {
+    echo ""
+    echo ""
+    echo -e "${PALE_YELLOW}$*${RESET}"
+    echo -e "${PALE_YELLOW}================================================================================${RESET}"
+}
+
+log_substep() {
+    echo ""
+    echo ""
+    echo -e "${PALE_GREEN}$*${RESET}"
+    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
+}
+
+log_info() {
+    echo "[INFO] $*"
+}
+
+log_success() {
+    echo "✓ $*"
+}
+
+log_error() {
+    echo -e "[ERROR] $*${RESET}" >&2
+}
+
+log_debug() {
+    echo "[DEBUG] $*" >&2
+}
 
 # Function to check if a command exists
 command_exists() {
@@ -28,138 +66,326 @@ is_root() {
     [ "$(id -u)" -eq 0 ]
 }
 
+# Check if running interactively (can accept input)
+is_interactive() {
+    [[ -t 0 ]]
+}
+
+log_header "Fluidity Prerequisites Setup (Arch/Hyprland)"
+
 SUDO=""
 if ! is_root; then
-    SUDO="sudo"
-    echo -e "${YELLOW}Note: Some commands will require sudo password.${NC}"
-    echo ""
+    if is_interactive; then
+        SUDO="sudo"
+        log_info "Note: Some commands will require sudo password."
+        echo ""
+    else
+        log_error "This script requires sudo privileges but is not running interactively."
+        echo ""
+        log_info "Please run this script directly in a terminal:"
+        echo "  bash ./scripts/setup-prereq-arch.sh"
+        echo ""
+        log_info "Or run with elevated privileges:"
+        echo "  sudo bash ./scripts/setup-prereq-arch.sh"
+        exit 1
+    fi
 fi
 
 # 1. Update package manager
-echo -e "${YELLOW}[1/6] Updating package manager...${NC}"
+log_minor "1/9 Updating package manager..."
 $SUDO pacman -Sy
-echo -e "${GREEN}  ✓ Package lists updated${NC}"
+log_success "Package lists updated"
 echo ""
 
 # 2. Check/Install Go
-echo -e "${YELLOW}[2/6] Checking Go (1.21+)...${NC}"
+log_minor "2/9 Checking Go (1.24.3 to match toolchain)..."
+GO_REQUIRED_VERSION="1.24.3"
+GO_INSTALL_NEEDED=false
+
 if command_exists go; then
-    GO_VERSION=$(go version)
-    echo -e "${GREEN}  ✓ Go is installed: $GO_VERSION${NC}"
-else
-    echo -e "${RED}  ✗ Go is not installed${NC}"
-    echo -e "${YELLOW}  Installing Go...${NC}"
-    $SUDO pacman -S --noconfirm go
-    if command_exists go; then
-        echo -e "${GREEN}  ✓ Go installed successfully${NC}"
+    GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+    log_info "Found Go version: $GO_VERSION"
+    
+    # Compare versions (simple string comparison works for most cases)
+    if [ "$GO_VERSION" != "$GO_REQUIRED_VERSION" ]; then
+        log_info "⚠ Go version mismatch. Required: $GO_REQUIRED_VERSION, Installed: $GO_VERSION"
+        GO_INSTALL_NEEDED=true
     else
-        echo -e "${RED}  ✗ Go installation failed. Please install manually.${NC}"
+        log_success "Go $GO_VERSION matches required version"
+    fi
+else
+    log_error "Go is not installed"
+    GO_INSTALL_NEEDED=true
+fi
+
+if [ "$GO_INSTALL_NEEDED" = true ]; then
+    log_info "Installing Go $GO_REQUIRED_VERSION..."
+    
+    # Remove old Go installation if it exists
+    if [ -d "/usr/local/go" ]; then
+        log_info "Removing old Go installation..."
+        $SUDO rm -rf /usr/local/go
+    fi
+    
+    # Download and install specific Go version
+    GO_TARBALL="go${GO_REQUIRED_VERSION}.linux-amd64.tar.gz"
+    GO_URL="https://go.dev/dl/${GO_TARBALL}"
+    
+    log_info "Downloading Go $GO_REQUIRED_VERSION from $GO_URL..."
+    if wget -q "$GO_URL" -O "/tmp/$GO_TARBALL"; then
+        log_success "Downloaded Go tarball"
+        
+        log_info "Extracting to /usr/local/go..."
+        $SUDO tar -C /usr/local -xzf "/tmp/$GO_TARBALL"
+        rm "/tmp/$GO_TARBALL"
+        
+        # Add to PATH if not already there
+        if ! grep -q "/usr/local/go/bin" ~/.bashrc 2>/dev/null; then
+            echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+            log_info "Added /usr/local/go/bin to ~/.bashrc"
+        fi
+        
+        # Export for current session
+        export PATH=$PATH:/usr/local/go/bin
+        
+        if command_exists go; then
+            GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
+            log_success "Go $GO_VERSION installed successfully"
+        else
+            log_error "Go installation failed. Please install manually from https://go.dev/dl/"
+            HAS_ERRORS=true
+        fi
+    else
+        log_error "Failed to download Go. Please install manually from https://go.dev/dl/"
         HAS_ERRORS=true
     fi
 fi
 echo ""
 
 # 3. Check/Install Make
-echo -e "${YELLOW}[3/6] Checking Make...${NC}"
+log_minor "3/9 Checking Make..."
 if command_exists make; then
     MAKE_VERSION=$(make --version | head -n 1)
-    echo -e "${GREEN}  ✓ Make is installed: $MAKE_VERSION${NC}"
+    log_success "Make is installed: $MAKE_VERSION"
 else
-    echo -e "${RED}  ✗ Make is not installed${NC}"
-    echo -e "${YELLOW}  Installing Make...${NC}"
+    log_error "Make is not installed"
+    log_info "Installing Make..."
     $SUDO pacman -S --noconfirm base-devel
     if command_exists make; then
-        echo -e "${GREEN}  ✓ Make installed successfully${NC}"
+        log_success "Make installed successfully"
     else
-        echo -e "${YELLOW}  Note: Make is optional - you can run build commands manually.${NC}"
+        log_info "Note: Make is optional - you can run build commands manually."
     fi
 fi
 echo ""
 
 # 4. Check/Install Docker
-echo -e "${YELLOW}[4/6] Checking Docker...${NC}"
+log_minor "4/9 Checking Docker..."
+
+# Check if running in WSL
+IS_WSL=false
+if grep -qEi "(Microsoft|WSL)" /proc/version 2>/dev/null ; then
+    IS_WSL=true
+fi
+
 if command_exists docker; then
-    DOCKER_VERSION=$(docker --version)
-    echo -e "${GREEN}  ✓ Docker is installed: $DOCKER_VERSION${NC}"
+    DOCKER_VERSION=$(docker --version 2>&1) || DOCKER_VERSION="unknown"
+    log_success "Docker is installed: $DOCKER_VERSION"
+    if [ "$IS_WSL" = true ]; then
+        log_info "Note: Using Docker Desktop for Windows via WSL integration"
+    fi
 else
-    echo -e "${RED}  ✗ Docker is not installed${NC}"
-    echo -e "${YELLOW}  Installing Docker...${NC}"
-    $SUDO pacman -S --noconfirm docker docker-compose
-    if command_exists docker; then
-        echo -e "${GREEN}  ✓ Docker installed successfully${NC}"
-        $SUDO systemctl start docker
-        $SUDO systemctl enable docker
-        if ! is_root; then
-            $SUDO usermod -aG docker $USER
-            echo -e "${YELLOW}  ⚠ Added $USER to docker group. Please log out and back in for changes to take effect.${NC}"
-        fi
+    if [ "$IS_WSL" = true ]; then
+        log_info "✗ Docker is not installed in WSL"
+        log_info "Note: For WSL, use Docker Desktop for Windows instead of installing Docker in WSL"
+        log_info "1. Install Docker Desktop on Windows from https://www.docker.com/products/docker-desktop"
+        log_info "2. In Docker Desktop settings, enable 'WSL 2 based engine'"
+        log_info "3. Enable integration with your WSL distro in Settings → Resources → WSL Integration"
+        log_info "4. Restart WSL terminal after enabling integration"
+        log_info "Skipping Docker installation in WSL..."
     else
-        echo -e "${RED}  ✗ Docker installation failed${NC}"
-        HAS_ERRORS=true
+        log_error "Docker is not installed"
+        log_info "Installing Docker..."
+        $SUDO pacman -S --noconfirm docker docker-compose
+        if command_exists docker; then
+            log_success "Docker installed successfully"
+            if command_exists systemctl; then
+                $SUDO systemctl start docker 2>/dev/null || log_info "Note: Could not start Docker service (systemctl not available)"
+                $SUDO systemctl enable docker 2>/dev/null || true
+            fi
+            if ! is_root; then
+                $SUDO usermod -aG docker $USER
+                log_info "⚠ Added $USER to docker group. Please log out and back in for changes to take effect."
+            fi
+        else
+            log_error "Docker installation failed"
+            HAS_ERRORS=true
+        fi
     fi
 fi
 echo ""
 
-# 5. Check/Install OpenSSL
-echo -e "${YELLOW}[5/6] Checking OpenSSL...${NC}"
+# 5. Check/Install OpenSSL and zip
+log_minor "5/9 Checking OpenSSL..."
 if command_exists openssl; then
     OPENSSL_VERSION=$(openssl version)
-    echo -e "${GREEN}  ✓ OpenSSL is installed: $OPENSSL_VERSION${NC}"
+    log_success "OpenSSL is installed: $OPENSSL_VERSION"
 else
-    echo -e "${RED}  ✗ OpenSSL is not installed${NC}"
-    echo -e "${YELLOW}  Installing OpenSSL...${NC}"
+    log_error "OpenSSL is not installed"
+    log_info "Installing OpenSSL..."
     $SUDO pacman -S --noconfirm openssl
     if command_exists openssl; then
-        echo -e "${GREEN}  ✓ OpenSSL installed successfully${NC}"
+        log_success "OpenSSL installed successfully"
     else
-        echo -e "${RED}  ✗ OpenSSL installation failed${NC}"
+        log_error "OpenSSL installation failed"
         HAS_ERRORS=true
     fi
 fi
 echo ""
 
-# 6. Check/Install Node.js, npm, and required npm packages
-echo -e "${YELLOW}[6/6] Checking Node.js (18+), npm, and npm packages...${NC}"
+# 6. Check/Install zip
+log_minor "6/9 Checking zip..."
+if command_exists zip; then
+    ZIP_VERSION=$(zip --version | head -n 2 | tail -n 1)
+    log_success "zip is installed: $ZIP_VERSION"
+else
+    log_error "zip is not installed"
+    log_info "Installing zip..."
+    $SUDO pacman -S --noconfirm zip unzip
+    if command_exists zip; then
+        log_success "zip installed successfully"
+    else
+        log_error "zip installation failed"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 7. Check/Install jq
+log_minor "7/9 Checking jq..."
+if command_exists jq; then
+    JQ_VERSION=$(jq --version)
+    log_success "jq is installed: $JQ_VERSION"
+else
+    log_error "jq is not installed"
+    log_info "Installing jq..."
+    $SUDO pacman -S --noconfirm jq
+    if command_exists jq; then
+        log_success "jq installed successfully"
+    else
+        log_error "jq installation failed"
+        HAS_ERRORS=true
+    fi
+fi
+echo ""
+
+# 8. Check/Install AWS CLI
+log_minor "8/9 Checking AWS CLI v2..."
+if command_exists aws; then
+    AWS_VERSION=$(aws --version 2>&1)
+    log_success "AWS CLI is installed: $AWS_VERSION"
+else
+    log_error "AWS CLI is not installed"
+    log_info "Installing AWS CLI v2..."
+    
+    # Check if aws-cli-v2 is available in AUR
+    if command_exists yay || command_exists paru; then
+        AUR_HELPER=""
+        if command_exists yay; then
+            AUR_HELPER="yay"
+        elif command_exists paru; then
+            AUR_HELPER="paru"
+        fi
+        
+        log_info "Installing AWS CLI v2 via AUR ($AUR_HELPER)..."
+        if $AUR_HELPER -S --noconfirm aws-cli-v2; then
+            if command_exists aws; then
+                AWS_VERSION=$(aws --version 2>&1)
+                log_success "AWS CLI installed successfully via AUR: $AWS_VERSION"
+            else
+                log_error "AWS CLI installation via AUR failed"
+                HAS_ERRORS=true
+            fi
+        else
+            log_error "AUR installation failed"
+            HAS_ERRORS=true
+        fi
+    else
+        log_info "AUR helper not found, trying manual installation..."
+        
+        # Download AWS CLI v2 installer
+        if curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"; then
+            log_success "Downloaded AWS CLI installer"
+            
+            # Unzip and install
+            if command_exists unzip; then
+                unzip -q /tmp/awscliv2.zip -d /tmp
+                $SUDO /tmp/aws/install
+                rm -rf /tmp/awscliv2.zip /tmp/aws
+                
+                if command_exists aws; then
+                    AWS_VERSION=$(aws --version 2>&1)
+                    log_success "AWS CLI installed successfully: $AWS_VERSION"
+                else
+                    log_error "AWS CLI installation failed"
+                    log_info "Please install manually from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+                    HAS_ERRORS=true
+                fi
+            else
+                log_error "unzip command not found (required for AWS CLI installation)"
+                HAS_ERRORS=true
+            fi
+        else
+            log_error "Failed to download AWS CLI installer"
+            log_info "Please install manually from https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+            HAS_ERRORS=true
+        fi
+    fi
+fi
+echo ""
+
+# 9. Check/Install Node.js, npm, and required npm packages
+log_minor "9/9 Checking Node.js (18+), npm, and npm packages..."
 NODE_INSTALLED=false
 NPM_INSTALLED=false
 if command_exists node; then
     NODE_INSTALLED=true
     NODE_VERSION=$(node --version)
-    echo -e "${GREEN}  ✓ Node.js is installed: $NODE_VERSION${NC}"
+    log_success "Node.js is installed: $NODE_VERSION"
 else
-    echo -e "${RED}  ✗ Node.js is not installed${NC}"
+    log_error "Node.js is not installed"
 fi
 if command_exists npm; then
     NPM_INSTALLED=true
     NPM_VERSION=$(npm --version)
-    echo -e "${GREEN}  ✓ npm is installed: $NPM_VERSION${NC}"
+    log_success "npm is installed: $NPM_VERSION"
 else
-    echo -e "${RED}  ✗ npm is not installed${NC}"
+    log_error "npm is not installed"
 fi
 
 if [ "$NODE_INSTALLED" = false ] || [ "$NPM_INSTALLED" = false ]; then
-    echo -e "${YELLOW}  Installing Node.js and npm...${NC}"
+    log_info "Installing Node.js and npm..."
     $SUDO pacman -S --noconfirm nodejs npm
     if command_exists node; then
         NODE_INSTALLED=true
         NODE_VERSION=$(node --version)
-        echo -e "${GREEN}  ✓ Node.js installed successfully: $NODE_VERSION${NC}"
+        log_success "Node.js installed successfully: $NODE_VERSION"
     else
-        echo -e "${RED}  ✗ Node.js installation failed${NC}"
+        log_error "Node.js installation failed"
         HAS_ERRORS=true
     fi
     if command_exists npm; then
         NPM_INSTALLED=true
         NPM_VERSION=$(npm --version)
-        echo -e "${GREEN}  ✓ npm installed successfully: $NPM_VERSION${NC}"
+        log_success "npm installed successfully: $NPM_VERSION"
     else
-        echo -e "${RED}  ✗ npm installation failed${NC}"
+        log_error "npm installation failed"
         HAS_ERRORS=true
     fi
 fi
 
 if [ "$NODE_INSTALLED" = true ] && [ "$NPM_INSTALLED" = true ]; then
-    echo -e "${YELLOW}  Checking npm packages (ws, https-proxy-agent)...${NC}"
+    log_info "Checking npm packages (ws, https-proxy-agent)..."
     WS_INSTALLED=false
     PROXY_INSTALLED=false
     if npm list -g ws 2>/dev/null | grep -q "ws@"; then
@@ -169,32 +395,32 @@ if [ "$NODE_INSTALLED" = true ] && [ "$NPM_INSTALLED" = true ]; then
         PROXY_INSTALLED=true
     fi
     if [ "$WS_INSTALLED" = false ] || [ "$PROXY_INSTALLED" = false ]; then
-        echo -e "${YELLOW}  Installing required npm packages globally...${NC}"
+        log_info "Installing required npm packages globally..."
         # Try with sudo first
         if $SUDO npm install -g ws https-proxy-agent 2>/dev/null; then
-            echo -e "${GREEN}  ✓ npm packages installed globally (with sudo)${NC}"
+            log_success "npm packages installed globally (with sudo)"
         else
-            echo -e "${YELLOW}  sudo npm failed, retrying without sudo (user global install)...${NC}"
+            log_info "sudo npm failed, retrying without sudo (user global install)..."
             if npm install -g ws https-proxy-agent; then
-                echo -e "${GREEN}  ✓ npm packages installed globally (user global)${NC}"
+                log_success "npm packages installed globally (user global)"
             else
-                echo -e "${RED}  ✗ Error installing npm packages globally with and without sudo${NC}"
-                echo -e "${YELLOW}    If you see 'npm: command not found' with sudo, npm may not be in root's PATH."
-                echo -e "${YELLOW}    You can configure npm to use a user directory for global installs:"
-                echo -e "${YELLOW}      mkdir -p ~/.npm-global && npm config set prefix '~/.npm-global'"
-                echo -e "${YELLOW}      export PATH=\"$HOME/.npm-global/bin:$PATH\" (add to ~/.bashrc or ~/.zshrc)"
+                log_error "Error installing npm packages globally with and without sudo"
+                echo -e "    If you see 'npm: command not found' with sudo, npm may not be in root's PATH."
+                echo -e "    You can configure npm to use a user directory for global installs:"
+                echo -e "      mkdir -p ~/.npm-global && npm config set prefix '~/.npm-global'"
+                echo -e "      export PATH=\"$HOME/.npm-global/bin:$PATH\" (add to ~/.bashrc or ~/.zshrc)"
                 HAS_ERRORS=true
             fi
         fi
     else
-        echo -e "${GREEN}  ✓ Required npm packages are installed globally${NC}"
+        log_success "Required npm packages are installed globally"
     fi
     # Always ensure local node_modules for tests
-    echo -e "${YELLOW}  Ensuring local node_modules for ws and https-proxy-agent...${NC}"
+    log_info "Ensuring local node_modules for ws and https-proxy-agent..."
     if npm install ws https-proxy-agent; then
-        echo -e "${GREEN}  ✓ Local node_modules installed for ws and https-proxy-agent${NC}"
+        log_success "Local node_modules installed for ws and https-proxy-agent"
     else
-        echo -e "${RED}  ✗ Error installing local node_modules for ws and https-proxy-agent${NC}"
+        log_error "Error installing local node_modules for ws and https-proxy-agent"
         HAS_ERRORS=true
     fi
 fi
@@ -206,13 +432,13 @@ echo "Setup Summary"
 echo "========================================"
 
 if [ "$HAS_ERRORS" = true ]; then
-    echo -e "${YELLOW}⚠ Setup completed with errors. Please review the output above.${NC}"
-    echo -e "${YELLOW}  Some prerequisites may need to be installed manually.${NC}"
+    log_info "⚠ Setup completed with errors. Please review the output above."
+    log_info "Some prerequisites may need to be installed manually."
     exit 1
 else
-    echo -e "${GREEN}✓ All prerequisites are installed!${NC}"
+    log_success "✓ All prerequisites are installed!"
     echo ""
-    echo -e "${CYAN}Next steps:${NC}"
+    log_info "Next steps:"
     echo "  1. Close and reopen your terminal to refresh environment variables"
     echo "  2. If Docker was installed, log out and back in to apply docker group membership"
     echo "  3. Generate certificates: cd scripts && ./generate-certs.sh"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ var (
 	certFile   string
 	keyFile    string
 	caCertFile string
+	saveConfig bool
 )
 
 func main() {
@@ -49,6 +51,7 @@ func main() {
 	rootCmd.Flags().StringVar(&certFile, "cert", "", "Client certificate file")
 	rootCmd.Flags().StringVar(&keyFile, "key", "", "Client private key file")
 	rootCmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
+	rootCmd.Flags().BoolVar(&saveConfig, "save", false, "Persist supplied overrides back to the configuration file")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -84,7 +87,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		overrides["ca_cert_file"] = caCertFile
 	}
 
-	// Load configuration
+	// Load configuration from deployment location
+	// The deployment script ensures agent.yaml is in the same directory as the binary
 	cfg, err := config.LoadConfig[agent.Config](configFile, overrides)
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
@@ -103,12 +107,19 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("server IP address is required (use --server-ip or config file)")
 	}
 
-	// Save updated configuration if server IP was provided via CLI
-	if serverIP != "" && configFile != "" {
-		if err := config.SaveConfig(configFile, cfg); err != nil {
-			logger.Warn("Failed to save updated configuration", "error", err.Error())
+	// Persist merged configuration only if --save specified
+	if saveConfig {
+		// Save in same directory as binary
+		exePath, err := os.Executable()
+		if err != nil {
+			logger.Warn("Failed to determine binary location", "error", err.Error())
 		} else {
-			logger.Info("Updated configuration saved", "file", configFile)
+			finalPath := filepath.Join(filepath.Dir(exePath), "agent.yaml")
+			if err := config.SaveConfig(finalPath, cfg); err != nil {
+				logger.Warn("Failed to persist configuration", "file", finalPath, "error", err.Error())
+			} else {
+				logger.Info("Configuration saved", "file", finalPath)
+			}
 		}
 	}
 

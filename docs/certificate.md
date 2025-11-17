@@ -4,32 +4,20 @@
 
 **Local development:**
 ```bash
-./scripts/manage-certs.sh              # Linux/macOS
-.\scripts\manage-certs.ps1             # Windows
+./scripts/generate-certs.sh             # All platforms (use WSL on Windows)
 ```
 
 **AWS deployment:**
 ```bash
-./scripts/manage-certs.sh --save-to-secrets
-.\scripts\manage-certs.ps1 -Command generate-and-save -SecretsManager
+./scripts/generate-certs.sh --save-to-secrets
 ```
 
 ## Script Options
 
-### Bash (`manage-certs.sh`)
 ```
 --save-to-secrets      Save to AWS Secrets Manager
 --secret-name NAME     Secret name (default: fluidity/certificates)
 --certs-dir DIR        Certificate directory (default: ./certs)
-```
-
-### PowerShell (`manage-certs.ps1`)
-```
--Command               "generate" | "save" | "generate-and-save"
--SecretsManager        Enable Secrets Manager saving
--SecretName NAME       Secret name (default: fluidity/certificates)
--CertsDir DIR          Certificate directory (default: .\certs)
--Days NUM              Validity days (default: 730)
 ```
 
 ## Output
@@ -57,7 +45,7 @@ secrets_manager_name: "fluidity/certificates"
 ## Prerequisites
 
 **Required:**
-- OpenSSL ([Windows download](https://slproweb.com/products/Win32OpenSSL.html))
+- OpenSSL (included in most Linux/macOS distributions; Windows users install via WSL)
 
 **For AWS:**
 - AWS CLI
@@ -87,17 +75,17 @@ secrets_manager_name: "fluidity/certificates"
 
 **Certificate rotation:**
 ```bash
-./scripts/manage-certs.sh --save-to-secrets
+./scripts/generate-certs.sh --save-to-secrets
 ```
 
 **Custom secret name:**
 ```bash
-./scripts/manage-certs.sh --save-to-secrets --secret-name "my-org/fluidity/certs"
+./scripts/generate-certs.sh --save-to-secrets --secret-name "my-org/fluidity/certs"
 ```
 
 **Custom directory:**
 ```bash
-./scripts/manage-certs.sh --certs-dir /opt/fluidity/certs
+./scripts/generate-certs.sh --certs-dir /opt/fluidity/certs
 ```
 
 **Verify certificates:**
@@ -110,7 +98,7 @@ aws secretsmanager get-secret-value --secret-id fluidity/certificates
 
 | Issue | Solution |
 |-------|----------|
-| OpenSSL not found | Install from link above |
+| OpenSSL not found | Linux/macOS: Install via package manager; Windows: Use WSL |
 | AWS CLI not found | Install from https://aws.amazon.com/cli/ |
 | Unable to locate credentials | Run `aws configure` |
 | Certs already exist | Delete with `rm ./certs/*` and re-run |
