@@ -421,7 +421,7 @@ Resources:
   WakeLambdaFunctionUrl:
     Type: AWS::Lambda::Url
     Properties:
-      FunctionName: !Ref WakeLambdaFunction
+      TargetFunctionArn: !GetAtt WakeLambdaFunction.Arn
       AuthType: NONE  # Public URL; authentication handled at agent level with x-api-key header
       Cors:
         AllowCredentials: true
@@ -438,7 +438,7 @@ Resources:
   KillLambdaFunctionUrl:
     Type: AWS::Lambda::Url
     Properties:
-      FunctionName: !Ref KillLambdaFunction
+      TargetFunctionArn: !GetAtt KillLambdaFunction.Arn
       AuthType: NONE  # Public URL; authentication handled at agent level with x-api-key header
       Cors:
         AllowCredentials: true

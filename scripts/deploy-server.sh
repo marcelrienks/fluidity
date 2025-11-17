@@ -948,6 +948,20 @@ collect_endpoints() {
 
 output_stack_info() {
     log_section "Deployment Complete"
+    log_substep "Stack Outputs"
+
+    for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
+        if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" &>/dev/null 2>&1; then
+            outputs=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output json 2>/dev/null)
+            if [[ -n "$outputs" ]]; then
+                echo ""
+                log_info "$stack_name:"
+                echo "$outputs" | jq -r '.[] | "  \(.[0]): \(.[1] // "None")"' 2>/dev/null
+            fi
+        fi
+    done
+    
+    log_substep "Endpoint Summary"
     collect_endpoints
 }
 
@@ -1152,8 +1166,12 @@ action_outputs() {
 
     for stack_name in "$FARGATE_STACK_NAME" "$LAMBDA_STACK_NAME"; do
         log_substep "$stack_name"
-        if aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table 2>/dev/null; then
-            :
+        if outputs=$(aws cloudformation describe-stacks --stack-name "$stack_name" --region "$REGION" --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output json 2>/dev/null); then
+            # Format outputs as key: value on separate lines
+            echo "$outputs" | jq -r '.[] | "\(.key): \(.value // "None")"' 2>/dev/null || {
+                # Fallback if jq parsing fails
+                echo "$outputs" | jq -r '.[] | "\(.[0]): \(.[1] // "None")"' 2>/dev/null
+            }
         else
             log_info "Stack not found"
         fi
