@@ -2,10 +2,10 @@
 
 ###############################################################################
 # Fluidity Agent Deployment Script
-# 
-# Builds the Fluidity agent and deploys it to the system, making it available 
-# as a command-line executable. Manages agent configuration with support for
-# command-line overrides.
+#
+# Builds the Fluidity agent and deploys it to the system, making it available
+# as a command-line executable via 'fluidity' command. Manages agent configuration
+# with support for command-line overrides.
 #
 # Configuration Management:
 #   - Loads config from agent.yaml in installation directory
@@ -16,6 +16,7 @@
 # FUNCTION:
 #   - Builds the Fluidity agent binary from source
 #   - Deploys to system installation directory
+#   - Creates 'fluidity' symlink for easy command-line access
 #   - Manages configuration file (creation, updates, overrides)
 #   - Adds to system PATH for command-line access
 #
@@ -47,6 +48,9 @@
 #   ./deploy-agent.sh deploy --server-ip 192.168.1.100 --wake-endpoint <url> --kill-endpoint <url>
 #   ./deploy-agent.sh status
 #   ./deploy-agent.sh uninstall
+#
+# After deployment, run the agent with:
+#   fluidity --server-ip 192.168.1.100
 #
 ###############################################################################
 
@@ -89,30 +93,38 @@ fi
 case "$(uname -s)" in
     MINGW64_NT*|MSYS_NT*|CYGWIN*)
         OS_TYPE="windows"
-        DEFAULT_INSTALL_PATH="C:\\Program Files\\fluidity"
+        if [[ -n "${USERPROFILE:-}" ]]; then
+            DEFAULT_INSTALL_PATH="$USERPROFILE\\apps\\fluidity"
+        else
+            DEFAULT_INSTALL_PATH="$HOME\\apps\\fluidity"
+        fi
         AGENT_BINARY="fluidity-agent.exe"
         ;;
     Darwin)
         OS_TYPE="darwin"
-        DEFAULT_INSTALL_PATH="/usr/local/bin"
+        DEFAULT_INSTALL_PATH="$HOME/apps/fluidity"
         AGENT_BINARY="fluidity-agent"
         ;;
     Linux)
         if [[ "$IS_WSL" == "true" ]]; then
-            # Running in WSL - use Windows installation path
+            # Running in WSL - use Windows user path
             OS_TYPE="windows-wsl"
-            DEFAULT_INSTALL_PATH="C:\\Program Files\\fluidity"
+            if [[ -n "${USERPROFILE:-}" ]]; then
+                DEFAULT_INSTALL_PATH="$USERPROFILE\\apps\\fluidity"
+            else
+                DEFAULT_INSTALL_PATH="$HOME/apps/fluidity"
+            fi
             AGENT_BINARY="fluidity-agent.exe"
         else
             # Native Linux
             OS_TYPE="linux"
-            DEFAULT_INSTALL_PATH="/opt/fluidity"
+            DEFAULT_INSTALL_PATH="$HOME/apps/fluidity"
             AGENT_BINARY="fluidity-agent"
         fi
         ;;
     *)
         OS_TYPE="linux"
-        DEFAULT_INSTALL_PATH="/opt/fluidity"
+        DEFAULT_INSTALL_PATH="$HOME/apps/fluidity"
         AGENT_BINARY="fluidity-agent"
         ;;
 esac
@@ -206,16 +218,8 @@ wsl_to_windows_path() {
 }
 
 check_sudo() {
-    # Check if we have sudo access
-    if [[ "$EUID" -ne 0 ]]; then
-        log_error_start
-        echo "This script requires sudo/root access for installation"
-        echo ""
-        echo "Please run with sudo:"
-        echo "  sudo $0 ${@}"
-        log_error_end
-        exit 1
-    fi
+    # Sudo no longer required - using user-based installation paths
+    return 0
 }
 
 # ============================================================================
@@ -403,10 +407,7 @@ ca_cert_file: "$CA_CERT_PATH"
 log_level: "$LOG_LEVEL"
 EOF
     
-    # Fix permissions on config directory
-    if [[ -n "$SUDO_USER" ]]; then
-        chown -R "$SUDO_USER:$SUDO_USER" "$INSTALL_PATH" 2>/dev/null || true
-    fi
+    # Files are owned by current user in user space installation
     
     log_success "Configuration file created: $CONFIG_FILE"
 }
@@ -562,6 +563,103 @@ build_agent() {
 # INSTALLATION
 # ============================================================================
 
+# Add installation path to Unix shell configuration
+add_to_shell_path_unix() {
+    local install_path="$1"
+    local shell_rc_files=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile")
+
+    for rc_file in "${shell_rc_files[@]}"; do
+        if [[ -f "$rc_file" ]]; then
+            # Check if path is already in the file (more robust check)
+            if ! grep -q "^export PATH.*:$install_path[:\"]*$" "$rc_file" 2>/dev/null && \
+               ! grep -q "^export PATH.*:$install_path$" "$rc_file" 2>/dev/null && \
+               ! grep -q "PATH=.*:$install_path[:\"]*$" "$rc_file" 2>/dev/null; then
+                echo "" >> "$rc_file"
+                echo "# Added by Fluidity agent installer" >> "$rc_file"
+                echo "export PATH=\"\$PATH:$install_path\"" >> "$rc_file"
+                log_info "Added to $rc_file"
+            else
+                log_info "Already configured in $rc_file"
+            fi
+        fi
+    done
+
+    # Also try to add to /etc/bash.bashrc if it exists and writable
+    if [[ -w "/etc/bash.bashrc" ]] && \
+       ! grep -q "^export PATH.*:$install_path[:\"]*$" "/etc/bash.bashrc" 2>/dev/null && \
+       ! grep -q "^export PATH.*:$install_path$" "/etc/bash.bashrc" 2>/dev/null && \
+       ! grep -q "PATH=.*:$install_path[:\"]*$" "/etc/bash.bashrc" 2>/dev/null; then
+        echo "" >> "/etc/bash.bashrc"
+        echo "# Added by Fluidity agent installer" >> "/etc/bash.bashrc"
+        echo "export PATH=\"\$PATH:$install_path\"" >> "/etc/bash.bashrc"
+        log_info "Added to /etc/bash.bashrc"
+    fi
+}
+
+# Add installation path to Windows PATH environment variable
+add_to_windows_path() {
+    local install_path="$1"
+
+    if [[ "$OS_TYPE" == "windows-wsl" ]]; then
+        # Running in WSL - update both Windows PATH and WSL shell config
+        log_info "Updating Windows PATH via PowerShell..."
+
+        # Convert WSL path to Windows path if needed
+        local windows_path
+        if [[ "$install_path" == /home/* ]]; then
+            # This is a WSL path that maps to Windows
+            windows_path=$(wslpath -w "$install_path" 2>/dev/null || echo "$install_path")
+        else
+            windows_path="$install_path"
+        fi
+
+        # Use PowerShell to add to user PATH
+        powershell.exe -Command "
+            \$currentPath = [Environment]::GetEnvironmentVariable('Path', 'User');
+            if (\$currentPath -notlike '*${windows_path}*') {
+                \$newPath = \$currentPath + ';${windows_path}';
+                [Environment]::SetEnvironmentVariable('Path', \$newPath, 'User');
+                Write-Host 'Added ${windows_path} to Windows user PATH';
+            } else {
+                Write-Host 'Path already in Windows user PATH';
+            }
+        " 2>/dev/null
+
+        if [[ $? -eq 0 ]]; then
+            log_success "Windows PATH updated successfully"
+        else
+            log_warn "Failed to update Windows PATH - you may need to add manually"
+            log_info "Manual addition: $windows_path"
+        fi
+
+        # Also add to WSL shell configuration for immediate availability
+        log_info "Adding to WSL shell configuration..."
+        add_to_shell_path_unix "$install_path"
+
+    else
+        # Native Windows - use setx command
+        log_info "Updating Windows PATH..."
+
+        # Get current user PATH
+        local current_path
+        current_path=$(powershell.exe -Command "[Environment]::GetEnvironmentVariable('Path', 'User')" 2>/dev/null | tr -d '\r')
+
+        if [[ "$current_path" != *"$install_path"* ]]; then
+            local new_path="$current_path;$install_path"
+            # Use setx to update PATH (persistent)
+            setx PATH "$new_path" >/dev/null 2>&1
+            if [[ $? -eq 0 ]]; then
+                log_success "Windows PATH updated successfully"
+            else
+                log_warn "Failed to update PATH with setx - you may need to add manually"
+                log_info "Manual addition: $install_path"
+            fi
+        else
+            log_info "Path already in Windows PATH"
+        fi
+    fi
+}
+
 install_agent() {
     log_minor "Step 3: Install Agent"
     
@@ -575,22 +673,14 @@ install_agent() {
     fi
     
     log_substep "Creating Installation Directory"
-    
-    # Check if we need sudo for Linux system directories
-    SUDO=""
-    if [[ "$OS_TYPE" == "linux" && "$INSTALL_PATH" == /opt/* || "$INSTALL_PATH" == /usr/local/* ]]; then
-        if [[ ! -d "$INSTALL_PATH" ]] && [[ ! -w "$(dirname "$INSTALL_PATH")" ]]; then
-            log_info "Elevated privileges required for installation to: $INSTALL_PATH"
-            SUDO="sudo"
-        fi
-    fi
-    
+
+    # Create apps/fluidity directory structure in user space
     if [[ ! -d "$INSTALL_PATH" ]]; then
         log_info "Creating installation directory: $INSTALL_PATH"
-        $SUDO mkdir -p "$INSTALL_PATH" || {
+        mkdir -p "$INSTALL_PATH" || {
             log_error_start
             echo "Failed to create directory: $INSTALL_PATH"
-            echo "Try running with: sudo bash scripts/deploy-agent.sh deploy"
+            echo "Check permissions for your home directory"
             log_error_end
             exit 1
         }
@@ -606,28 +696,19 @@ install_agent() {
     
     log_substep "Installing Agent Binary"
     log_info "Copying: $binary_path to $AGENT_EXE_PATH"
-    $SUDO cp "$binary_path" "$AGENT_EXE_PATH" || {
+    cp "$binary_path" "$AGENT_EXE_PATH" || {
         log_error_start
         echo "Failed to copy binary to: $AGENT_EXE_PATH"
-        echo "Try running with: sudo bash scripts/deploy-agent.sh deploy"
+        echo "Check permissions for the installation directory"
         log_error_end
         exit 1
     }
+
+    chmod +x "$AGENT_EXE_PATH"
     
-    $SUDO chmod +x "$AGENT_EXE_PATH"
-    
-    log_substep "Fixing File Permissions"
-    # Change ownership to current user so they can access the files
-    local current_user
-    current_user=$(whoami)
-    if [[ "$current_user" != "root" ]]; then
-        log_warn "Cannot change permissions - script not running as root"
-    else
-        chown -R "$SUDO_USER:$SUDO_USER" "$INSTALL_PATH" 2>/dev/null || {
-            log_warn "Could not change ownership to $SUDO_USER - you may need to adjust permissions manually"
-        }
-        log_info "Permissions fixed for user: $SUDO_USER"
-    fi
+    log_substep "Setting File Permissions"
+    # Files are already owned by current user since we're installing to user space
+    log_info "File permissions set for current user"
     
     if [[ ! -f "$AGENT_EXE_PATH" ]]; then
         log_error_start
@@ -637,17 +718,56 @@ install_agent() {
     fi
     
     log_success "Agent binary installed"
-    
+
+    log_substep "Creating Symlink"
+
+    # Create symlink for easier access (fluidity -> fluidity-agent.exe)
+    local symlink_path="$INSTALL_PATH/fluidity"
+    if [[ -L "$symlink_path" ]]; then
+        log_info "Symlink already exists: $symlink_path"
+    else
+        log_info "Creating symlink: fluidity -> $AGENT_BINARY"
+        ln -sf "$AGENT_BINARY" "$symlink_path" || {
+            log_warn "Failed to create symlink, continuing without it"
+        }
+        if [[ -L "$symlink_path" ]]; then
+            log_success "Symlink created: fluidity -> $AGENT_BINARY"
+        fi
+    fi
+
     log_substep "Adding to PATH"
-    
-    if [[ ":$PATH:" == *":$INSTALL_PATH:"* ]]; then
+
+    # More robust PATH duplication check
+    local path_already_in_path=false
+    IFS=':' read -ra PATH_ARRAY <<< "$PATH"
+    for path_entry in "${PATH_ARRAY[@]}"; do
+        if [[ "$path_entry" == "$INSTALL_PATH" ]]; then
+            path_already_in_path=true
+            break
+        fi
+    done
+
+    if [[ "$path_already_in_path" == "true" ]]; then
         log_info "Installation path already in PATH"
     else
-        log_info "Installation path: $INSTALL_PATH"
-        log_info "To add to PATH, update your shell configuration:"
-        log_info "  export PATH=\"\$PATH:$INSTALL_PATH\""
+        log_info "Adding installation path to PATH: $INSTALL_PATH"
+
+        case "$OS_TYPE" in
+            "linux"|"darwin")
+                # Add to shell configuration files for Unix-like systems
+                add_to_shell_path_unix "$INSTALL_PATH"
+                ;;
+            "windows"|"windows-wsl")
+                # Add to Windows PATH environment variable
+                add_to_windows_path "$INSTALL_PATH"
+                ;;
+        esac
+
+        # Update current session PATH
+        export PATH="$PATH:$INSTALL_PATH"
+        log_info "PATH updated for current session"
     fi
-    
+
     log_success "Installation complete"
 }
 
@@ -692,9 +812,7 @@ ca_cert_file: "${CA_CERT_PATH}"
 log_level: "${LOG_LEVEL}"
 EOF
 
-    if [[ -n "$SUDO_USER" ]]; then
-        chown "$SUDO_USER:$SUDO_USER" "$CONFIG_FILE" 2>/dev/null || true
-    fi
+    # File is owned by current user in user space installation
 
     log_success "Configuration written: $CONFIG_FILE"
 }
@@ -717,15 +835,24 @@ verify_installation() {
     
     log_success "Agent binary installed: $AGENT_EXE_PATH"
     
+    log_substep "Checking Symlink"
+
+    local symlink_path="$INSTALL_PATH/fluidity"
+    if [[ -L "$symlink_path" ]]; then
+        log_success "Symlink available: fluidity -> $AGENT_BINARY"
+    else
+        log_warn "Symlink not found: $symlink_path"
+    fi
+
     log_substep "Checking Configuration"
-    
+
     if [[ ! -f "$CONFIG_FILE" ]]; then
         log_warn "Configuration file not found: $CONFIG_FILE"
         return 1
     fi
-    
+
     log_success "Configuration file present: $CONFIG_FILE"
-    
+
     log_substep "Agent Information"
     log_info "Installation path: $INSTALL_PATH"
     log_info "Configuration path: $CONFIG_FILE"
@@ -765,7 +892,8 @@ uninstall_agent() {
         log_info "Removing: $INSTALL_PATH"
         rm -rf "$INSTALL_PATH" || {
             log_error_start
-            echo "Failed to remove directory (try with sudo): $INSTALL_PATH"
+            echo "Failed to remove directory: $INSTALL_PATH"
+            echo "Check file permissions and ensure no processes are using the files"
             log_error_end
             return 1
         }
@@ -791,7 +919,7 @@ show_status() {
     log_minor "Agent Status"
     
     log_substep "Installation Status"
-    
+
     if [[ -f "$AGENT_EXE_PATH" ]]; then
         local size
         size=$(du -h "$AGENT_EXE_PATH" | cut -f1)
@@ -799,11 +927,20 @@ show_status() {
     else
         log_warn "Agent not installed"
     fi
-    
+
+    local symlink_path="$INSTALL_PATH/fluidity"
+    if [[ -L "$symlink_path" ]]; then
+        log_success "Symlink available: fluidity -> $AGENT_BINARY"
+    else
+        log_warn "Symlink not available"
+    fi
+
     log_substep "PATH Status"
-    
+
     if command -v "$AGENT_BINARY" &>/dev/null; then
         log_success "Agent in PATH: $(command -v "$AGENT_BINARY")"
+    elif command -v fluidity &>/dev/null; then
+        log_success "Agent available via symlink: $(command -v fluidity)"
     else
         log_warn "Agent not in PATH"
     fi
@@ -837,7 +974,7 @@ main() {
     validate_action
     parse_arguments "$@"
     
-    # Check for sudo/root access
+    # Validate installation requirements
     check_sudo
     
     log_header "Fluidity Agent Deployment"
@@ -868,7 +1005,7 @@ main() {
             log_info ""
             log_info "Next steps:"
             log_info "1. Review configuration: $CONFIG_FILE"
-            log_info "2. Run agent: $AGENT_EXE_PATH"
+            log_info "2. Run agent: fluidity (or $AGENT_EXE_PATH)"
             if [[ "$IS_WSL" == "true" ]]; then
                 log_info ""
                 log_info "WSL Deployment Details:"
