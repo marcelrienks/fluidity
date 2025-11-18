@@ -17,7 +17,7 @@ import (
 	"fluidity/internal/shared/retry"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 )
 
 // Client manages ECS service lifecycle through Lambda APIs
@@ -80,7 +80,7 @@ func NewClient(config *Config, logger *logging.Logger) (*Client, error) {
 
 	// Load AWS configuration
 	ctx := context.Background()
-	cfg, err := config.Load(ctx)
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -92,7 +92,7 @@ func NewClient(config *Config, logger *logging.Logger) (*Client, error) {
 		httpClient:     httpClient,
 		circuitBreaker: cb,
 		logger:         logger,
-		awsConfig:      cfg,
+		awsConfig:      awsCfg,
 		signer:         signer,
 	}, nil
 }
