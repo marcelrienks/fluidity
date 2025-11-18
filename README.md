@@ -9,6 +9,8 @@
 
 Fluidity tunnels HTTP/HTTPS/WebSocket traffic through restrictive firewalls using mutual TLS authentication between a local agent and cloud-hosted server.
 
+_Predominantly vibe coded with mixture of claude and grok as a learning excercise._
+
 **Stack**: Go, Docker, AWS ECS Fargate, Lambda  
 **Size**: ~44MB Alpine containers  
 **Security**: mTLS with private CA
@@ -89,3 +91,4 @@ See [Deployment Guide](docs/deployment.md) for complete setup:
 ## License
 
 Custom - See repository for details
+
