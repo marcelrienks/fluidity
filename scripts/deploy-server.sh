@@ -940,6 +940,11 @@ collect_endpoints() {
     WAKE_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "WakeAPIEndpoint")
     KILL_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "KillAPIEndpoint")
     SLEEP_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "SleepScheduleRuleName")
+
+    # Get IAM resources
+    AGENT_IAM_ROLE_ARN=$(get_stack_output "$LAMBDA_STACK_NAME" "AgentIAMRoleArn")
+    AGENT_ACCESS_KEY_ID=$(get_stack_output "$LAMBDA_STACK_NAME" "AgentIAMUserAccessKey")
+    AGENT_SECRET_ACCESS_KEY=$(get_stack_output "$LAMBDA_STACK_NAME" "AgentIAMUserSecretKey")
     
     # Construct sleep endpoint from kill endpoint pattern
     if [[ -n "$KILL_ENDPOINT" ]]; then
@@ -980,6 +985,9 @@ export_endpoints() {
     echo "export WAKE_ENDPOINT='$WAKE_ENDPOINT'"
     echo "export KILL_ENDPOINT='$KILL_ENDPOINT'"
     echo "export SERVER_PORT='8443'"
+    echo "export AGENT_IAM_ROLE_ARN='$AGENT_IAM_ROLE_ARN'"
+    echo "export AGENT_ACCESS_KEY_ID='$AGENT_ACCESS_KEY_ID'"
+    echo "export AGENT_SECRET_ACCESS_KEY='$AGENT_SECRET_ACCESS_KEY'"
 }
 
 cleanup() {

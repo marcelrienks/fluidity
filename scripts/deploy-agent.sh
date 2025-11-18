@@ -37,8 +37,10 @@
 #   --cert-path <path>         Path to client certificate
 #   --key-path <path>          Path to client private key
 #   --ca-cert-path <path>      Path to CA certificate
+#   --iam-role-arn <arn>       IAM role ARN for authentication
+#   --access-key-id <id>       AWS access key ID
+#   --secret-access-key <key>  AWS secret access key
 #   --install-path <path>      Custom installation path (optional)
-#   --skip-build               Use existing binary in build directory
 #   --log-level <level>        Log level (info/debug/error, default: info)
 #   --debug                    Enable debug logging
 #   -h, --help                 Show this help message
@@ -76,6 +78,10 @@ CERT_PATH=""
 KEY_PATH=""
 CA_CERT_PATH=""
 LOG_LEVEL="info"
+# IAM Configuration
+AGENT_IAM_ROLE_ARN=""
+AGENT_ACCESS_KEY_ID=""
+AGENT_SECRET_ACCESS_KEY=""
 INSTALL_PATH=""
 CONFIG_FILE=""
 
@@ -267,6 +273,18 @@ parse_arguments() {
                 CA_CERT_PATH="$2"
                 shift 2
                 ;;
+            --iam-role-arn)
+                AGENT_IAM_ROLE_ARN="$2"
+                shift 2
+                ;;
+            --access-key-id)
+                AGENT_ACCESS_KEY_ID="$2"
+                shift 2
+                ;;
+            --secret-access-key)
+                AGENT_SECRET_ACCESS_KEY="$2"
+                shift 2
+                ;;
             --install-path)
                 INSTALL_PATH="$2"
                 AGENT_EXE_PATH="$INSTALL_PATH/$AGENT_BINARY"
@@ -397,6 +415,12 @@ local_proxy_port: $LOCAL_PROXY_PORT
 # Lambda endpoints (optional, for control plane integration)
 wake_endpoint: "$WAKE_ENDPOINT"
 kill_endpoint: "$KILL_ENDPOINT"
+
+# IAM Configuration (for Phase 3 IAM authentication)
+iam_role_arn: "$AGENT_IAM_ROLE_ARN"
+aws_region: "$REGION"
+access_key_id: "$AGENT_ACCESS_KEY_ID"
+secret_access_key: "$AGENT_SECRET_ACCESS_KEY"
 
 # TLS certificates
 cert_file: "$CERT_PATH"
@@ -804,6 +828,12 @@ local_proxy_port: ${LOCAL_PROXY_PORT}
 
 wake_endpoint: "${WAKE_ENDPOINT}"
 kill_endpoint: "${KILL_ENDPOINT}"
+
+# IAM Configuration (for Phase 3 IAM authentication)
+iam_role_arn: "${AGENT_IAM_ROLE_ARN}"
+aws_region: "${REGION}"
+access_key_id: "${AGENT_ACCESS_KEY_ID}"
+secret_access_key: "${AGENT_SECRET_ACCESS_KEY}"
 
 cert_file: "${CERT_PATH}"
 key_file: "${KEY_PATH}"

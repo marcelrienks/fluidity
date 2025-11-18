@@ -1,10 +1,14 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
 )
 
 // Config holds lifecycle management configuration
@@ -15,8 +19,9 @@ type Config struct {
 	// KillEndpoint is the full URL to the Kill Lambda API endpoint
 	KillEndpoint string
 
-	// APIKey is the API Gateway key for authentication
-	APIKey string
+	// IAM configuration (replaces API key)
+	IAMRoleARN string
+	AWSRegion  string
 
 	// ClusterName is the ECS cluster name
 	ClusterName string
@@ -45,7 +50,8 @@ func LoadConfig() (*Config, error) {
 	config := &Config{
 		WakeEndpoint:            os.Getenv("WAKE_ENDPOINT"),
 		KillEndpoint:            os.Getenv("KILL_ENDPOINT"),
-		APIKey:                  os.Getenv("API_KEY"),
+		IAMRoleARN:              os.Getenv("IAM_ROLE_ARN"),
+		AWSRegion:               getEnvOrDefault("AWS_REGION", ""),
 		ClusterName:             getEnvOrDefault("ECS_CLUSTER_NAME", ""),
 		ServiceName:             getEnvOrDefault("ECS_SERVICE_NAME", ""),
 		ConnectionTimeout:       getEnvDuration("CONNECTION_TIMEOUT", 90*time.Second),
@@ -63,6 +69,17 @@ func LoadConfig() (*Config, error) {
 	return config, nil
 }
 
+// Load loads AWS configuration for IAM authentication
+func (c *Config) Load(ctx context.Context) (aws.Config, error) {
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(c.AWSRegion),
+	)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	return cfg, nil
+}
+
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
 	if !c.Enabled {
@@ -77,9 +94,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("KILL_ENDPOINT is required when lifecycle is enabled")
 	}
 
-	if c.APIKey == "" {
-		return fmt.Errorf("API_KEY is required when lifecycle is enabled")
-	}
+	// IAM authentication doesn't require explicit validation here
+	// AWS SDK will handle credential resolution
 
 	return nil
 }

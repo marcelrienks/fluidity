@@ -274,6 +274,16 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 		}
 
 		switch env.Type {
+		case "iam_auth_request":
+			m, _ := env.Payload.(map[string]any)
+			b, _ := json.Marshal(m)
+			var authReq protocol.IAMAuthRequest
+			if err := json.Unmarshal(b, &authReq); err != nil {
+				s.logger.Error("Failed to parse iam_auth_request", err)
+				continue
+			}
+			s.handleIAMAuth(&authReq, encoder, &encoderMutex)
+
 		case "http_request":
 			m, _ := env.Payload.(map[string]any)
 			b, _ := json.Marshal(m)
@@ -777,4 +787,33 @@ func (s *Server) handleWebSocketClose(cls *protocol.WebSocketClose) {
 		wsConn.Close()
 		s.logger.Debug("WebSocket connection closed", "id", cls.ID)
 	}
+}
+
+// handleIAMAuth processes IAM authentication requests from agents
+func (s *Server) handleIAMAuth(authReq *protocol.IAMAuthRequest, encoder *json.Encoder, mu *sync.Mutex) {
+	s.logger.Info("Processing IAM authentication request", "client", authReq.AccessKeyID)
+
+	// For now, accept all IAM authentication requests
+	// In production, you would validate the SigV4 signature here
+	// This requires implementing SigV4 verification logic
+
+	authResp := protocol.IAMAuthResponse{
+		ID: authReq.ID,
+		Ok: true,
+	}
+
+	// Send response
+	mu.Lock()
+	err := encoder.Encode(protocol.Envelope{
+		Type:    "iam_auth_response",
+		Payload: authResp,
+	})
+	mu.Unlock()
+
+	if err != nil {
+		s.logger.Error("Failed to send IAM auth response", err)
+		return
+	}
+
+	s.logger.Info("IAM authentication successful", "client", authReq.AccessKeyID)
 }

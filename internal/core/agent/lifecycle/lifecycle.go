@@ -3,15 +3,21 @@ package lifecycle
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"fluidity/internal/shared/circuitbreaker"
 	"fluidity/internal/shared/logging"
 	"fluidity/internal/shared/retry"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/config"
 )
 
 // Client manages ECS service lifecycle through Lambda APIs
@@ -20,6 +26,8 @@ type Client struct {
 	httpClient     *http.Client
 	circuitBreaker *circuitbreaker.CircuitBreaker
 	logger         *logging.Logger
+	awsConfig      aws.Config
+	signer         *v4.Signer
 }
 
 // WakeRequest represents the request to Wake Lambda
@@ -70,11 +78,22 @@ func NewClient(config *Config, logger *logging.Logger) (*Client, error) {
 		MaxHalfOpenReqs: 2,
 	})
 
+	// Load AWS configuration
+	ctx := context.Background()
+	cfg, err := config.Load(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	signer := v4.NewSigner()
+
 	return &Client{
 		config:         config,
 		httpClient:     httpClient,
 		circuitBreaker: cb,
 		logger:         logger,
+		awsConfig:      cfg,
+		signer:         signer,
 	}, nil
 }
 
@@ -127,56 +146,11 @@ func (c *Client) Wake(ctx context.Context) error {
 
 // callWakeAPI makes the HTTP request to Wake Lambda
 func (c *Client) callWakeAPI(ctx context.Context, reqBody WakeRequest) (*WakeResponse, error) {
-	// Execute with circuit breaker
-	var response *WakeResponse
-	err := c.circuitBreaker.Execute(func() error {
-		// Marshal request body
-		bodyBytes, err := json.Marshal(reqBody)
-		if err != nil {
-			return fmt.Errorf("failed to marshal request: %w", err)
-		}
-
-		// Create HTTP request
-		req, err := http.NewRequestWithContext(ctx, "POST", c.config.WakeEndpoint, bytes.NewBuffer(bodyBytes))
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-
-		// Set headers
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.config.APIKey)
-
-		// Execute request
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("HTTP request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		// Read response body
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
-
-		// Check status code
-		if resp.StatusCode >= 400 {
-			return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, string(respBody))
-		}
-
-		// Parse response
-		if err := json.Unmarshal(respBody, &response); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
-		}
-
-		return nil
-	})
-
+	resp, err := c.callAPIWithSigV4(ctx, "POST", c.config.WakeEndpoint, reqBody)
 	if err != nil {
 		return nil, err
 	}
-
-	return response, nil
+	return resp.(*WakeResponse), nil
 }
 
 // Kill calls the Kill Lambda to stop the ECS service
@@ -225,24 +199,47 @@ func (c *Client) Kill(ctx context.Context) error {
 
 // callKillAPI makes the HTTP request to Kill Lambda
 func (c *Client) callKillAPI(ctx context.Context, reqBody KillRequest) (*KillResponse, error) {
+	resp, err := c.callAPIWithSigV4(ctx, "POST", c.config.KillEndpoint, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*KillResponse), nil
+}
+
+// callAPIWithSigV4 makes a SigV4 signed HTTP request to Lambda Function URL
+func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body interface{}) (interface{}, error) {
 	// Execute with circuit breaker
-	var response *KillResponse
+	var response interface{}
 	err := c.circuitBreaker.Execute(func() error {
 		// Marshal request body
-		bodyBytes, err := json.Marshal(reqBody)
+		bodyBytes, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
 		// Create HTTP request
-		req, err := http.NewRequestWithContext(ctx, "POST", c.config.KillEndpoint, bytes.NewBuffer(bodyBytes))
+		req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(bodyBytes))
 		if err != nil {
 			return fmt.Errorf("failed to create request: %w", err)
 		}
 
 		// Set headers
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-api-key", c.config.APIKey)
+
+		// Sign the request with SigV4
+		bodyHash := sha256.Sum256(bodyBytes)
+		bodyHashHex := hex.EncodeToString(bodyHash[:])
+
+		// Retrieve credentials from provider
+		creds, err := c.awsConfig.Credentials.Retrieve(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve AWS credentials: %w", err)
+		}
+
+		err = c.signer.SignHTTP(ctx, creds, req, bodyHashHex, "lambda", c.awsConfig.Region, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to sign request: %w", err)
+		}
 
 		// Execute request
 		resp, err := c.httpClient.Do(req)
@@ -262,8 +259,14 @@ func (c *Client) callKillAPI(ctx context.Context, reqBody KillRequest) (*KillRes
 			return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, string(respBody))
 		}
 
-		// Parse response
-		if err := json.Unmarshal(respBody, &response); err != nil {
+		// Parse response based on expected type
+		if strings.Contains(url, "/wake") {
+			response = &WakeResponse{}
+		} else if strings.Contains(url, "/kill") {
+			response = &KillResponse{}
+		}
+
+		if err := json.Unmarshal(respBody, response); err != nil {
 			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
