@@ -39,19 +39,29 @@ type Client struct {
 
 // NewClient creates a new tunnel client
 func NewClient(tlsConfig *tls.Config, serverAddr string, logLevel string) *Client {
+	return NewClientWithTestMode(tlsConfig, serverAddr, logLevel, false)
+}
+
+// NewClientWithTestMode creates a new tunnel client with test mode option
+func NewClientWithTestMode(tlsConfig *tls.Config, serverAddr string, logLevel string, testMode bool) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := logging.NewLogger("tunnel-client")
 	logger.SetLevel(logLevel)
 
-	// Load AWS configuration for IAM authentication
-	awsCfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		logger.Error("Failed to load AWS config", err)
-		// Continue without AWS config - tunnel will work without IAM auth
-	}
+	var awsCfg aws.Config
+	var signer *v4.Signer
 
-	signer := v4.NewSigner()
+	if !testMode {
+		// Load AWS configuration for IAM authentication
+		var err error
+		awsCfg, err = config.LoadDefaultConfig(ctx)
+		if err != nil {
+			logger.Error("Failed to load AWS config", err)
+			// Continue without AWS config - tunnel will work without IAM auth
+		}
+		signer = v4.NewSigner()
+	}
 
 	return &Client{
 		config:      tlsConfig,
@@ -563,6 +573,12 @@ func (c *Client) WebSocketMessageChannel(id string) <-chan *protocol.WebSocketMe
 
 // authenticateWithIAM performs IAM authentication over the established TLS tunnel
 func (c *Client) authenticateWithIAM(ctx context.Context) error {
+	// Skip IAM auth if AWS config not loaded (test mode)
+	if c.awsConfig.Region == "" || c.signer == nil {
+		c.logger.Info("AWS config not loaded, skipping IAM authentication")
+		return nil
+	}
+
 	// Check if AWS credentials are available (skip IAM auth if not configured)
 	creds, err := c.awsConfig.Credentials.Retrieve(ctx)
 	if err != nil {
@@ -594,7 +610,7 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	}
 
 	// Retrieve credentials
-	creds, err := c.awsConfig.Credentials.Retrieve(ctx)
+	creds, err = c.awsConfig.Credentials.Retrieve(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve AWS credentials: %w", err)
 	}

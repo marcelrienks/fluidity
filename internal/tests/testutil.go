@@ -229,7 +229,7 @@ type TestClient struct {
 func StartTestClient(t *testing.T, serverAddr string, certs *TestCerts) *TestClient {
 	t.Helper()
 
-	client := agent.NewClient(certs.ClientTLS, serverAddr, "error")
+	client := agent.NewClientWithTestMode(certs.ClientTLS, serverAddr, "error", true)
 
 	err := client.Connect()
 	if err != nil {
