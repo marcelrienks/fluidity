@@ -563,9 +563,14 @@ func (c *Client) WebSocketMessageChannel(id string) <-chan *protocol.WebSocketMe
 
 // authenticateWithIAM performs IAM authentication over the established TLS tunnel
 func (c *Client) authenticateWithIAM(ctx context.Context) error {
-	// Check if AWS config is available
-	if c.awsConfig.Region == "" {
-		c.logger.Info("AWS config not available, skipping IAM authentication")
+	// Check if AWS credentials are available (skip IAM auth if not configured)
+	creds, err := c.awsConfig.Credentials.Retrieve(ctx)
+	if err != nil {
+		c.logger.Info("AWS credentials not available, skipping IAM authentication", "error", err)
+		return nil // Allow connection without IAM auth for backward compatibility
+	}
+	if creds.AccessKeyID == "" {
+		c.logger.Info("AWS credentials not configured, skipping IAM authentication")
 		return nil // Allow connection without IAM auth for backward compatibility
 	}
 

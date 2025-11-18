@@ -42,10 +42,16 @@ type Server struct {
 	wsConns        map[string]*websocket.Conn
 	wsMutex        sync.RWMutex
 	startTime      time.Time
+	testMode       bool // Skip IAM authentication for testing
 }
 
 // NewServer creates a new tunnel server
 func NewServer(tlsConfig *tls.Config, addr string, maxConns int, logLevel string) (*Server, error) {
+	return NewServerWithTestMode(tlsConfig, addr, maxConns, logLevel, false)
+}
+
+// NewServerWithTestMode creates a new tunnel server with test mode option
+func NewServerWithTestMode(tlsConfig *tls.Config, addr string, maxConns int, logLevel string, testMode bool) (*Server, error) {
 	listener, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create listener: %w", err)
@@ -104,6 +110,7 @@ func NewServer(tlsConfig *tls.Config, addr string, maxConns int, logLevel string
 		tcpConns:       make(map[string]net.Conn),
 		wsConns:        make(map[string]*websocket.Conn),
 		startTime:      time.Now(),
+		testMode:       testMode,
 	}, nil
 }
 
@@ -255,6 +262,14 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
 
+	// IAM authentication (skip in test mode)
+	if !s.testMode {
+		if err := s.performIAMAuthentication(decoder, encoder); err != nil {
+			s.logger.Error("IAM authentication failed", err)
+			return
+		}
+	}
+
 	// Mutex to protect concurrent writes to encoder
 	var encoderMutex sync.Mutex
 
@@ -274,16 +289,6 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 		}
 
 		switch env.Type {
-		case "iam_auth_request":
-			m, _ := env.Payload.(map[string]any)
-			b, _ := json.Marshal(m)
-			var authReq protocol.IAMAuthRequest
-			if err := json.Unmarshal(b, &authReq); err != nil {
-				s.logger.Error("Failed to parse iam_auth_request", err)
-				continue
-			}
-			s.handleIAMAuth(&authReq, encoder, &encoderMutex)
-
 		case "http_request":
 			m, _ := env.Payload.(map[string]any)
 			b, _ := json.Marshal(m)
@@ -789,8 +794,25 @@ func (s *Server) handleWebSocketClose(cls *protocol.WebSocketClose) {
 	}
 }
 
-// handleIAMAuth processes IAM authentication requests from agents
-func (s *Server) handleIAMAuth(authReq *protocol.IAMAuthRequest, encoder *json.Encoder, mu *sync.Mutex) {
+// performIAMAuthentication handles the IAM authentication handshake
+func (s *Server) performIAMAuthentication(decoder *json.Decoder, encoder *json.Encoder) error {
+	s.logger.Info("Waiting for IAM authentication request")
+
+	// Read the IAM auth request
+	var env protocol.Envelope
+	if err := decoder.Decode(&env); err != nil {
+		return fmt.Errorf("failed to read IAM auth request: %w", err)
+	}
+
+	if env.Type != "iam_auth_request" {
+		return fmt.Errorf("expected iam_auth_request, got %s", env.Type)
+	}
+
+	authReq, ok := env.Payload.(protocol.IAMAuthRequest)
+	if !ok {
+		return fmt.Errorf("invalid IAM auth request format")
+	}
+
 	s.logger.Info("Processing IAM authentication request", "client", authReq.AccessKeyID)
 
 	// For now, accept all IAM authentication requests
@@ -803,17 +825,14 @@ func (s *Server) handleIAMAuth(authReq *protocol.IAMAuthRequest, encoder *json.E
 	}
 
 	// Send response
-	mu.Lock()
 	err := encoder.Encode(protocol.Envelope{
 		Type:    "iam_auth_response",
 		Payload: authResp,
 	})
-	mu.Unlock()
-
 	if err != nil {
-		s.logger.Error("Failed to send IAM auth response", err)
-		return
+		return fmt.Errorf("failed to send IAM auth response: %w", err)
 	}
 
 	s.logger.Info("IAM authentication successful", "client", authReq.AccessKeyID)
+	return nil
 }

@@ -161,7 +161,7 @@ func StartTestServer(t *testing.T, certs *TestCerts) *TestServer {
 	t.Helper()
 
 	// Use port 0 to get a random free port
-	srv, err := server.NewServer(certs.ServerTLS, "127.0.0.1:0", 10, "error")
+	srv, err := server.NewServerWithTestMode(certs.ServerTLS, "127.0.0.1:0", 10, "error", true)
 	if err != nil {
 		t.Fatalf("Failed to create test server: %v", err)
 	}
@@ -186,7 +186,7 @@ func StartTestServer(t *testing.T, certs *TestCerts) *TestServer {
 	srv.Stop()
 	time.Sleep(50 * time.Millisecond)
 
-	srv, err = server.NewServer(certs.ServerTLS, addr, 10, "error")
+	srv, err = server.NewServerWithTestMode(certs.ServerTLS, addr, 10, "error", true)
 	if err != nil {
 		t.Fatalf("Failed to recreate test server: %v", err)
 	}
