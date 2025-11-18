@@ -163,11 +163,29 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		"key_file", cfg.KeyFile,
 		"ca_file", cfg.CACertFile)
 
-	// Load lifecycle configuration (optional - will be disabled if not configured)
-	lifecycleConfig, err := lifecycle.LoadConfig()
-	if err != nil {
-		logger.Warn("Failed to load lifecycle configuration", "error", err.Error())
-		lifecycleConfig = &lifecycle.Config{Enabled: false}
+	// Load lifecycle configuration from environment and agent config
+	lifecycleConfig := &lifecycle.Config{
+		WakeEndpoint:            os.Getenv("WAKE_ENDPOINT"),
+		KillEndpoint:            os.Getenv("KILL_ENDPOINT"),
+		IAMRoleARN:              os.Getenv("IAM_ROLE_ARN"),
+		AWSRegion:               os.Getenv("AWS_REGION"),
+		ClusterName:             os.Getenv("ECS_CLUSTER_NAME"),
+		ServiceName:             os.Getenv("ECS_SERVICE_NAME"),
+		ConnectionTimeout:       90 * time.Second,
+		ConnectionRetryInterval: 5 * time.Second,
+		HTTPTimeout:             30 * time.Second,
+		MaxRetries:              3,
+		Enabled:                 true,
+	}
+
+	// Lifecycle is disabled if endpoints are not configured
+	if lifecycleConfig.WakeEndpoint == "" || lifecycleConfig.KillEndpoint == "" {
+		lifecycleConfig.Enabled = false
+	}
+
+	if err := lifecycleConfig.Validate(); err != nil {
+		logger.Warn("Lifecycle configuration validation failed", "error", err.Error())
+		lifecycleConfig.Enabled = false
 	}
 
 	// Create lifecycle client

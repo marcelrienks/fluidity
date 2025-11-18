@@ -42,10 +42,16 @@ type Server struct {
 	wsConns        map[string]*websocket.Conn
 	wsMutex        sync.RWMutex
 	startTime      time.Time
+	testMode       bool // Skip IAM authentication for testing
 }
 
 // NewServer creates a new tunnel server
 func NewServer(tlsConfig *tls.Config, addr string, maxConns int, logLevel string) (*Server, error) {
+	return NewServerWithTestMode(tlsConfig, addr, maxConns, logLevel, false)
+}
+
+// NewServerWithTestMode creates a new tunnel server with test mode option
+func NewServerWithTestMode(tlsConfig *tls.Config, addr string, maxConns int, logLevel string, testMode bool) (*Server, error) {
 	listener, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create listener: %w", err)
@@ -104,6 +110,7 @@ func NewServer(tlsConfig *tls.Config, addr string, maxConns int, logLevel string
 		tcpConns:       make(map[string]net.Conn),
 		wsConns:        make(map[string]*websocket.Conn),
 		startTime:      time.Now(),
+		testMode:       testMode,
 	}, nil
 }
 
@@ -254,6 +261,14 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
+
+	// IAM authentication (skip in test mode)
+	if !s.testMode {
+		if err := s.performIAMAuthentication(decoder, encoder); err != nil {
+			s.logger.Error("IAM authentication failed", err)
+			return
+		}
+	}
 
 	// Mutex to protect concurrent writes to encoder
 	var encoderMutex sync.Mutex
@@ -777,4 +792,47 @@ func (s *Server) handleWebSocketClose(cls *protocol.WebSocketClose) {
 		wsConn.Close()
 		s.logger.Debug("WebSocket connection closed", "id", cls.ID)
 	}
+}
+
+// performIAMAuthentication handles the IAM authentication handshake
+func (s *Server) performIAMAuthentication(decoder *json.Decoder, encoder *json.Encoder) error {
+	s.logger.Info("Waiting for IAM authentication request")
+
+	// Read the IAM auth request
+	var env protocol.Envelope
+	if err := decoder.Decode(&env); err != nil {
+		return fmt.Errorf("failed to read IAM auth request: %w", err)
+	}
+
+	if env.Type != "iam_auth_request" {
+		return fmt.Errorf("expected iam_auth_request, got %s", env.Type)
+	}
+
+	authReq, ok := env.Payload.(protocol.IAMAuthRequest)
+	if !ok {
+		return fmt.Errorf("invalid IAM auth request format")
+	}
+
+	s.logger.Info("Processing IAM authentication request", "client", authReq.AccessKeyID)
+
+	// For now, accept all IAM authentication requests
+	// In production, you would validate the SigV4 signature here
+	// This requires implementing SigV4 verification logic
+
+	authResp := protocol.IAMAuthResponse{
+		ID: authReq.ID,
+		Ok: true,
+	}
+
+	// Send response
+	err := encoder.Encode(protocol.Envelope{
+		Type:    "iam_auth_response",
+		Payload: authResp,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send IAM auth response: %w", err)
+	}
+
+	s.logger.Info("IAM authentication successful", "client", authReq.AccessKeyID)
+	return nil
 }

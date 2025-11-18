@@ -14,30 +14,31 @@ func LoadConfig[T any](configFile string, overrides map[string]interface{}) (*T,
 	// Initialize viper
 	v := viper.New()
 
-	// Set config file
-	if configFile != "" {
-		v.SetConfigFile(configFile)
-	} else {
-		// Look for config in installation directory (same location as binary)
-		// This is the standard location set by the deployment script
-		exePath, err := os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine binary location: %w", err)
-		}
-		exeDir := filepath.Dir(exePath)
-		configPath := filepath.Join(exeDir, "agent.yaml")
-		v.SetConfigFile(configPath)
-	}
-
-	// Set defaults
+	// Set defaults first
 	setDefaults(v)
 
-	// Read config file (required - config must be in installation directory)
-	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+	// Try to load config file if path is provided
+	if configFile != "" {
+		v.SetConfigFile(configFile)
+		if err := v.ReadInConfig(); err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-		return nil, fmt.Errorf("configuration file not found at expected location. The binary expects 'agent.yaml' in the same directory as the executable")
+	} else {
+		// No config file specified - check if one exists in installation directory
+		exePath, err := os.Executable()
+		if err == nil {
+			exeDir := filepath.Dir(exePath)
+			configPath := filepath.Join(exeDir, "agent.yaml")
+			if _, err := os.Stat(configPath); err == nil {
+				// Config file exists, try to read it
+				v.SetConfigFile(configPath)
+				if err := v.ReadInConfig(); err != nil {
+					return nil, fmt.Errorf("failed to read config file: %w", err)
+				}
+			}
+			// If config file doesn't exist, just use defaults
+		}
+		// If we can't determine exe path, just use defaults
 	}
 
 	// Apply CLI overrides

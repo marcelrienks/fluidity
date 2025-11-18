@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
 	"fluidity/internal/shared/logging"
 	"fluidity/internal/shared/protocol"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/config"
 
 	"github.com/sirupsen/logrus"
 ) // Client manages the tunnel connection to server
@@ -29,14 +33,35 @@ type Client struct {
 	cancel      context.CancelFunc
 	connected   bool
 	reconnectCh chan bool
+	awsConfig   aws.Config
+	signer      *v4.Signer
 }
 
 // NewClient creates a new tunnel client
 func NewClient(tlsConfig *tls.Config, serverAddr string, logLevel string) *Client {
+	return NewClientWithTestMode(tlsConfig, serverAddr, logLevel, false)
+}
+
+// NewClientWithTestMode creates a new tunnel client with test mode option
+func NewClientWithTestMode(tlsConfig *tls.Config, serverAddr string, logLevel string, testMode bool) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := logging.NewLogger("tunnel-client")
 	logger.SetLevel(logLevel)
+
+	var awsCfg aws.Config
+	var signer *v4.Signer
+
+	if !testMode {
+		// Load AWS configuration for IAM authentication
+		var err error
+		awsCfg, err = config.LoadDefaultConfig(ctx)
+		if err != nil {
+			logger.Error("Failed to load AWS config", err)
+			// Continue without AWS config - tunnel will work without IAM auth
+		}
+		signer = v4.NewSigner()
+	}
 
 	return &Client{
 		config:      tlsConfig,
@@ -50,6 +75,8 @@ func NewClient(tlsConfig *tls.Config, serverAddr string, logLevel string) *Clien
 		ctx:         ctx,
 		cancel:      cancel,
 		reconnectCh: make(chan bool, 1),
+		awsConfig:   awsCfg,
+		signer:      signer,
 	}
 }
 
@@ -99,8 +126,14 @@ func (c *Client) Connect() error {
 	c.connected = true
 	c.logger.Info("Connected to tunnel server", "addr", c.serverAddr)
 
-	// Start response handler
-	go c.handleResponses()
+	// Perform IAM authentication after TLS connection
+	if err := c.authenticateWithIAM(c.ctx); err != nil {
+		c.logger.Error("IAM authentication failed", err)
+		conn.Close()
+		c.conn = nil
+		c.connected = false
+		return fmt.Errorf("IAM authentication failed: %w", err)
+	}
 
 	return nil
 }
@@ -536,4 +569,113 @@ func (c *Client) WebSocketMessageChannel(id string) <-chan *protocol.WebSocketMe
 	ch := c.wsCh[id]
 	c.mu.RUnlock()
 	return ch
+}
+
+// authenticateWithIAM performs IAM authentication over the established TLS tunnel
+func (c *Client) authenticateWithIAM(ctx context.Context) error {
+	// Skip IAM auth if AWS config not loaded (test mode)
+	if c.awsConfig.Region == "" || c.signer == nil {
+		c.logger.Info("AWS config not loaded, skipping IAM authentication")
+		return nil
+	}
+
+	// Check if AWS credentials are available (skip IAM auth if not configured)
+	creds, err := c.awsConfig.Credentials.Retrieve(ctx)
+	if err != nil {
+		c.logger.Info("AWS credentials not available, skipping IAM authentication", "error", err)
+		return nil // Allow connection without IAM auth for backward compatibility
+	}
+	if creds.AccessKeyID == "" {
+		c.logger.Info("AWS credentials not configured, skipping IAM authentication")
+		return nil // Allow connection without IAM auth for backward compatibility
+	}
+
+	c.logger.Info("Performing IAM authentication")
+
+	// Create IAM auth request
+	authReq := protocol.IAMAuthRequest{
+		ID:            protocol.GenerateID(),
+		Timestamp:     time.Now(),
+		Service:       "tunnel",
+		Region:        c.awsConfig.Region,
+		AccessKeyID:   "", // Will be filled from credentials
+		Signature:     "",
+		SignedHeaders: "",
+	}
+
+	// Create a dummy request for signing
+	dummyReq, err := http.NewRequest("POST", fmt.Sprintf("https://fluidity-server.%s.amazonaws.com/auth", c.awsConfig.Region), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create dummy request: %w", err)
+	}
+
+	// Retrieve credentials
+	creds, err = c.awsConfig.Credentials.Retrieve(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve AWS credentials: %w", err)
+	}
+
+	authReq.AccessKeyID = creds.AccessKeyID
+
+	// Sign the request
+	err = c.signer.SignHTTP(ctx, creds, dummyReq, "", "execute-api", c.awsConfig.Region, time.Now())
+	if err != nil {
+		return fmt.Errorf("failed to sign auth request: %w", err)
+	}
+
+	// Extract signature components
+	authReq.Signature = dummyReq.Header.Get("Authorization")
+	authReq.SignedHeaders = dummyReq.Header.Get("X-Amz-SignedHeaders")
+
+	// Send auth request over tunnel
+	envelope := protocol.Envelope{
+		Type:    "iam_auth_request",
+		Payload: authReq,
+	}
+
+	if err := json.NewEncoder(c.conn).Encode(envelope); err != nil {
+		return fmt.Errorf("failed to send IAM auth request: %w", err)
+	}
+
+	// Wait for response with timeout
+	responseCh := make(chan *protocol.IAMAuthResponse, 1)
+	errorCh := make(chan error, 1)
+
+	// Start a goroutine to read the response
+	go func() {
+		var respEnvelope protocol.Envelope
+		if err := json.NewDecoder(c.conn).Decode(&respEnvelope); err != nil {
+			errorCh <- fmt.Errorf("failed to read auth response: %w", err)
+			return
+		}
+
+		if respEnvelope.Type != "iam_auth_response" {
+			errorCh <- fmt.Errorf("unexpected response type: %s", respEnvelope.Type)
+			return
+		}
+
+		authResp, ok := respEnvelope.Payload.(protocol.IAMAuthResponse)
+		if !ok {
+			errorCh <- fmt.Errorf("invalid auth response format")
+			return
+		}
+
+		responseCh <- &authResp
+	}()
+
+	// Wait for response or timeout
+	select {
+	case authResp := <-responseCh:
+		if !authResp.Ok {
+			return fmt.Errorf("IAM authentication failed: %s", authResp.Error)
+		}
+		c.logger.Info("IAM authentication successful")
+		return nil
+	case err := <-errorCh:
+		return err
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("IAM authentication timeout")
+	case <-ctx.Done():
+		return fmt.Errorf("IAM authentication cancelled")
+	}
 }

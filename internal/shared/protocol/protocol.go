@@ -40,8 +40,7 @@ type HealthCheck struct {
 
 // Envelope wraps different message kinds for the tunnel
 // Types: "http_request", "http_response", "connect_open", "connect_ack", "connect_data", "connect_close",
-//
-//	"ws_open", "ws_ack", "ws_message", "ws_close"
+// "ws_open", "ws_ack", "ws_message", "ws_close", "iam_auth_request", "iam_auth_response"
 type Envelope struct {
 	Type    string `json:"type"`
 	Payload any    `json:"payload"`
@@ -98,6 +97,25 @@ type WebSocketClose struct {
 	ID    string `json:"id"`
 	Code  int    `json:"code,omitempty"`
 	Error string `json:"error,omitempty"`
+}
+
+// IAMAuthRequest represents an IAM authentication request
+type IAMAuthRequest struct {
+	ID            string    `json:"id"`
+	Timestamp     time.Time `json:"timestamp"`
+	Service       string    `json:"service"` // "lambda" or "tunnel"
+	Region        string    `json:"region"`
+	AccessKeyID   string    `json:"access_key_id"`
+	Signature     string    `json:"signature"`
+	SignedHeaders string    `json:"signed_headers"`
+}
+
+// IAMAuthResponse represents an IAM authentication response
+type IAMAuthResponse struct {
+	ID           string `json:"id"`
+	Ok           bool   `json:"ok"`
+	Error        string `json:"error,omitempty"`
+	SessionToken string `json:"session_token,omitempty"` // For temporary credentials
 }
 
 // GenerateID generates a unique ID for requests and connections
