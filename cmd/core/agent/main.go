@@ -36,8 +36,11 @@ func main() {
 	// Note: GODEBUG must be set BEFORE the Go runtime initializes
 	// Use run-agent-debug.cmd to launch with TLS debug logging enabled
 
+	// Use the actual command name (handles symlinks correctly)
+	commandName := filepath.Base(os.Args[0])
+
 	rootCmd := &cobra.Command{
-		Use:   "fluidity-agent",
+		Use:   commandName,
 		Short: "Fluidity tunnel agent",
 		Long:  "Fluidity tunnel agent - HTTP proxy that forwards traffic through secure tunnel",
 		RunE:  runAgent,
