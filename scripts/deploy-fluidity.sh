@@ -388,14 +388,20 @@ deploy_server() {
             WAKE_ENDPOINT=$(grep "^export WAKE_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             KILL_ENDPOINT=$(grep "^export KILL_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
-            
+            AGENT_IAM_ROLE_ARN=$(grep "^export AGENT_IAM_ROLE_ARN=" "$temp_exports" | cut -d"'" -f2)
+            AGENT_ACCESS_KEY_ID=$(grep "^export AGENT_ACCESS_KEY_ID=" "$temp_exports" | cut -d"'" -f2)
+            AGENT_SECRET_ACCESS_KEY=$(grep "^export AGENT_SECRET_ACCESS_KEY=" "$temp_exports" | cut -d"'" -f2)
+
             # For SERVER_IP_COMMAND, extract everything between the quotes (handling the complex command)
             SERVER_IP_COMMAND=$(sed -n 's/^export SERVER_IP_COMMAND="\(.*\)"$/\1/p' "$temp_exports")
-            
+
             log_debug "Extracted SERVER_REGION: $SERVER_REGION"
             log_debug "Extracted WAKE_ENDPOINT: $WAKE_ENDPOINT"
             log_debug "Extracted KILL_ENDPOINT: $KILL_ENDPOINT"
             log_debug "Extracted SERVER_PORT: $SERVER_PORT"
+            log_debug "Extracted AGENT_IAM_ROLE_ARN: $AGENT_IAM_ROLE_ARN"
+            log_debug "Extracted AGENT_ACCESS_KEY_ID: [REDACTED]"
+            log_debug "Extracted AGENT_SECRET_ACCESS_KEY: [REDACTED]"
             log_debug "Extracted SERVER_IP_COMMAND length: ${#SERVER_IP_COMMAND}"
             
             rm -f "$temp_exports"

@@ -413,89 +413,84 @@ Resources:
       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-kill'
       RetentionInDays: 7
   
-   # ============================================================
-   # IAM Resources for Agent Authentication
-   # ============================================================
+  # ============================================================
+  # IAM Resources for Agent Authentication
+  # ============================================================
 
-   # Agent IAM Role (for EC2/ECS instances)
-   AgentIAMRole:
-     Type: AWS::IAM::Role
-     Properties:
-       RoleName: !Sub '${AWS::StackName}-agent-role'
-       AssumeRolePolicyDocument:
-         Version: '2012-10-17'
-         Statement:
-           - Effect: Allow
-             Principal:
-               Service: ec2.amazonaws.com
-             Action: sts:AssumeRole
-       ManagedPolicyArns:
-         - !Ref AgentIAMPolicy
-       Tags:
-         - Key: Application
-           Value: Fluidity
-         - Key: Component
-           Value: Agent-IAM-Role
+  # Agent IAM Role (for EC2/ECS instances)
+  AgentIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-agent-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref AgentIAMPolicy
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Agent-IAM-Role
 
-   # Agent IAM User (for local development)
-   AgentIAMUser:
-     Type: AWS::IAM::User
-     Properties:
-       UserName: !Sub '${AWS::StackName}-agent-user'
-       Tags:
-         - Key: Application
-           Value: Fluidity
-         - Key: Component
-           Value: Agent-IAM-User
+  # Agent IAM User (for local development)
+  AgentIAMUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-agent-user'
+      ManagedPolicyArns:
+        - !Ref AgentIAMPolicy
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Agent-IAM-User
 
-   # IAM Policy for Agent
-   AgentIAMPolicy:
-     Type: AWS::IAM::ManagedPolicy
-     Properties:
-       PolicyDocument:
-         Version: '2012-10-17'
-         Statement:
-           - Effect: Allow
-             Action: lambda:InvokeFunctionUrl
-             Resource:
-               - !GetAtt WakeLambdaFunction.Arn
-               - !GetAtt KillLambdaFunction.Arn
-           - Effect: Allow
-             Action:
-               - secretsmanager:GetSecretValue
-               - secretsmanager:DescribeSecret
-             Resource: !Sub arn:aws:secretsmanager:*:*:secret:fluidity-certificates-*
+  # IAM Policy for Agent
+  AgentIAMPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunctionUrl
+            Resource:
+              - !GetAtt WakeLambdaFunction.Arn
+              - !GetAtt KillLambdaFunction.Arn
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource: !Sub arn:aws:secretsmanager:*:*:secret:fluidity-certificates-*
 
-   # Attach policy to user
-   AgentUserPolicyAttachment:
-     Type: AWS::IAM::UserPolicyAttachment
-     Properties:
-       UserName: !Ref AgentIAMUser
-       PolicyArn: !Ref AgentIAMPolicy
+  # Access Key for user
+  AgentAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref AgentIAMUser
 
-   # Access Key for user
-   AgentAccessKey:
-     Type: AWS::IAM::AccessKey
-     Properties:
-       UserName: !Ref AgentIAMUser
+  # ============================================================
+  # Lambda Function URLs (IAM Auth)
+  # ============================================================
 
-   # ============================================================
-   # Lambda Function URLs (IAM Auth)
-   # ============================================================
+  # Wake Lambda Function URL
+  WakeLambdaFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt WakeLambdaFunction.Arn
+      AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
 
-   # Wake Lambda Function URL
-   WakeLambdaFunctionUrl:
-     Type: AWS::Lambda::Url
-     Properties:
-       TargetFunctionArn: !GetAtt WakeLambdaFunction.Arn
-       AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
-
-   # Kill Lambda Function URL
-   KillLambdaFunctionUrl:
-     Type: AWS::Lambda::Url
-     Properties:
-       TargetFunctionArn: !GetAtt KillLambdaFunction.Arn
-       AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
+  # Kill Lambda Function URL
+  KillLambdaFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt KillLambdaFunction.Arn
+      AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
 
   # ========================================
   # Monitoring & Observability
@@ -704,21 +699,21 @@ Outputs:
     Description: Name of Sleep Lambda error alarm
     Value: !Ref SleepLambdaErrorAlarm
 
-   KillLambdaErrorAlarmName:
-     Description: Name of Kill Lambda error alarm
-     Value: !Ref KillLambdaErrorAlarm
+  KillLambdaErrorAlarmName:
+    Description: Name of Kill Lambda error alarm
+    Value: !Ref KillLambdaErrorAlarm
 
-   # IAM Resources Outputs
-   AgentIAMRoleArn:
-     Description: ARN of the IAM role for agents
-     Value: !GetAtt AgentIAMRole.Arn
-     Export:
-       Name: !Sub '${AWS::StackName}-agent-role-arn'
+  # IAM Resources Outputs
+  AgentIAMRoleArn:
+    Description: ARN of the IAM role for agents
+    Value: !GetAtt AgentIAMRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-agent-role-arn'
 
-   AgentIAMUserAccessKey:
-     Description: Access Key ID for agent user
-     Value: !Ref AgentAccessKey
+  AgentIAMUserAccessKey:
+    Description: Access Key ID for agent user
+    Value: !Ref AgentAccessKey
 
-   AgentIAMUserSecretKey:
-     Description: Secret Access Key for agent user
-     Value: !GetAtt AgentAccessKey.SecretAccessKey
+  AgentIAMUserSecretKey:
+    Description: Secret Access Key for agent user
+    Value: !GetAtt AgentAccessKey.SecretAccessKey

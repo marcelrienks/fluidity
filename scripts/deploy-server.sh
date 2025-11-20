@@ -474,6 +474,7 @@ store_certificates_in_secrets_manager() {
 
 build_lambda_functions() {
     BUILD_VERSION=$(date +%Y%m%d%H%M%S)
+    export BUILD_VERSION
     log_info "Build version: $BUILD_VERSION"
     log_debug "Calling: bash $SCRIPT_DIR/build-lambdas.sh"
 

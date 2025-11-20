@@ -46,6 +46,8 @@ This creates certificates in `./certs/`:
 
 **Important:** Keep these files secure. The agent uses client certificates, and cloud deployments read server certificates for upload to AWS.
 
+**Note:** The complete deployment process (certificate generation, Lambda builds, Docker builds, ECR uploads, CloudFormation deployments) can take 10+ minutes. If using tools with timeout settings, ensure adequate timeout is configured (recommended: 15 minutes).
+
 ---
 
 ## Deployment
@@ -65,6 +67,155 @@ Run server and agent binaries directly on your machine.
 **Test:**
 ```bash
 curl -x http://127.0.0.1:8080 http://example.com
+```
+
+---
+
+## Agent Installation Locations
+
+The deployment scripts automatically detect your operating system and install the agent in the appropriate location. Here's where files are installed on each platform:
+
+### Linux (Native)
+```bash
+# Agent Installation Directory
+INSTALL_PATH: ~/apps/fluidity
+
+# Files Created
+~/apps/fluidity/
+├── fluidity-agent          # Linux binary (symlink to fluidity-agent)
+├── fluidity                # Symlink to fluidity-agent
+└── agent.yaml              # Configuration file
+
+# AWS Credentials (if IAM enabled)
+~/.aws/
+└── credentials             # Profile: [fluidity]
+```
+
+### macOS
+```bash
+# Agent Installation Directory
+INSTALL_PATH: ~/apps/fluidity
+
+# Files Created
+~/apps/fluidity/
+├── fluidity-agent          # macOS binary
+├── fluidity                # Symlink to fluidity-agent
+└── agent.yaml              # Configuration file
+
+# AWS Credentials (if IAM enabled)
+~/.aws/
+└── credentials             # Profile: [fluidity]
+```
+
+### Windows (Native - MSYS/Cygwin)
+```cmd
+REM Agent Installation Directory
+INSTALL_PATH: %USERPROFILE%\apps\fluidity
+
+REM Files Created
+%USERPROFILE%\apps\fluidity\
+├── fluidity-agent.exe      # Windows executable
+└── agent.yaml              # Configuration file
+
+REM AWS Credentials (if IAM enabled)
+%USERPROFILE%\.aws\
+└── credentials             # Profile: [fluidity]
+```
+
+### Windows Subsystem for Linux (WSL)
+```bash
+# Agent Installation Directory (WSL filesystem)
+INSTALL_PATH: $USERPROFILE\apps\fluidity
+
+# Files Created (WSL paths)
+$USERPROFILE\apps\fluidity/
+├── fluidity-agent.exe      # Windows executable
+├── fluidity                # Symlink to fluidity-agent.exe
+└── agent.yaml              # Configuration file
+
+# Windows Access Paths
+# Access from Windows Explorer:
+\\wsl.localhost\Ubuntu\$USERPROFILE\apps\fluidity\
+
+# AWS Credentials (WSL)
+~/.aws/
+└── credentials             # Profile: [fluidity]
+
+# Note: AWS credentials in WSL are separate from Windows AWS credentials
+```
+
+### Custom Installation Path
+
+You can specify a custom installation path:
+
+**Windows PowerShell:**
+```powershell
+wsl bash scripts/deploy-fluidity.sh deploy --install-path C:\custom\path\fluidity
+```
+
+**macOS/Linux:**
+```bash
+bash scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
+```
+
+### File Permissions & Security
+
+- **Agent binaries:** Executable by owner only
+- **Configuration files:** Readable by owner only
+- **AWS credentials:** `chmod 600` (owner read/write only)
+- **Certificate files:** Never committed to version control
+
+### PATH Environment
+
+The deployment script adds the installation directory to your PATH:
+
+**Linux/macOS:**
+```bash
+# Added to ~/.bashrc or ~/.zshrc
+export PATH="$PATH:~/apps/fluidity"
+```
+
+**Windows:**
+```cmd
+REM Added to system PATH
+set PATH=%PATH%;%USERPROFILE%\apps\fluidity
+```
+
+**WSL:**
+```bash
+# Added to ~/.bashrc
+export PATH="$PATH:$USERPROFILE/apps/fluidity"
+```
+
+### Accessing Files After Installation
+
+**Check installation status:**
+```bash
+./scripts/deploy-agent.sh status
+```
+
+**View configuration:**
+```bash
+# Linux/macOS
+cat ~/apps/fluidity/agent.yaml
+
+# Windows
+type %USERPROFILE%\apps\fluidity\agent.yaml
+
+# WSL
+cat $USERPROFILE/apps/fluidity/agent.yaml
+```
+
+**Start agent manually:**
+```bash
+# Linux/macOS
+fluidity
+
+# Windows
+fluidity-agent.exe
+
+# WSL
+fluidity
 ```
 
 ---

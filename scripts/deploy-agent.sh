@@ -429,10 +429,10 @@ wake_endpoint: "$WAKE_ENDPOINT"
 kill_endpoint: "$KILL_ENDPOINT"
 
 # IAM Configuration (for Phase 3 IAM authentication)
+# Note: AWS credentials are resolved via AWS SDK default credential chain
+# from ~/.aws/credentials, environment variables, or IAM roles
 iam_role_arn: "$AGENT_IAM_ROLE_ARN"
 aws_region: "$REGION"
-access_key_id: "$AGENT_ACCESS_KEY_ID"
-secret_access_key: "$AGENT_SECRET_ACCESS_KEY"
 
 # TLS certificates
 cert_file: "$CERT_PATH"
@@ -446,6 +446,70 @@ EOF
     # Files are owned by current user in user space installation
     
     log_success "Configuration file created: $CONFIG_FILE"
+}
+
+# Setup AWS credentials for IAM authentication
+setup_aws_credentials() {
+    log_substep "Setting up AWS Credentials"
+
+    # Only setup credentials if IAM role ARN is provided (Phase 3)
+    if [[ -z "$AGENT_IAM_ROLE_ARN" ]]; then
+        log_info "IAM role not configured, skipping AWS credentials setup"
+        return 0
+    fi
+
+    # Check if we have the access keys
+    if [[ -z "$AGENT_ACCESS_KEY_ID" || -z "$AGENT_SECRET_ACCESS_KEY" ]]; then
+        log_warn "IAM access keys not provided, AWS SDK will use default credential chain"
+        log_warn "Ensure credentials are available via ~/.aws/credentials, environment variables, or IAM roles"
+        return 0
+    fi
+
+    # Create AWS credentials directory if it doesn't exist
+    AWS_DIR="$HOME/.aws"
+    CREDENTIALS_FILE="$AWS_DIR/credentials"
+
+    if [[ ! -d "$AWS_DIR" ]]; then
+        mkdir -p "$AWS_DIR"
+        chmod 700 "$AWS_DIR"
+        log_info "Created AWS credentials directory: $AWS_DIR"
+    fi
+
+    # Check if fluidity profile already exists
+    if grep -q "\[fluidity\]" "$CREDENTIALS_FILE" 2>/dev/null; then
+        log_info "Fluidity profile already exists in AWS credentials"
+        # Update existing profile
+        sed -i.bak "/\[fluidity\]/,/^$/ {
+            s/aws_access_key_id.*/aws_access_key_id = $AGENT_ACCESS_KEY_ID/
+            s/aws_secret_access_key.*/aws_secret_access_key = $AGENT_SECRET_ACCESS_KEY/
+        }" "$CREDENTIALS_FILE"
+        log_info "Updated existing fluidity profile"
+    else
+        # Add new profile
+        {
+            echo ""
+            echo "[fluidity]"
+            echo "aws_access_key_id = $AGENT_ACCESS_KEY_ID"
+            echo "aws_secret_access_key = $AGENT_SECRET_ACCESS_KEY"
+            echo "region = $REGION"
+        } >> "$CREDENTIALS_FILE"
+        log_info "Added fluidity profile to AWS credentials"
+    fi
+
+    # Set proper permissions
+    chmod 600 "$CREDENTIALS_FILE"
+
+    # Set AWS_PROFILE environment variable for the agent
+    if [[ "$OS_TYPE" == "windows" ]]; then
+        # For Windows, we'll need to set this in the startup script or environment
+        log_info "Windows detected - AWS_PROFILE=fluidity will be used by the agent"
+    else
+        # For Linux/macOS, we can set it in the shell profile or export it
+        log_info "AWS credentials configured for profile: fluidity"
+        log_info "Agent will use AWS_PROFILE=fluidity environment variable"
+    fi
+
+    log_success "AWS credentials configured securely"
 }
 
 update_config_file() {
@@ -842,10 +906,10 @@ wake_endpoint: "${WAKE_ENDPOINT}"
 kill_endpoint: "${KILL_ENDPOINT}"
 
 # IAM Configuration (for Phase 3 IAM authentication)
+# Note: AWS credentials are resolved via AWS SDK default credential chain
+# from ~/.aws/credentials, environment variables, or IAM roles
 iam_role_arn: "${AGENT_IAM_ROLE_ARN}"
 aws_region: "${REGION}"
-access_key_id: "${AGENT_ACCESS_KEY_ID}"
-secret_access_key: "${AGENT_SECRET_ACCESS_KEY}"
 
 cert_file: "${CERT_PATH}"
 key_file: "${KEY_PATH}"
@@ -1034,7 +1098,8 @@ main() {
             build_agent
             install_agent
             setup_configuration
-            
+            setup_aws_credentials
+
             if ! validate_config; then
                 exit 1
             fi
