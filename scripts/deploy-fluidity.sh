@@ -194,10 +194,11 @@ log_error_end() {
 
 check_sudo_requirement() {
     # Check if action requires sudo
-    if [[ "$ACTION" == "deploy" || "$ACTION" == "deploy-agent" ]]; then
+    # Note: Agent deployment no longer requires sudo as it uses user-based installation paths
+    if [[ "$ACTION" == "deploy-server" ]]; then
         if [[ "$EUID" -ne 0 ]]; then
             log_error_start
-            echo "Sudo privileges required for agent deployment"
+            echo "Sudo privileges required for server deployment (AWS operations)"
             echo ""
             echo "Please run this script with sudo:"
             echo "  sudo -E $0 $@"
@@ -223,7 +224,7 @@ check_aws_credentials() {
             echo "  Option 1: Configure AWS credentials first"
             echo "    aws configure"
             echo ""
-            echo "  Option 2: Run script with sudo -E to preserve environment variables"
+            echo "  Option 2: For server deployment, run with sudo -E to preserve environment variables"
             echo "    sudo -E $0 $@"
             echo ""
             log_error_end
@@ -427,7 +428,7 @@ deploy_server() {
         echo "Server deployment failed"
         echo ""
         echo "If the error mentions AWS credentials, ensure you ran this command with:"
-        echo "  sudo -E $0 deploy"
+        echo "  $0 deploy"
         echo ""
         echo "The -E flag preserves environment variables including AWS credentials."
         log_error_end
@@ -491,7 +492,7 @@ deploy_agent() {
     
     log_debug "Calling agent deployment script with: ${args[*]}"
     
-    # Run script and capture output (already running as sudo)
+    # Run script and capture output
     local agent_output
     local temp_agent_output="/tmp/fluidity-deploy-agent-$$.log"
     
@@ -657,7 +658,7 @@ main() {
             log_success "Server deployment finished successfully"
             log_info ""
             log_info "To deploy agent with server endpoints, run:"
-            log_info "  sudo ./deploy-fluidity.sh deploy-agent"
+            log_info "  ./deploy-fluidity.sh deploy-agent"
             log_info ""
             ;;
         
