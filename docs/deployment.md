@@ -113,10 +113,8 @@ wsl bash scripts/deploy-fluidity.sh deploy
 
 **macOS/Linux (Bash):**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy
+bash scripts/deploy-fluidity.sh deploy
 ```
-
-**Important (for sudo users):** Use `sudo -E` to preserve environment variables (including AWS credentials). Without the `-E` flag, AWS credentials won't be passed to the script and deployment will fail.
 
 This automatically:
 - Detects AWS region, VPC, subnets, and your IP
@@ -138,7 +136,7 @@ wsl bash scripts/deploy-fluidity.sh deploy `
 
 **With explicit parameters (macOS/Linux):**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy \
+bash scripts/deploy-fluidity.sh deploy \
   --region us-east-1 \
   --vpc-id vpc-12345678 \
   --public-subnets subnet-11111111,subnet-22222222 \
@@ -154,7 +152,7 @@ wsl bash scripts/deploy-fluidity.sh status
 
 **Check status (macOS/Linux):**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh status
+bash scripts/deploy-fluidity.sh status
 ```
 
 **Delete infrastructure (Windows PowerShell):**
@@ -164,7 +162,7 @@ wsl bash scripts/deploy-fluidity.sh delete
 
 **Delete infrastructure (macOS/Linux):**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh delete
+bash scripts/deploy-fluidity.sh delete
 ```
 
 ---
@@ -239,11 +237,11 @@ wsl bash scripts/deploy-fluidity.sh delete                     # Delete infrastr
 
 **Examples (macOS/Linux):**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy                    # Full deployment
-sudo -E bash scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
-sudo -E bash scripts/deploy-fluidity.sh deploy --debug             # With debug output
-sudo -E bash scripts/deploy-fluidity.sh status                     # Check status
-sudo -E bash scripts/deploy-fluidity.sh delete                     # Delete infrastructure
+bash scripts/deploy-fluidity.sh deploy                    # Full deployment
+bash scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
+bash scripts/deploy-fluidity.sh deploy --debug             # With debug output
+bash scripts/deploy-fluidity.sh status                     # Check status
+bash scripts/deploy-fluidity.sh delete                     # Delete infrastructure
 ```
 
 ---
@@ -374,7 +372,13 @@ wsl bash scripts/deploy-fluidity.sh deploy
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy
+bash scripts/deploy-fluidity.sh deploy \
+  --region us-east-1 \
+  --vpc-id vpc-12345678 \
+  --public-subnets subnet-11111111,subnet-22222222 \
+  --allowed-cidr 203.0.113.45/32 \
+  --server-ip 203.0.113.50 \
+  --local-proxy-port 8080
 ```
 
 Output:
@@ -407,7 +411,7 @@ wsl bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
 
 **Step 1: Deploy server to AWS**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy-server --region us-west-2
+bash scripts/deploy-fluidity.sh deploy-server --region us-west-2
 ```
 
 **Step 2: Get server IP**
@@ -418,7 +422,7 @@ SERVER_IP=203.0.113.42
 
 **Step 3: Deploy agent with server**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
+bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
 ```
 
 ### Manual Server IP Deployment
@@ -432,7 +436,7 @@ wsl bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
+bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
 ```
 
 Configuration updates automatically.
@@ -446,7 +450,11 @@ wsl bash scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
+bash scripts/deploy-fluidity.sh deploy                    # Full deployment
+bash scripts/deploy-fluidity.sh deploy --region us-west-2 # Specific region
+bash scripts/deploy-fluidity.sh deploy --debug             # With debug output
+bash scripts/deploy-fluidity.sh status                     # Check status
+bash scripts/deploy-fluidity.sh delete                     # Delete infrastructure
 ```
 
 ### With Debug Logging
@@ -458,7 +466,7 @@ wsl bash scripts/deploy-fluidity.sh deploy --debug
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy --debug
+bash scripts/deploy-fluidity.sh deploy --skip-build
 ```
 
 ### Deploy to Specific AWS Region
@@ -470,7 +478,7 @@ wsl bash scripts/deploy-fluidity.sh deploy --region eu-west-1
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy --region eu-west-1
+bash scripts/deploy-fluidity.sh deploy --region eu-west-1
 ```
 
 ### Skip Agent Build (Use Existing Binary)
@@ -482,7 +490,7 @@ wsl bash scripts/deploy-fluidity.sh deploy --skip-build
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh deploy --skip-build
+bash scripts/deploy-fluidity.sh deploy --install-path /opt/custom/fluidity
 ```
 
 ### Check Deployment Status
@@ -494,7 +502,7 @@ wsl bash scripts/deploy-fluidity.sh status
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh status
+bash scripts/deploy-fluidity.sh status
 ```
 
 Shows:
@@ -512,7 +520,7 @@ wsl bash scripts/deploy-fluidity.sh delete
 
 **macOS/Linux:**
 ```bash
-sudo -E bash scripts/deploy-fluidity.sh delete
+bash scripts/deploy-fluidity.sh delete
 ```
 
 Interactive confirmation required. Note: Agent files remain on system.
@@ -601,7 +609,7 @@ macOS/Linux:
 ```bash
 sudo -E bash scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
 # Or if using orchestrator:
-sudo -E bash scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
+bash scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
 ```
 
 **"Failed to get AWS parameters"**
@@ -626,7 +634,7 @@ macOS/Linux:
 ```bash
 aws configure set region us-east-1
 # Or provide explicitly:
-sudo -E bash scripts/deploy-fluidity.sh deploy --region us-east-1
+bash scripts/deploy-fluidity.sh deploy --region us-east-1
 ```
 
 **"Stack creation failed"**
@@ -646,7 +654,7 @@ macOS/Linux:
 # Check CloudFormation events
 aws cloudformation describe-stack-events --stack-name fluidity-fargate
 # Check with debug output
-sudo -E bash scripts/deploy-fluidity.sh deploy --debug
+bash scripts/deploy-fluidity.sh deploy --debug
 # View detailed logs
 aws logs tail /ecs/fluidity/server --follow
 ```

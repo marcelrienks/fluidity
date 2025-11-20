@@ -192,21 +192,7 @@ log_error_end() {
     echo ""
 }
 
-check_sudo_requirement() {
-    # Check if action requires sudo
-    # Note: Agent deployment no longer requires sudo as it uses user-based installation paths
-    if [[ "$ACTION" == "deploy-server" ]]; then
-        if [[ "$EUID" -ne 0 ]]; then
-            log_error_start
-            echo "Sudo privileges required for server deployment (AWS operations)"
-            echo ""
-            echo "Please run this script with sudo:"
-            echo "  sudo -E $0 $@"
-            log_error_end
-            exit 1
-        fi
-    fi
-}
+
 
 check_aws_credentials() {
     # Check if action requires AWS credentials
@@ -218,14 +204,10 @@ check_aws_credentials() {
             echo ""
             echo "This can happen if:"
             echo "  1. AWS credentials are not configured"
-            echo "  2. Running with sudo without the -E flag (environment variables not preserved)"
             echo ""
             echo "Solutions:"
             echo "  Option 1: Configure AWS credentials first"
             echo "    aws configure"
-            echo ""
-            echo "  Option 2: For server deployment, run with sudo -E to preserve environment variables"
-            echo "    sudo -E $0 $@"
             echo ""
             log_error_end
             exit 1
@@ -593,10 +575,7 @@ show_status() {
 main() {
     validate_action
     parse_arguments "$@"
-    
-    # Check sudo requirement early
-    check_sudo_requirement
-    
+
     # Check AWS credentials availability
     check_aws_credentials
     

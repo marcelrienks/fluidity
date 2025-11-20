@@ -32,7 +32,7 @@ Development roadmap by phase.
   - Store returned IP in config for future use
   - Update config file after receiving IP from wake function
 - **Deployment Flow**:
-  1. User runs: `sudo bash scripts/deploy-fluidity.sh deploy`
+  1. User runs: `bash scripts/deploy-fluidity.sh deploy`
   2. Deploys server infrastructure and agent (without server IP if unavailable)
   3. Agent prompts for server IP (optional - can be skipped)
   4. Agent user calls wake function which returns IP
@@ -42,11 +42,7 @@ Development roadmap by phase.
 #### 3. Deployment Script Updates
 - **Server Deployment**: Remove verbose CloudFormation stack output, export only essential variables
 - **Agent Deployment**: 
-  - Make sudo check explicit at startup
-  - Skip interactive IP prompt if server IP can be obtained later
-  - Pass endpoints from server deployment to agent
   - No blocking wait for Fargate task - allow agent to handle IP resolution
-- **Sudo Requirements**: Both scripts check for sudo/root privilege at startup and exit with clear message if not running as root
 
 ### Benefits
 - Complete deployment without manual IP extraction

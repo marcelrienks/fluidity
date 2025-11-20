@@ -82,6 +82,7 @@ LOG_LEVEL="info"
 AGENT_IAM_ROLE_ARN=""
 AGENT_ACCESS_KEY_ID=""
 AGENT_SECRET_ACCESS_KEY=""
+REGION=""
 INSTALL_PATH=""
 CONFIG_FILE=""
 
@@ -223,9 +224,20 @@ wsl_to_windows_path() {
     fi
 }
 
-check_sudo() {
-    # Sudo no longer required - using user-based installation paths
-    return 0
+
+
+detect_region() {
+    if [[ -z "$REGION" ]]; then
+        if REGION=$(aws configure get region 2>/dev/null); then
+            [[ -n "$REGION" ]] && log_info "Region auto-detected: $REGION" || {
+                log_warn "Region could not be auto-detected from AWS config"
+                REGION=""
+            }
+        else
+            log_warn "AWS CLI not available or not configured"
+            REGION=""
+        fi
+    fi
 }
 
 # ============================================================================
@@ -1005,7 +1017,7 @@ main() {
     parse_arguments "$@"
     
     # Validate installation requirements
-    check_sudo
+    detect_region
     
     log_header "Fluidity Agent Deployment"
     log_info "OS: $OS_TYPE"
