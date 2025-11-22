@@ -371,8 +371,12 @@ func (h *Handler) getMetrics(ctx context.Context, startTime, endTime time.Time) 
 						MetricName: aws.String("ActiveConnections"),
 						Dimensions: []cloudwatchtypes.Dimension{
 							{
-								Name:  aws.String("Service"),
+								Name:  aws.String("ServiceName"),
 								Value: aws.String("fluidity-server"),
+							},
+							{
+								Name:  aws.String("ClusterName"),
+								Value: aws.String("fluidity"),
 							},
 						},
 					},
@@ -388,8 +392,12 @@ func (h *Handler) getMetrics(ctx context.Context, startTime, endTime time.Time) 
 						MetricName: aws.String("LastActivityEpochSeconds"),
 						Dimensions: []cloudwatchtypes.Dimension{
 							{
-								Name:  aws.String("Service"),
+								Name:  aws.String("ServiceName"),
 								Value: aws.String("fluidity-server"),
+							},
+							{
+								Name:  aws.String("ClusterName"),
+								Value: aws.String("fluidity"),
 							},
 						},
 					},

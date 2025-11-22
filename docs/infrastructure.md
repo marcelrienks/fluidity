@@ -63,6 +63,8 @@ Fluidity uses AWS CloudFormation for infrastructure management with automated de
 
 Automatically handles: ECR setup, image push, CloudFormation stacks (Fargate + Lambda), agent configuration
 
+**Note:** The complete deployment process can take 10+ minutes. If using tools with timeout settings, ensure adequate timeout is configured (recommended: 15 minutes).
+
 ---
 
 ## File Structure
@@ -87,7 +89,7 @@ scripts/
 
 Set via environment variables (auto-detected by default):
 ```bash
-export AWS_REGION=us-east-1
+export AWS_REGION=eu-west-1
 export VPC_ID=vpc-xxxxxxxx
 export PUBLIC_SUBNETS=subnet-1,subnet-2
 export ALLOWED_INGRESS_CIDR=YOUR_IP/32

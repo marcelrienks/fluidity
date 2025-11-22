@@ -470,7 +470,12 @@ deploy_agent() {
     [[ -n "$CERT_PATH" ]] && args+=(--cert-path "$CERT_PATH")
     [[ -n "$KEY_PATH" ]] && args+=(--key-path "$KEY_PATH")
     [[ -n "$CA_CERT_PATH" ]] && args+=(--ca-cert-path "$CA_CERT_PATH")
-    
+
+    # Pass IAM credentials for Lambda authentication
+    [[ -n "$AGENT_IAM_ROLE_ARN" ]] && args+=(--iam-role-arn "$AGENT_IAM_ROLE_ARN")
+    [[ -n "$AGENT_ACCESS_KEY_ID" ]] && args+=(--access-key-id "$AGENT_ACCESS_KEY_ID")
+    [[ -n "$AGENT_SECRET_ACCESS_KEY" ]] && args+=(--secret-access-key "$AGENT_SECRET_ACCESS_KEY")
+
     # Pass installation path if specified
     [[ -n "$INSTALL_PATH" && "$INSTALL_PATH" != "$DEFAULT_INSTALL_PATH" ]] && args+=(--install-path "$INSTALL_PATH")
     
