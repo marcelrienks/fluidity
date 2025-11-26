@@ -478,23 +478,21 @@ setup_aws_credentials() {
     # Check if fluidity profile already exists
     if grep -q "\[fluidity\]" "$CREDENTIALS_FILE" 2>/dev/null; then
         log_info "Fluidity profile already exists in AWS credentials"
-        # Update existing profile
-        sed -i.bak "/\[fluidity\]/,/^$/ {
-            s/aws_access_key_id.*/aws_access_key_id = $AGENT_ACCESS_KEY_ID/
-            s/aws_secret_access_key.*/aws_secret_access_key = $AGENT_SECRET_ACCESS_KEY/
-        }" "$CREDENTIALS_FILE"
-        log_info "Updated existing fluidity profile"
-    else
-        # Add new profile
-        {
-            echo ""
-            echo "[fluidity]"
-            echo "aws_access_key_id = $AGENT_ACCESS_KEY_ID"
-            echo "aws_secret_access_key = $AGENT_SECRET_ACCESS_KEY"
-            echo "region = $REGION"
-        } >> "$CREDENTIALS_FILE"
-        log_info "Added fluidity profile to AWS credentials"
+        # Remove existing fluidity profile and recreate it
+        sed -i.bak '/^\[fluidity\]$/,/^$/d' "$CREDENTIALS_FILE"
+        # Remove any trailing empty lines that might have been left
+        sed -i '/^$/N;/^\n$/d' "$CREDENTIALS_FILE"
     fi
+
+    # Add new profile (or recreate existing one)
+    {
+        echo ""
+        echo "[fluidity]"
+        echo "aws_access_key_id = $AGENT_ACCESS_KEY_ID"
+        echo "aws_secret_access_key = $AGENT_SECRET_ACCESS_KEY"
+        echo "region = $REGION"
+    } >> "$CREDENTIALS_FILE"
+    log_info "Configured fluidity profile in AWS credentials"
 
     # Set proper permissions
     chmod 600 "$CREDENTIALS_FILE"
@@ -872,12 +870,72 @@ install_agent() {
 }
 
 # ============================================================================
+# CERTIFICATE MANAGEMENT
+# ============================================================================
+
+copy_certificates_to_installation() {
+    log_substep "Copying Certificates to Installation Directory"
+
+    # Check if certificate paths are provided
+    if [[ -z "$CERT_PATH" || -z "$KEY_PATH" || -z "$CA_CERT_PATH" ]]; then
+        log_info "Certificate paths not provided, skipping certificate copy"
+        return 0
+    fi
+
+    # Check if certificate files exist
+    if [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" || ! -f "$CA_CERT_PATH" ]]; then
+        log_warn "Certificate files not found, skipping certificate copy"
+        log_warn "Cert: $CERT_PATH"
+        log_warn "Key: $KEY_PATH"
+        log_warn "CA: $CA_CERT_PATH"
+        return 0
+    fi
+
+    # Create certs subdirectory in installation directory
+    local certs_dir="$INSTALL_PATH/certs"
+    mkdir -p "$certs_dir"
+
+    # Copy certificates to installation directory
+    log_info "Copying certificates to: $certs_dir"
+    cp "$CERT_PATH" "$certs_dir/client.crt" || {
+        log_error_start
+        echo "Failed to copy client certificate"
+        log_error_end
+        return 1
+    }
+    cp "$KEY_PATH" "$certs_dir/client.key" || {
+        log_error_start
+        echo "Failed to copy client key"
+        log_error_end
+        return 1
+    }
+    cp "$CA_CERT_PATH" "$certs_dir/ca.crt" || {
+        log_error_start
+        echo "Failed to copy CA certificate"
+        log_error_end
+        return 1
+    }
+
+    # Set proper permissions (owner read/write only for private key)
+    chmod 644 "$certs_dir/client.crt"
+    chmod 644 "$certs_dir/ca.crt"
+    chmod 600 "$certs_dir/client.key"
+
+    # Update certificate paths to point to copied files
+    CERT_PATH="$certs_dir/client.crt"
+    KEY_PATH="$certs_dir/client.key"
+    CA_CERT_PATH="$certs_dir/ca.crt"
+
+    log_success "Certificates copied to installation directory"
+}
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 
 setup_configuration() {
     log_minor "Step 4: Configure Agent"
- 
+
     # Load existing config if available (for potential merging)
     if [[ -f "$CONFIG_FILE" ]]; then
         load_config_file
@@ -891,6 +949,9 @@ setup_configuration() {
         cp "$build_config" "$CONFIG_FILE"
         load_config_file
     fi
+
+    # Copy certificates to installation directory if provided
+    copy_certificates_to_installation
 
     # Always write a fresh config reflecting current CLI overrides + existing values
     mkdir -p "$INSTALL_PATH"

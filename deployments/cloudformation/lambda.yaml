@@ -129,6 +129,17 @@ Resources:
                 Action:
                   - ecs:UpdateService
                 Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
+              - Sid: ListAndDescribeECSTasks
+                Effect: Allow
+                Action:
+                  - ecs:ListTasks
+                  - ecs:DescribeTasks
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ECSClusterName}'
+              - Sid: DescribeNetworkInterfaces
+                Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                Resource: '*'
       Tags:
         - Key: Application
           Value: Fluidity

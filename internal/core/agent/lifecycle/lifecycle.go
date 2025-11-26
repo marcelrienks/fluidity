@@ -41,6 +41,7 @@ type WakeResponse struct {
 	StatusCode         int    `json:"statusCode"`
 	Message            string `json:"message"`
 	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
+	PublicIP           string `json:"public_ip,omitempty"`
 }
 
 // KillRequest represents the request to Kill Lambda
@@ -259,11 +260,29 @@ func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body 
 			return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, string(respBody))
 		}
 
+		// Parse Lambda Function URL response format
+		var functionURLResp struct {
+			StatusCode int               `json:"statusCode"`
+			Headers    map[string]string `json:"headers"`
+			Body       string            `json:"body"`
+		}
+
+		if err := json.Unmarshal(respBody, &functionURLResp); err != nil {
+			return fmt.Errorf("failed to parse Function URL response: %w", err)
+		}
+
+		// Extract the actual response from the body field
+		bodyData := []byte(functionURLResp.Body)
+
 		// Parse response based on expected type
 		if strings.Contains(url, "/wake") {
 			response = &WakeResponse{}
 		} else if strings.Contains(url, "/kill") {
 			response = &KillResponse{}
+		}
+
+		if err := json.Unmarshal(bodyData, response); err != nil {
+			return fmt.Errorf("failed to parse response body: %w", err)
 		}
 
 		if err := json.Unmarshal(respBody, response); err != nil {
@@ -278,6 +297,61 @@ func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body 
 	}
 
 	return response, nil
+}
+
+// ConfigUpdater defines an interface for updating server IP
+type ConfigUpdater interface {
+	SetServerIP(ip string)
+}
+
+// WakeAndGetIP calls the Wake Lambda and extracts the server IP from the response
+func (c *Client) WakeAndGetIP(ctx context.Context, configUpdater ConfigUpdater) error {
+	if !c.config.Enabled {
+		return fmt.Errorf("lifecycle management disabled")
+	}
+
+	c.logger.Info("Calling wake endpoint to discover server IP",
+		"endpoint", c.config.WakeEndpoint,
+		"cluster", c.config.ClusterName,
+		"service", c.config.ServiceName,
+	)
+
+	// Prepare request body
+	reqBody := WakeRequest{
+		ClusterName: c.config.ClusterName,
+		ServiceName: c.config.ServiceName,
+	}
+
+	// Call Wake API with retry
+	var response *WakeResponse
+	retryConfig := retry.Config{
+		MaxAttempts:  c.config.MaxRetries,
+		InitialDelay: 500 * time.Millisecond,
+		MaxDelay:     5 * time.Second,
+		Multiplier:   2.0,
+	}
+
+	err := retry.Execute(ctx, retryConfig, retry.AlwaysRetry(), func() error {
+		var err error
+		response, err = c.callWakeAPI(ctx, reqBody)
+		return err
+	})
+
+	if err != nil {
+		c.logger.Error("Failed to call wake API for IP discovery", err)
+		return fmt.Errorf("wake API call failed: %w", err)
+	}
+
+	// Extract server IP from response
+	if response.PublicIP == "" {
+		return fmt.Errorf("wake response did not contain server IP (service may not be running)")
+	}
+
+	// Update agent config with discovered IP
+	configUpdater.SetServerIP(response.PublicIP)
+	c.logger.Info("Discovered server IP from wake response", "server_ip", response.PublicIP)
+
+	return nil
 }
 
 // WaitForConnection waits for the agent to establish server connection after wake

@@ -44,6 +44,9 @@
 #   --log-level <level>            Agent log level (info|debug|warn|error)
 #   --wake-endpoint <url>          Override wake function endpoint
 #   --kill-endpoint <url>          Override kill function endpoint
+#   --iam-role-arn <arn>           IAM role ARN for agent authentication
+#   --access-key-id <id>           AWS access key ID for agent
+#   --secret-access-key <key>      AWS secret access key for agent
 #   --skip-build                   Skip building agent, use existing binary
 #   --debug                        Enable debug logging
 #   --force                        Delete and recreate resources (server only)
@@ -298,6 +301,26 @@ parse_arguments() {
                 KILL_ENDPOINT="$2"
                 shift 2
                 ;;
+            --iam-role-arn)
+                AGENT_IAM_ROLE_ARN="$2"
+                shift 2
+                ;;
+            --access-key-id)
+                AGENT_ACCESS_KEY_ID="$2"
+                shift 2
+                ;;
+            --secret-access-key)
+                AGENT_SECRET_ACCESS_KEY="$2"
+                shift 2
+                ;;
+            --install-path)
+                INSTALL_PATH="$2"
+                shift 2
+                ;;
+            --log-level)
+                LOG_LEVEL="$2"
+                shift 2
+                ;;
             --skip-build)
                 SKIP_BUILD=true
                 shift
@@ -392,6 +415,16 @@ deploy_server() {
             AGENT_ACCESS_KEY_ID=$(grep "^export AGENT_ACCESS_KEY_ID=" "$temp_exports" | cut -d"'" -f2)
             AGENT_SECRET_ACCESS_KEY=$(grep "^export AGENT_SECRET_ACCESS_KEY=" "$temp_exports" | cut -d"'" -f2)
 
+            # Set certificate paths to local certs directory (generated during server deployment)
+            if [[ -f "./certs/client.crt" && -f "./certs/client.key" && -f "./certs/ca.crt" ]]; then
+                CERT_PATH="./certs/client.crt"
+                KEY_PATH="./certs/client.key"
+                CA_CERT_PATH="./certs/ca.crt"
+                log_debug "Certificate paths set to local certs directory"
+            else
+                log_warn "Certificate files not found in ./certs/ directory"
+            fi
+
             # For SERVER_IP_COMMAND, extract everything between the quotes (handling the complex command)
             SERVER_IP_COMMAND=$(sed -n 's/^export SERVER_IP_COMMAND="\(.*\)"$/\1/p' "$temp_exports")
 
@@ -470,7 +503,12 @@ deploy_agent() {
     [[ -n "$CERT_PATH" ]] && args+=(--cert-path "$CERT_PATH")
     [[ -n "$KEY_PATH" ]] && args+=(--key-path "$KEY_PATH")
     [[ -n "$CA_CERT_PATH" ]] && args+=(--ca-cert-path "$CA_CERT_PATH")
-    
+
+    # Pass IAM configuration if available
+    [[ -n "$AGENT_IAM_ROLE_ARN" ]] && args+=(--iam-role-arn "$AGENT_IAM_ROLE_ARN")
+    [[ -n "$AGENT_ACCESS_KEY_ID" ]] && args+=(--access-key-id "$AGENT_ACCESS_KEY_ID")
+    [[ -n "$AGENT_SECRET_ACCESS_KEY" ]] && args+=(--secret-access-key "$AGENT_SECRET_ACCESS_KEY")
+
     # Pass installation path if specified
     [[ -n "$INSTALL_PATH" && "$INSTALL_PATH" != "$DEFAULT_INSTALL_PATH" ]] && args+=(--install-path "$INSTALL_PATH")
     

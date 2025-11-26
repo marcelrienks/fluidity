@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 )
 
@@ -26,6 +27,7 @@ type WakeResponse struct {
 	RunningCount       int32  `json:"runningCount"`
 	PendingCount       int32  `json:"pendingCount"`
 	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
+	PublicIP           string `json:"public_ip,omitempty"`
 	Message            string `json:"message"`
 }
 
@@ -40,11 +42,19 @@ type FunctionURLResponse struct {
 type ECSClient interface {
 	DescribeServices(ctx context.Context, params *ecs.DescribeServicesInput, optFns ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error)
 	UpdateService(ctx context.Context, params *ecs.UpdateServiceInput, optFns ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error)
+	ListTasks(ctx context.Context, params *ecs.ListTasksInput, optFns ...func(*ecs.Options)) (*ecs.ListTasksOutput, error)
+	DescribeTasks(ctx context.Context, params *ecs.DescribeTasksInput, optFns ...func(*ecs.Options)) (*ecs.DescribeTasksOutput, error)
+}
+
+// EC2Client interface for testing
+type EC2Client interface {
+	DescribeNetworkInterfaces(ctx context.Context, params *ec2.DescribeNetworkInterfacesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeNetworkInterfacesOutput, error)
 }
 
 // Handler processes wake requests
 type Handler struct {
 	ecsClient   ECSClient
+	ec2Client   EC2Client
 	clusterName string
 	serviceName string
 	logger      *logger.Logger
@@ -79,6 +89,7 @@ func NewHandler(ctx context.Context, clusterName, serviceName string) (*Handler,
 
 	return &Handler{
 		ecsClient:   ecs.NewFromConfig(cfg),
+		ec2Client:   ec2.NewFromConfig(cfg),
 		clusterName: clusterName,
 		serviceName: serviceName,
 		logger:      log,
@@ -86,9 +97,10 @@ func NewHandler(ctx context.Context, clusterName, serviceName string) (*Handler,
 }
 
 // NewHandlerWithClient creates a new wake handler with a provided ECS client (for testing)
-func NewHandlerWithClient(ecsClient ECSClient, clusterName, serviceName string) *Handler {
+func NewHandlerWithClient(ecsClient ECSClient, ec2Client EC2Client, clusterName, serviceName string) *Handler {
 	return &Handler{
 		ecsClient:   ecsClient,
+		ec2Client:   ec2Client,
 		clusterName: clusterName,
 		serviceName: serviceName,
 		logger:      logger.New("info"),
@@ -221,11 +233,22 @@ func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*
 			})
 		}
 
+		// Try to get the public IP if service is running
+		publicIP, err := h.getServicePublicIP(ctx, clusterName, serviceName)
+		if err != nil {
+			h.logger.Warn("Failed to get public IP for running service", map[string]interface{}{
+				"clusterName": clusterName,
+				"serviceName": serviceName,
+				"error":       err.Error(),
+			})
+		}
+
 		return &WakeResponse{
 			Status:       status,
 			DesiredCount: desiredCount,
 			RunningCount: runningCount,
 			PendingCount: pendingCount,
+			PublicIP:     publicIP,
 			Message:      message,
 		}, nil
 	}
@@ -266,6 +289,102 @@ func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*
 		EstimatedStartTime: estimatedStartTime,
 		Message:            "Service wake initiated. ECS task starting (estimated 60-90 seconds)",
 	}, nil
+}
+
+// getServicePublicIP retrieves the public IP address of the running ECS service
+func (h *Handler) getServicePublicIP(ctx context.Context, clusterName, serviceName string) (string, error) {
+	// List tasks for the service
+	listTasksInput := &ecs.ListTasksInput{
+		Cluster:     aws.String(clusterName),
+		ServiceName: aws.String(serviceName),
+	}
+
+	h.logger.Debug("Listing tasks for service", map[string]interface{}{
+		"clusterName": clusterName,
+		"serviceName": serviceName,
+	})
+
+	listTasksOutput, err := h.ecsClient.ListTasks(ctx, listTasksInput)
+	if err != nil {
+		return "", fmt.Errorf("failed to list tasks: %w", err)
+	}
+
+	if len(listTasksOutput.TaskArns) == 0 {
+		return "", fmt.Errorf("no tasks found for service")
+	}
+
+	// Describe the first task (should be the only one for our service)
+	describeTasksInput := &ecs.DescribeTasksInput{
+		Cluster: aws.String(clusterName),
+		Tasks:   []string{listTasksOutput.TaskArns[0]},
+	}
+
+	h.logger.Debug("Describing task", map[string]interface{}{
+		"taskArn": listTasksOutput.TaskArns[0],
+	})
+
+	describeTasksOutput, err := h.ecsClient.DescribeTasks(ctx, describeTasksInput)
+	if err != nil {
+		return "", fmt.Errorf("failed to describe task: %w", err)
+	}
+
+	if len(describeTasksOutput.Tasks) == 0 {
+		return "", fmt.Errorf("task not found")
+	}
+
+	task := describeTasksOutput.Tasks[0]
+
+	// Extract network interface ID from task attachments
+	var eniID string
+	for _, attachment := range task.Attachments {
+		if attachment.Type != nil && *attachment.Type == "ElasticNetworkInterface" {
+			for _, detail := range attachment.Details {
+				if detail.Name != nil && *detail.Name == "networkInterfaceId" && detail.Value != nil {
+					eniID = *detail.Value
+					break
+				}
+			}
+		}
+		if eniID != "" {
+			break
+		}
+	}
+
+	if eniID == "" {
+		return "", fmt.Errorf("no network interface found for task")
+	}
+
+	h.logger.Debug("Found network interface", map[string]interface{}{
+		"eniId": eniID,
+	})
+
+	// Describe the network interface to get the public IP
+	describeENIInput := &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []string{eniID},
+	}
+
+	describeENIOutput, err := h.ec2Client.DescribeNetworkInterfaces(ctx, describeENIInput)
+	if err != nil {
+		return "", fmt.Errorf("failed to describe network interface: %w", err)
+	}
+
+	if len(describeENIOutput.NetworkInterfaces) == 0 {
+		return "", fmt.Errorf("network interface not found")
+	}
+
+	eni := describeENIOutput.NetworkInterfaces[0]
+	if eni.Association == nil || eni.Association.PublicIp == nil {
+		return "", fmt.Errorf("no public IP associated with network interface")
+	}
+
+	publicIP := *eni.Association.PublicIp
+	h.logger.Info("Retrieved public IP for service", map[string]interface{}{
+		"clusterName": clusterName,
+		"serviceName": serviceName,
+		"publicIP":    publicIP,
+	})
+
+	return publicIP, nil
 }
 
 // successResponse wraps the wake response in Function URL format

@@ -32,6 +32,14 @@ var (
 	saveConfig bool
 )
 
+// getConfigValue returns the first non-empty value
+func getConfigValue(envValue, configValue string) string {
+	if envValue != "" {
+		return envValue
+	}
+	return configValue
+}
+
 func main() {
 	// Note: GODEBUG must be set BEFORE the Go runtime initializes
 	// Use run-agent-debug.cmd to launch with TLS debug logging enabled
@@ -100,12 +108,67 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	// Set log level
 	logger.SetLevel(cfg.LogLevel)
 
+	// Auto-discover server IP if not provided
+	if cfg.ServerIP == "" {
+		logger.Info("Server IP not configured, attempting auto-discovery via wake endpoint")
+
+		// Load lifecycle configuration from environment and agent config
+		lifecycleConfig := &lifecycle.Config{
+			WakeEndpoint:            getConfigValue(os.Getenv("WAKE_ENDPOINT"), cfg.WakeEndpoint),
+			KillEndpoint:            getConfigValue(os.Getenv("KILL_ENDPOINT"), cfg.KillEndpoint),
+			IAMRoleARN:              getConfigValue(os.Getenv("IAM_ROLE_ARN"), cfg.IAMRoleARN),
+			AWSRegion:               getConfigValue(os.Getenv("AWS_REGION"), cfg.AWSRegion),
+			ClusterName:             os.Getenv("ECS_CLUSTER_NAME"),
+			ServiceName:             os.Getenv("ECS_SERVICE_NAME"),
+			ConnectionTimeout:       90 * time.Second,
+			ConnectionRetryInterval: 5 * time.Second,
+			HTTPTimeout:             30 * time.Second,
+			MaxRetries:              3,
+			Enabled:                 true,
+		}
+
+		// Lifecycle is disabled if endpoints are not configured
+		if lifecycleConfig.WakeEndpoint == "" {
+			return fmt.Errorf("server IP address is required (use --server-ip or config file) or configure WAKE_ENDPOINT for auto-discovery")
+		}
+
+		if err := lifecycleConfig.Validate(); err != nil {
+			logger.Warn("Lifecycle configuration validation failed", "error", err.Error())
+			return fmt.Errorf("server IP address is required (use --server-ip or config file) or fix lifecycle configuration")
+		}
+
+		// Create lifecycle client
+		lifecycleClient, err := lifecycle.NewClient(lifecycleConfig, logger)
+		if err != nil {
+			return fmt.Errorf("failed to create lifecycle client for IP discovery: %w", err)
+		}
+
+		// Call wake to get server IP
+		wakeCtx, wakeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer wakeCancel()
+
+		if err := lifecycleClient.WakeAndGetIP(wakeCtx, cfg); err != nil {
+			return fmt.Errorf("failed to auto-discover server IP: %w", err)
+		}
+
+		logger.Info("Auto-discovered server IP", "server_ip", cfg.ServerIP)
+
+		// Persist the discovered IP to config file
+		if configFile != "" {
+			if err := config.SaveConfig(configFile, cfg); err != nil {
+				logger.Warn("Failed to persist discovered server IP to config file", "error", err.Error())
+			} else {
+				logger.Info("Persisted discovered server IP to config file", "file", configFile)
+			}
+		}
+	}
+
 	logger.Info("Starting Fluidity tunnel agent",
 		"server", cfg.GetServerAddress(),
 		"proxy_port", cfg.LocalProxyPort,
 		"log_level", cfg.LogLevel)
 
-	// Validate required configuration
+	// Validate required configuration (after auto-discovery)
 	if cfg.ServerIP == "" {
 		return fmt.Errorf("server IP address is required (use --server-ip or config file)")
 	}
