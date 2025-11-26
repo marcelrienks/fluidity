@@ -271,8 +271,10 @@ This automatically:
 - Detects AWS region, VPC, subnets, and your IP
 - Generates certificates (if needed)
 - Builds and uploads Docker image to ECR
-- Deploys CloudFormation stacks  
+- Deploys CloudFormation stacks
 - Deploys and configures agent with endpoints
+
+**Note:** The complete deployment process can take 10+ minutes. If using tools with timeout settings, ensure adequate timeout is configured (recommended: 15 minutes).
 
 **With explicit parameters (Windows PowerShell):**
 ```powershell
@@ -288,7 +290,7 @@ wsl bash scripts/deploy-fluidity.sh deploy `
 **With explicit parameters (macOS/Linux):**
 ```bash
 bash scripts/deploy-fluidity.sh deploy \
-  --region us-east-1 \
+  --region eu-west-1 \
   --vpc-id vpc-12345678 \
   --public-subnets subnet-11111111,subnet-22222222 \
   --allowed-cidr 203.0.113.45/32 \
@@ -524,7 +526,7 @@ wsl bash scripts/deploy-fluidity.sh deploy
 **macOS/Linux:**
 ```bash
 bash scripts/deploy-fluidity.sh deploy \
-  --region us-east-1 \
+  --region eu-west-1 \
   --vpc-id vpc-12345678 \
   --public-subnets subnet-11111111,subnet-22222222 \
   --allowed-cidr 203.0.113.45/32 \
@@ -537,6 +539,8 @@ Output:
 - Lambda endpoints collected automatically
 - Agent deployed with server endpoints
 - Configuration created and validated
+
+**Note:** This deployment process takes 10+ minutes to complete. The script will show progress through each step.
 
 ### Step-by-Step Deployment
 
