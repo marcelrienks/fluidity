@@ -305,6 +305,12 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// Track consecutive connection failures to detect stale server IP
+		consecutiveFailures := 0
+		const maxConsecutiveFailures = 3            // After 3 failures, try IP rediscovery
+		const rediscoveryBackoff = 30 * time.Second // Wait before retrying rediscovery
+		rediscoveryInProgress := false              // Prevent concurrent rediscovery attempts
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -316,9 +322,53 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			if !tunnelClient.IsConnected() {
 				logger.Info("Attempting to connect to tunnel server")
 				if err := tunnelClient.Connect(); err != nil {
-					logger.Error("Failed to connect to tunnel server", err)
+					consecutiveFailures++
+					logger.Error("Failed to connect to tunnel server", err, "consecutive_failures", consecutiveFailures)
+
+					// Check if we should attempt IP rediscovery
+					if lifecycleClient != nil && lifecycleConfig.Enabled && consecutiveFailures >= maxConsecutiveFailures && !rediscoveryInProgress {
+						logger.Warn("Multiple consecutive connection failures detected, attempting IP rediscovery",
+							"failures", consecutiveFailures, "max_failures", maxConsecutiveFailures, "current_ip", cfg.ServerIP)
+
+						rediscoveryInProgress = true
+
+						// Attempt to rediscover server IP
+						rediscoverCtx, rediscoverCancel := context.WithTimeout(ctx, 2*time.Minute)
+						if rediscoverErr := lifecycleClient.WakeAndGetIP(rediscoverCtx, cfg); rediscoverErr != nil {
+							logger.Error("IP rediscovery failed, will retry connection to current IP",
+								rediscoverErr, "will_retry_in", rediscoveryBackoff)
+							// Reset failure counter but with longer backoff to avoid rapid rediscovery attempts
+							consecutiveFailures = maxConsecutiveFailures - 1
+							time.Sleep(rediscoveryBackoff)
+						} else {
+							logger.Info("IP rediscovery successful, new server IP discovered",
+								"old_ip", cfg.ServerIP, "new_ip", cfg.ServerIP)
+							consecutiveFailures = 0
+
+							// Persist the newly discovered IP to config file
+							if configFile != "" {
+								if saveErr := config.SaveConfig(configFile, cfg); saveErr != nil {
+									logger.Warn("Failed to persist rediscovered server IP to config file", "error", saveErr.Error())
+								} else {
+									logger.Info("Persisted rediscovered server IP to config file", "file", configFile)
+								}
+							}
+						}
+						rediscoverCancel()
+						rediscoveryInProgress = false
+					}
+
 					time.Sleep(5 * time.Second)
 					continue
+				}
+
+				// Successful connection - reset failure counter
+				if consecutiveFailures > 0 {
+					logger.Info("Connection successful after failures, resetting failure counter",
+						"previous_failures", consecutiveFailures, "server_ip", cfg.ServerIP)
+					consecutiveFailures = 0
+				} else {
+					logger.Info("Connection successful", "server_ip", cfg.ServerIP)
 				}
 			}
 

@@ -50,8 +50,10 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
    - **Server Discovery**: Agent auto-discovers server IP via Lambda endpoints
    - **On-Demand Server Wake**: Agent triggers server startup when needed
    - **Auto-Configuration**: Agent writes discovered IPs to config for persistence
-   - **Connection Lifecycle**: Automatic reconnection with server discovery retry
+   - **Connection Lifecycle**: Automatic reconnection with intelligent failure detection
+   - **Resilient Recovery**: After 3 consecutive failures, agent re-triggers full IP discovery cycle
    - **Cost Optimization**: Server auto-scale down when idle, wake on demand
+   - **Infrastructure Resilience**: Handles server restarts, IP drift, and cloud updates automatically
 
 ### Non-Functional
 
@@ -83,8 +85,10 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
 3. **Runtime Operation**
    - Agent checks for configured server IP
    - If no IP: triggers wake Lambda → polls query Lambda → writes IP to config
-   - If IP exists but connection fails: repeats discovery cycle
+   - If IP exists but connection fails: attempts reconnection with backoff
+   - **After 3 consecutive failures**: automatically re-triggers full wake/query discovery cycle
    - Server can scale down when idle; agent wakes it up as needed
+   - **Self-Healing**: Agent automatically recovers from server restarts, IP changes, and infrastructure updates
 
 ### Key Design Principles
 
@@ -100,6 +104,8 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
 - 99%+ uptime for cloud deployment
 - <10 minutes setup time
 - **Dynamic server discovery and wake-up within 30 seconds**
+- **Automatic recovery from infrastructure changes within 2 minutes**
+- **Zero-touch operation after initial deployment**
 
 ## Out of Scope
 

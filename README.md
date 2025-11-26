@@ -30,8 +30,10 @@ Fluidity follows a specific deployment and runtime workflow:
 - **Server Discovery**: Agent startup checks for server IP; if not configured, triggers wake Lambda to start server
 - **Dynamic IP Resolution**: Agent polls query Lambda to discover the running server's IP address
 - **Auto-Configuration**: Discovered IP is written to agent config for future use
-- **Connection Management**: Agent maintains persistent tunnel connection; if lost, re-triggers discovery cycle
+- **Connection Management**: Agent maintains persistent tunnel connection; if lost, attempts reconnection
+- **Resilient Recovery**: After 3 consecutive connection failures, agent automatically re-triggers IP discovery cycle
 - **Lifecycle Management**: Server can auto-scale down when idle; agent wakes it up as needed
+- **Infrastructure Resilience**: Agent handles server restarts, IP changes, and cloud infrastructure updates automatically
 
 This design enables cost-effective, on-demand tunneling infrastructure that scales with usage.
 
