@@ -50,6 +50,35 @@ This creates certificates in `./certs/`:
 
 ---
 
+## Deployment Workflow
+
+### Intended Deployment Order
+
+Fluidity is designed with a specific deployment workflow to enable dynamic server discovery and lifecycle management:
+
+1. **Deploy Server & Lambda Infrastructure First**
+   - Deploy tunnel server and lifecycle Lambda functions (wake/query/kill) to AWS
+   - This creates the cloud infrastructure that agents will discover and use
+
+2. **Deploy Agent with Discovery Configuration**
+   - Deploy agent with Lambda endpoint configurations (not hardcoded server IPs)
+   - Agent will dynamically discover server IPs at runtime
+
+3. **Runtime Operation**
+   - Agent startup: checks for configured server IP
+   - If no IP configured: calls wake Lambda → polls query Lambda → discovers IP → writes to config
+   - If connection fails: repeats discovery cycle
+   - Server can scale down when idle; agent wakes it up on demand
+
+### Why This Workflow?
+
+- **Cost Efficiency**: Server infrastructure only runs when needed
+- **Dynamic Scaling**: Infrastructure scales with actual usage patterns
+- **Resilience**: Agents can recover from server failures by rediscovering IPs
+- **Separation of Concerns**: Server and agent deployments are independent
+
+---
+
 ## Deployment
 
 ### Local Development

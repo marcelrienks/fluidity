@@ -33,6 +33,7 @@
 #   --server-port <port>       Server port (default: 8443)
 #   --local-proxy-port <port>  Agent listening port (default: 8080)
 #   --wake-endpoint <url>      Wake Lambda Function URL
+#   --query-endpoint <url>     Query Lambda Function URL
 #   --kill-endpoint <url>      Kill Lambda Function URL
 #   --cert-path <path>         Path to client certificate
 #   --key-path <path>          Path to client private key
@@ -73,6 +74,7 @@ SERVER_IP=""
 SERVER_PORT="8443"
 LOCAL_PROXY_PORT="8080"
 WAKE_ENDPOINT=""
+QUERY_ENDPOINT=""
 KILL_ENDPOINT=""
 CERT_PATH=""
 KEY_PATH=""
@@ -265,14 +267,18 @@ parse_arguments() {
                 LOCAL_PROXY_PORT="$2"
                 shift 2
                 ;;
-            --wake-endpoint)
-                WAKE_ENDPOINT="$2"
-                shift 2
-                ;;
-            --kill-endpoint)
-                KILL_ENDPOINT="$2"
-                shift 2
-                ;;
+             --wake-endpoint)
+                 WAKE_ENDPOINT="$2"
+                 shift 2
+                 ;;
+             --query-endpoint)
+                 QUERY_ENDPOINT="$2"
+                 shift 2
+                 ;;
+             --kill-endpoint)
+                 KILL_ENDPOINT="$2"
+                 shift 2
+                 ;;
             --cert-path)
                 CERT_PATH="$2"
                 shift 2
@@ -381,12 +387,15 @@ load_config_file() {
             local_proxy_port)
                 [[ -z "$LOCAL_PROXY_PORT" || "$LOCAL_PROXY_PORT" == "8080" ]] && LOCAL_PROXY_PORT="$value"
                 ;;
-            wake_endpoint)
-                [[ -z "$WAKE_ENDPOINT" ]] && WAKE_ENDPOINT="$value"
-                ;;
-            kill_endpoint)
-                [[ -z "$KILL_ENDPOINT" ]] && KILL_ENDPOINT="$value"
-                ;;
+             wake_endpoint)
+                 [[ -z "$WAKE_ENDPOINT" ]] && WAKE_ENDPOINT="$value"
+                 ;;
+             query_endpoint)
+                 [[ -z "$QUERY_ENDPOINT" ]] && QUERY_ENDPOINT="$value"
+                 ;;
+             kill_endpoint)
+                 [[ -z "$KILL_ENDPOINT" ]] && KILL_ENDPOINT="$value"
+                 ;;
             cert_file)
                 [[ -z "$CERT_PATH" ]] && CERT_PATH="$value"
                 ;;
@@ -426,6 +435,7 @@ local_proxy_port: $LOCAL_PROXY_PORT
 
 # Lambda endpoints (optional, for control plane integration)
 wake_endpoint: "$WAKE_ENDPOINT"
+query_endpoint: "$QUERY_ENDPOINT"
 kill_endpoint: "$KILL_ENDPOINT"
 
 # IAM Configuration (for Phase 3 IAM authentication)
@@ -538,15 +548,20 @@ update_config_file() {
         updated=true
     fi
     
-    if [[ -n "$WAKE_ENDPOINT" ]]; then
-        sed -i "s|^wake_endpoint:.*|wake_endpoint: \"$WAKE_ENDPOINT\"|" "$temp_file" || echo "wake_endpoint: \"$WAKE_ENDPOINT\"" >> "$temp_file"
-        updated=true
-    fi
-    
-    if [[ -n "$KILL_ENDPOINT" ]]; then
-        sed -i "s|^kill_endpoint:.*|kill_endpoint: \"$KILL_ENDPOINT\"|" "$temp_file" || echo "kill_endpoint: \"$KILL_ENDPOINT\"" >> "$temp_file"
-        updated=true
-    fi
+     if [[ -n "$WAKE_ENDPOINT" ]]; then
+         sed -i "s|^wake_endpoint:.*|wake_endpoint: \"$WAKE_ENDPOINT\"|" "$temp_file" || echo "wake_endpoint: \"$WAKE_ENDPOINT\"" >> "$temp_file"
+         updated=true
+     fi
+
+     if [[ -n "$QUERY_ENDPOINT" ]]; then
+         sed -i "s|^query_endpoint:.*|query_endpoint: \"$QUERY_ENDPOINT\"|" "$temp_file" || echo "query_endpoint: \"$QUERY_ENDPOINT\"" >> "$temp_file"
+         updated=true
+     fi
+
+     if [[ -n "$KILL_ENDPOINT" ]]; then
+         sed -i "s|^kill_endpoint:.*|kill_endpoint: \"$KILL_ENDPOINT\"|" "$temp_file" || echo "kill_endpoint: \"$KILL_ENDPOINT\"" >> "$temp_file"
+         updated=true
+     fi
     
     if [[ "$updated" == "true" ]]; then
         mv "$temp_file" "$CONFIG_FILE"
@@ -964,6 +979,7 @@ server_port: ${SERVER_PORT}
 local_proxy_port: ${LOCAL_PROXY_PORT}
 
 wake_endpoint: "${WAKE_ENDPOINT}"
+query_endpoint: "${QUERY_ENDPOINT}"
 kill_endpoint: "${KILL_ENDPOINT}"
 
 # IAM Configuration (for Phase 3 IAM authentication)

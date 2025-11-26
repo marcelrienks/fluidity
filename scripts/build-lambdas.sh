@@ -65,7 +65,7 @@ log_header "Fluidity Lambda Build"
 log_info "Building Lambda functions..."
 
 # List of Lambda functions to build
-FUNCTIONS=("wake" "sleep" "kill")
+FUNCTIONS=("wake" "sleep" "kill" "query")
 
 for func in "${FUNCTIONS[@]}"; do
     log_substep "Building $func Lambda"

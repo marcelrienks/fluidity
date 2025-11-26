@@ -96,6 +96,7 @@ SKIP_BUILD=false
 # Endpoints from server deployment
 WAKE_ENDPOINT=""
 KILL_ENDPOINT=""
+QUERY_ENDPOINT=""
 SERVER_REGION=""
 SERVER_PORT="8443"
 SERVER_IP_COMMAND=""
@@ -301,6 +302,10 @@ parse_arguments() {
                 KILL_ENDPOINT="$2"
                 shift 2
                 ;;
+            --query-endpoint)
+                QUERY_ENDPOINT="$2"
+                shift 2
+                ;;
             --iam-role-arn)
                 AGENT_IAM_ROLE_ARN="$2"
                 shift 2
@@ -410,6 +415,7 @@ deploy_server() {
             SERVER_REGION=$(grep "^export SERVER_REGION=" "$temp_exports" | cut -d"'" -f2)
             WAKE_ENDPOINT=$(grep "^export WAKE_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             KILL_ENDPOINT=$(grep "^export KILL_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            QUERY_ENDPOINT=$(grep "^export QUERY_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
             AGENT_IAM_ROLE_ARN=$(grep "^export AGENT_IAM_ROLE_ARN=" "$temp_exports" | cut -d"'" -f2)
             AGENT_ACCESS_KEY_ID=$(grep "^export AGENT_ACCESS_KEY_ID=" "$temp_exports" | cut -d"'" -f2)
@@ -431,6 +437,7 @@ deploy_server() {
             log_debug "Extracted SERVER_REGION: $SERVER_REGION"
             log_debug "Extracted WAKE_ENDPOINT: $WAKE_ENDPOINT"
             log_debug "Extracted KILL_ENDPOINT: $KILL_ENDPOINT"
+            log_debug "Extracted QUERY_ENDPOINT: $QUERY_ENDPOINT"
             log_debug "Extracted SERVER_PORT: $SERVER_PORT"
             log_debug "Extracted AGENT_IAM_ROLE_ARN: $AGENT_IAM_ROLE_ARN"
             log_debug "Extracted AGENT_ACCESS_KEY_ID: [REDACTED]"
@@ -492,6 +499,10 @@ deploy_agent() {
     
     if [[ -n "$KILL_ENDPOINT" ]]; then
         args+=(--kill-endpoint "$KILL_ENDPOINT")
+    fi
+
+    if [[ -n "$QUERY_ENDPOINT" ]]; then
+        args+=(--query-endpoint "$QUERY_ENDPOINT")
     fi
 
     # Pass log level if provided
@@ -645,6 +656,7 @@ main() {
             log_info "Region: $SERVER_REGION"
             log_info "Wake Lambda: $WAKE_ENDPOINT"
             log_info "Kill Lambda: $KILL_ENDPOINT"
+            log_info "Query Lambda: $QUERY_ENDPOINT"
             log_info "Server Port: $SERVER_PORT"
             log_info "Server IP: (Obtain from AWS console or use wake function)"
             

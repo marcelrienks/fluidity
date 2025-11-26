@@ -53,9 +53,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "enabled when endpoints set",
 			envVars: map[string]string{
-				"WAKE_ENDPOINT": "https://api.example.com/wake",
-				"KILL_ENDPOINT": "https://api.example.com/kill",
-				"API_KEY":       "test-key",
+				"WAKE_ENDPOINT":  "https://api.example.com/wake",
+				"QUERY_ENDPOINT": "https://api.example.com/query",
+				"KILL_ENDPOINT":  "https://api.example.com/kill",
+				"API_KEY":        "test-key",
 			},
 			wantEnabled: true,
 			wantErr:     false,
@@ -64,6 +65,7 @@ func TestLoadConfig(t *testing.T) {
 			name: "custom timeouts",
 			envVars: map[string]string{
 				"WAKE_ENDPOINT":             "https://api.example.com/wake",
+				"QUERY_ENDPOINT":            "https://api.example.com/query",
 				"KILL_ENDPOINT":             "https://api.example.com/kill",
 				"CONNECTION_TIMEOUT":        "120s",
 				"CONNECTION_RETRY_INTERVAL": "10s",
@@ -103,11 +105,12 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				WakeEndpoint: "https://api.example.com/wake",
-				KillEndpoint: "https://api.example.com/kill",
-				IAMRoleARN:   "arn:aws:iam::123456789012:role/fluidity-agent",
-				AWSRegion:    "us-east-1",
-				Enabled:      true,
+				WakeEndpoint:  "https://api.example.com/wake",
+				QueryEndpoint: "https://api.example.com/query",
+				KillEndpoint:  "https://api.example.com/kill",
+				IAMRoleARN:    "arn:aws:iam::123456789012:role/fluidity-agent",
+				AWSRegion:     "us-east-1",
+				Enabled:       true,
 			},
 			wantErr: false,
 		},

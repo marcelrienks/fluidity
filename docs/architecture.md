@@ -52,6 +52,63 @@ Fluidity uses a client-server architecture with mTLS authentication and optional
 
 ---
 
+## Operational Workflow
+
+### Deployment Sequence
+
+1. **Infrastructure Deployment**
+   - Deploy Lambda functions (wake/query/kill) and supporting CloudFormation stacks
+   - Lambda functions provide lifecycle management APIs
+
+2. **Server Deployment**
+   - Deploy tunnel server to ECS Fargate
+   - Server starts in stopped state (DesiredCount=0)
+
+3. **Agent Deployment**
+   - Deploy agent with Lambda endpoint configurations
+   - No hardcoded server IPs - everything discovered dynamically
+
+### Runtime Operation
+
+**Agent Startup Process:**
+```
+Agent starts → Check config for server IP
+    ↓
+No IP configured?
+    ↓
+Yes → Call Wake Lambda → Server starts (DesiredCount=1)
+    ↓
+Poll Query Lambda → Get server IP
+    ↓
+Write IP to config → Connect to server
+    ↓
+Connection successful → Normal operation
+```
+
+**Connection Failure Recovery:**
+```
+Connection lost → Check if server still running
+    ↓
+Server down? → Repeat wake/query cycle
+    ↓
+Server up but unreachable? → Wait/retry
+    ↓
+Reconnected → Resume normal operation
+```
+
+**Idle Shutdown:**
+```
+No agent connections → Timer starts
+    ↓
+Timeout reached → Call Kill Lambda
+    ↓
+Server scales to DesiredCount=0
+```
+
+This workflow enables cost-effective, on-demand tunneling infrastructure.
+
+---
+
 ## Communication Protocol
 
 **Message Types**:

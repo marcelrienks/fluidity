@@ -115,6 +115,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		// Load lifecycle configuration from environment and agent config
 		lifecycleConfig := &lifecycle.Config{
 			WakeEndpoint:            getConfigValue(os.Getenv("WAKE_ENDPOINT"), cfg.WakeEndpoint),
+			QueryEndpoint:           getConfigValue(os.Getenv("QUERY_ENDPOINT"), cfg.QueryEndpoint),
 			KillEndpoint:            getConfigValue(os.Getenv("KILL_ENDPOINT"), cfg.KillEndpoint),
 			IAMRoleARN:              getConfigValue(os.Getenv("IAM_ROLE_ARN"), cfg.IAMRoleARN),
 			AWSRegion:               getConfigValue(os.Getenv("AWS_REGION"), cfg.AWSRegion),
@@ -228,10 +229,11 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 	// Load lifecycle configuration from environment and agent config
 	lifecycleConfig := &lifecycle.Config{
-		WakeEndpoint:            os.Getenv("WAKE_ENDPOINT"),
-		KillEndpoint:            os.Getenv("KILL_ENDPOINT"),
-		IAMRoleARN:              os.Getenv("IAM_ROLE_ARN"),
-		AWSRegion:               os.Getenv("AWS_REGION"),
+		WakeEndpoint:            getConfigValue(os.Getenv("WAKE_ENDPOINT"), cfg.WakeEndpoint),
+		QueryEndpoint:           getConfigValue(os.Getenv("QUERY_ENDPOINT"), cfg.QueryEndpoint),
+		KillEndpoint:            getConfigValue(os.Getenv("KILL_ENDPOINT"), cfg.KillEndpoint),
+		IAMRoleARN:              getConfigValue(os.Getenv("IAM_ROLE_ARN"), cfg.IAMRoleARN),
+		AWSRegion:               getConfigValue(os.Getenv("AWS_REGION"), cfg.AWSRegion),
 		ClusterName:             os.Getenv("ECS_CLUSTER_NAME"),
 		ServiceName:             os.Getenv("ECS_SERVICE_NAME"),
 		ConnectionTimeout:       90 * time.Second,
@@ -242,7 +244,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	}
 
 	// Lifecycle is disabled if endpoints are not configured
-	if lifecycleConfig.WakeEndpoint == "" || lifecycleConfig.KillEndpoint == "" {
+	if lifecycleConfig.WakeEndpoint == "" || lifecycleConfig.QueryEndpoint == "" || lifecycleConfig.KillEndpoint == "" {
 		lifecycleConfig.Enabled = false
 	}
 

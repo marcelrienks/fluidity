@@ -7,13 +7,33 @@
 
 ## Overview
 
-Fluidity tunnels HTTP/HTTPS/WebSocket traffic through restrictive firewalls using mutual TLS authentication between a local agent and cloud-hosted server.
+Fluidity is a secure HTTP/HTTPS/WebSocket tunneling solution designed for environments with restrictive firewalls. It enables applications to access external services through a cloud-hosted tunnel server using mutual TLS authentication.
+
+**Intended Use Case**: Deploy the server infrastructure first, then deploy agents that can dynamically discover and wake up servers as needed. The agent automatically manages server lifecycle - discovering IPs, waking idle servers, and maintaining connections.
 
 _Predominantly vibe coded with mixture of claude and grok as a learning excercise._
 
-**Stack**: Go, Docker, AWS ECS Fargate, Lambda  
-**Size**: ~44MB Alpine containers  
-**Security**: mTLS with private CA
+**Stack**: Go, Docker, AWS ECS Fargate, Lambda
+**Size**: ~44MB Alpine containers
+**Security**: mTLS with private CA + AWS IAM authentication
+
+## Intended Workflow
+
+Fluidity follows a specific deployment and runtime workflow:
+
+### Deployment Process
+1. **Deploy Server & Lambdas First**: Deploy the tunnel server and lifecycle management Lambda functions to AWS
+2. **Deploy Agent**: Use deployment details from step 1 to configure and deploy the agent
+3. **Orchestration**: Use the deploy manager to coordinate deployments with appropriate configurations
+
+### Runtime Behavior
+- **Server Discovery**: Agent startup checks for server IP; if not configured, triggers wake Lambda to start server
+- **Dynamic IP Resolution**: Agent polls query Lambda to discover the running server's IP address
+- **Auto-Configuration**: Discovered IP is written to agent config for future use
+- **Connection Management**: Agent maintains persistent tunnel connection; if lost, re-triggers discovery cycle
+- **Lifecycle Management**: Server can auto-scale down when idle; agent wakes it up as needed
+
+This design enables cost-effective, on-demand tunneling infrastructure that scales with usage.
 
 ## Prerequisites
 

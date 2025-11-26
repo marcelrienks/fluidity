@@ -598,7 +598,7 @@ upload_lambda_to_s3() {
     log_debug "Lambda build directory exists: $lambda_build_dir"
 
     local func_count=0
-    for func in wake sleep kill; do
+    for func in wake sleep kill query; do
         local zip_name="${func}-${build_version}.zip"
         local zip_path="$lambda_build_dir/$zip_name"
         
@@ -645,7 +645,7 @@ verify_s3_resources() {
         attempt=$((attempt + 1))
         all_found=true
 
-        for func in wake sleep kill; do
+        for func in wake sleep kill query; do
             local zip_name="${func}-${build_version}.zip"
             if aws s3 ls "s3://$lambda_s3_bucket/fluidity/$zip_name" --region "$REGION" &>/dev/null; then
                 log_debug "✓ Found: $zip_name"
@@ -891,7 +891,7 @@ EOF
             log_info "Deleting old Lambda artifacts (keeping only $current_version)"
             
             local deleted_count=0
-            for func in wake sleep kill; do
+        for func in wake sleep kill query; do
                 local all_zips
                 all_zips=$(aws s3 ls "s3://$s3_bucket/fluidity/${func}-" --region "$REGION" 2>/dev/null | awk '{print $4}' || echo "")
                 
@@ -940,6 +940,7 @@ collect_endpoints() {
     # Get Lambda endpoints
     WAKE_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "WakeAPIEndpoint")
     KILL_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "KillAPIEndpoint")
+    QUERY_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "QueryAPIEndpoint")
     SLEEP_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "SleepScheduleRuleName")
 
     # Get IAM resources
@@ -985,6 +986,7 @@ export_endpoints() {
     echo "export SERVER_IP_COMMAND=\"$SERVER_IP_COMMAND\""
     echo "export WAKE_ENDPOINT='$WAKE_ENDPOINT'"
     echo "export KILL_ENDPOINT='$KILL_ENDPOINT'"
+    echo "export QUERY_ENDPOINT='$QUERY_ENDPOINT'"
     echo "export SERVER_PORT='8443'"
     echo "export AGENT_IAM_ROLE_ARN='$AGENT_IAM_ROLE_ARN'"
     echo "export AGENT_ACCESS_KEY_ID='$AGENT_ACCESS_KEY_ID'"
@@ -1056,7 +1058,7 @@ EOF
     log_minor "Step 7: Deploy Lambda Control Plane Stack"
     
     log_substep "Cleaning up existing Lambda log groups (idempotent)"
-    for log_group in "/aws/lambda/fluidity-lambda-kill" "/aws/lambda/fluidity-lambda-sleep" "/aws/lambda/fluidity-lambda-wake"; do
+    for log_group in "/aws/lambda/fluidity-lambda-kill" "/aws/lambda/fluidity-lambda-sleep" "/aws/lambda/fluidity-lambda-wake" "/aws/lambda/fluidity-lambda-query"; do
         if aws logs describe-log-groups --log-group-name-prefix "$log_group" --region "$REGION" 2>/dev/null | grep -q "\"logGroupName\": \"$log_group\""; then
             log_info "Deleting existing log group: $log_group"
             aws logs delete-log-group --log-group-name "$log_group" --region "$REGION" 2>/dev/null || true

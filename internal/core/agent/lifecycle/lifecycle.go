@@ -40,8 +40,21 @@ type WakeRequest struct {
 type WakeResponse struct {
 	StatusCode         int    `json:"statusCode"`
 	Message            string `json:"message"`
+	InstanceID         string `json:"instance_id,omitempty"`
 	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
-	PublicIP           string `json:"public_ip,omitempty"`
+}
+
+// QueryRequest represents the request to Query Lambda
+type QueryRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+// QueryResponse represents the response from Query Lambda
+type QueryResponse struct {
+	StatusCode int    `json:"statusCode"`
+	Status     string `json:"status"` // "negative", "pending", "ready"
+	PublicIP   string `json:"public_ip,omitempty"`
+	Message    string `json:"message"`
 }
 
 // KillRequest represents the request to Kill Lambda
@@ -304,18 +317,44 @@ type ConfigUpdater interface {
 	SetServerIP(ip string)
 }
 
-// WakeAndGetIP calls the Wake Lambda and extracts the server IP from the response
+// WakeAndGetIP calls the Wake Lambda to start service, then polls Query Lambda for IP
 func (c *Client) WakeAndGetIP(ctx context.Context, configUpdater ConfigUpdater) error {
 	if !c.config.Enabled {
 		return fmt.Errorf("lifecycle management disabled")
 	}
 
-	c.logger.Info("Calling wake endpoint to discover server IP",
-		"endpoint", c.config.WakeEndpoint,
+	c.logger.Info("Starting service wake and IP discovery process",
+		"wakeEndpoint", c.config.WakeEndpoint,
+		"queryEndpoint", c.config.QueryEndpoint,
 		"cluster", c.config.ClusterName,
 		"service", c.config.ServiceName,
 	)
 
+	// Step 1: Call Wake Lambda to start the service and get instance ID
+	instanceID, err := c.callWakeAndGetInstanceID(ctx)
+	if err != nil {
+		c.logger.Error("Failed to wake service and get instance ID", err)
+		return fmt.Errorf("wake failed: %w", err)
+	}
+
+	c.logger.Info("Service wake initiated", "instanceID", instanceID)
+
+	// Step 2: Poll Query Lambda until IP is available
+	publicIP, err := c.pollForIP(ctx, instanceID)
+	if err != nil {
+		c.logger.Error("Failed to get server IP from query polling", err)
+		return fmt.Errorf("IP discovery failed: %w", err)
+	}
+
+	// Step 3: Update agent config with discovered IP
+	configUpdater.SetServerIP(publicIP)
+	c.logger.Info("Server IP discovered and config updated", "server_ip", publicIP, "instanceID", instanceID)
+
+	return nil
+}
+
+// callWakeAndGetInstanceID calls Wake Lambda and returns the instance ID
+func (c *Client) callWakeAndGetInstanceID(ctx context.Context) (string, error) {
 	// Prepare request body
 	reqBody := WakeRequest{
 		ClusterName: c.config.ClusterName,
@@ -338,20 +377,69 @@ func (c *Client) WakeAndGetIP(ctx context.Context, configUpdater ConfigUpdater) 
 	})
 
 	if err != nil {
-		c.logger.Error("Failed to call wake API for IP discovery", err)
-		return fmt.Errorf("wake API call failed: %w", err)
+		return "", fmt.Errorf("wake API call failed: %w", err)
 	}
 
-	// Extract server IP from response
-	if response.PublicIP == "" {
-		return fmt.Errorf("wake response did not contain server IP (service may not be running)")
+	if response.InstanceID == "" {
+		return "", fmt.Errorf("wake response did not contain instance ID")
 	}
 
-	// Update agent config with discovered IP
-	configUpdater.SetServerIP(response.PublicIP)
-	c.logger.Info("Discovered server IP from wake response", "server_ip", response.PublicIP)
+	return response.InstanceID, nil
+}
 
-	return nil
+// pollForIP polls the Query Lambda with instance ID until IP is available
+func (c *Client) pollForIP(ctx context.Context, instanceID string) (string, error) {
+	c.logger.Info("Starting IP polling", "instanceID", instanceID, "interval", c.config.ConnectionRetryInterval)
+
+	ticker := time.NewTicker(c.config.ConnectionRetryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("IP polling cancelled: %w", ctx.Err())
+		case <-ticker.C:
+			queryResp, err := c.callQueryAPI(ctx, instanceID)
+			if err != nil {
+				c.logger.Warn("Query API call failed, continuing to poll", "error", err.Error())
+				continue
+			}
+
+			switch queryResp.Status {
+			case "ready":
+				if queryResp.PublicIP == "" {
+					c.logger.Warn("Query returned 'ready' status but no IP, continuing to poll")
+					continue
+				}
+				c.logger.Info("Server IP discovered", "instanceID", instanceID, "ip", queryResp.PublicIP)
+				return queryResp.PublicIP, nil
+
+			case "pending":
+				c.logger.Debug("Server still starting", "instanceID", instanceID, "message", queryResp.Message)
+
+			case "negative":
+				return "", fmt.Errorf("server startup failed: %s", queryResp.Message)
+
+			default:
+				c.logger.Warn("Unknown query status, continuing to poll", "status", queryResp.Status)
+			}
+		}
+	}
+}
+
+// callQueryAPI calls the Query Lambda to check service status
+func (c *Client) callQueryAPI(ctx context.Context, instanceID string) (*QueryResponse, error) {
+	// Prepare request body
+	reqBody := QueryRequest{
+		InstanceID: instanceID,
+	}
+
+	// Call Query API
+	resp, err := c.callAPIWithSigV4(ctx, "POST", c.config.QueryEndpoint, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*QueryResponse), nil
 }
 
 // WaitForConnection waits for the agent to establish server connection after wake

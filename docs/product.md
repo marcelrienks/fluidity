@@ -4,6 +4,8 @@
 
 Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate firewalls using mTLS authentication between a local agent and cloud-hosted server.
 
+**Primary Use Case**: Enable applications behind restrictive firewalls to access external HTTP/HTTPS/WebSocket services through a secure, dynamically-managed tunnel infrastructure. The system is designed for on-demand usage where servers can be started/stopped based on agent needs, enabling cost-effective tunneling.
+
 ## Target Users
 
 - Developers behind restrictive corporate firewalls
@@ -37,15 +39,19 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
    - Retry logic with exponential backoff
    - Graceful shutdown
 
-5. **Deployment**
+5. **Deployment & Orchestration**
    - Cross-platform (Windows/macOS/Linux)
    - Docker containers (~44MB)
    - AWS Fargate deployment
+   - **Orchestrated deployment workflow**: Server/Lambda deployment first, then agent with discovered endpoints
+   - Deploy manager for coordinating multi-component deployments
 
-6. **Lifecycle Management** (Phase 2)
-   - Auto-start server on agent startup
-   - Auto-scale down when idle
-   - Scheduled shutdown
+6. **Dynamic Lifecycle Management**
+   - **Server Discovery**: Agent auto-discovers server IP via Lambda endpoints
+   - **On-Demand Server Wake**: Agent triggers server startup when needed
+   - **Auto-Configuration**: Agent writes discovered IPs to config for persistence
+   - **Connection Lifecycle**: Automatic reconnection with server discovery retry
+   - **Cost Optimization**: Server auto-scale down when idle, wake on demand
 
 ### Non-Functional
 
@@ -62,12 +68,38 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
 
 
 
+## Deployment Workflow
+
+### Intended Usage Pattern
+
+1. **Infrastructure Deployment**
+   - Deploy tunnel server and Lambda functions (wake/query/kill) to AWS first
+   - Lambda functions provide lifecycle management endpoints
+
+2. **Agent Deployment**
+   - Deploy agent with Lambda endpoint configurations
+   - Agent discovers server IP dynamically on startup
+
+3. **Runtime Operation**
+   - Agent checks for configured server IP
+   - If no IP: triggers wake Lambda → polls query Lambda → writes IP to config
+   - If IP exists but connection fails: repeats discovery cycle
+   - Server can scale down when idle; agent wakes it up as needed
+
+### Key Design Principles
+
+- **Separation of Concerns**: Server and agent can be deployed independently
+- **Dynamic Discovery**: No hardcoded IPs - everything discovered via Lambda APIs
+- **Cost Efficiency**: Infrastructure scales with actual usage
+- **Resilience**: Automatic recovery from connection failures
+
 ## Success Metrics
 
 - Successfully tunnel HTTP/HTTPS/WebSocket traffic
 - <500ms average latency overhead
 - 99%+ uptime for cloud deployment
 - <10 minutes setup time
+- **Dynamic server discovery and wake-up within 30 seconds**
 
 ## Out of Scope
 

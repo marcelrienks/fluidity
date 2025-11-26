@@ -14,6 +14,7 @@ type Config struct {
 	SecretsManagerName string `mapstructure:"secrets_manager_name" yaml:"secrets_manager_name"`
 	UseSecretsManager  bool   `mapstructure:"use_secrets_manager" yaml:"use_secrets_manager"`
 	WakeEndpoint       string `mapstructure:"wake_endpoint" yaml:"wake_endpoint"`
+	QueryEndpoint      string `mapstructure:"query_endpoint" yaml:"query_endpoint"`
 	KillEndpoint       string `mapstructure:"kill_endpoint" yaml:"kill_endpoint"`
 	IAMRoleARN         string `mapstructure:"iam_role_arn" yaml:"iam_role_arn"`
 	AWSRegion          string `mapstructure:"aws_region" yaml:"aws_region"`

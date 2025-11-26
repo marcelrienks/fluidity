@@ -25,19 +25,18 @@ Development roadmap by phase.
 
 #### 2. Agent Configuration Management
 - **Current State**: Agent requires server IP at deployment time
-- **Required Change**: Make server IP optional during deployment
+- **Required Change**: Make server IP optional during deployment - enable dynamic discovery
 - **Implementation**:
   - Allow empty `server_ip` in config file during deployment
-  - Agent can call wake function to get server IP on first run
-  - Store returned IP in config for future use
-  - Update config file after receiving IP from wake function
-- **Deployment Flow**:
-  1. User runs: `bash scripts/deploy-fluidity.sh deploy`
-  2. Deploys server infrastructure and agent (without server IP if unavailable)
-  3. Agent prompts for server IP (optional - can be skipped)
-  4. Agent user calls wake function which returns IP
-  5. Agent updates config with IP from wake response
-  6. Future agent runs use stored IP from config
+  - Agent startup checks for server IP; if missing, triggers wake → query → IP discovery cycle
+  - Store discovered IP in config for persistence across restarts
+  - Update config file automatically after IP discovery
+- **Intended Deployment Workflow**:
+  1. **Deploy Server & Lambdas First**: `bash scripts/deploy-fluidity.sh server`
+  2. **Deploy Agent**: `bash scripts/deploy-fluidity.sh agent` (uses Lambda endpoints, no server IP needed)
+  3. **Runtime Discovery**: Agent automatically discovers server IP on first startup
+  4. **Persistent Config**: Future agent runs use stored IP from config
+  5. **Recovery**: If connection fails, agent repeats discovery cycle
 
 #### 3. Deployment Script Updates
 - **Server Deployment**: Remove verbose CloudFormation stack output, export only essential variables
