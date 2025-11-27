@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"fluidity/internal/shared/circuitbreaker"
 	"fluidity/internal/shared/logging"
 	"fluidity/internal/shared/retry"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -36,12 +36,15 @@ type WakeRequest struct {
 	ServiceName string `json:"serviceName,omitempty"`
 }
 
-// WakeResponse represents the response from Wake Lambda
+// WakeResponse represents the direct JSON response from Wake Lambda
 type WakeResponse struct {
-	StatusCode         int    `json:"statusCode"`
-	Message            string `json:"message"`
+	Status             string `json:"status"`
 	InstanceID         string `json:"instance_id,omitempty"`
+	DesiredCount       int32  `json:"desiredCount"`
+	RunningCount       int32  `json:"runningCount"`
+	PendingCount       int32  `json:"pendingCount"`
 	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
+	Message            string `json:"message"`
 }
 
 // QueryRequest represents the request to Query Lambda
@@ -49,12 +52,11 @@ type QueryRequest struct {
 	InstanceID string `json:"instance_id"`
 }
 
-// QueryResponse represents the response from Query Lambda
+// QueryResponse represents the direct JSON response from Query Lambda
 type QueryResponse struct {
-	StatusCode int    `json:"statusCode"`
-	Status     string `json:"status"` // "negative", "pending", "ready"
-	PublicIP   string `json:"public_ip,omitempty"`
-	Message    string `json:"message"`
+	Status   string `json:"status"` // "negative", "pending", "ready"
+	PublicIP string `json:"public_ip,omitempty"`
+	Message  string `json:"message"`
 }
 
 // KillRequest represents the request to Kill Lambda
@@ -63,10 +65,10 @@ type KillRequest struct {
 	ServiceName string `json:"serviceName,omitempty"`
 }
 
-// KillResponse represents the response from Kill Lambda
+// KillResponse represents the direct JSON response from Kill Lambda
 type KillResponse struct {
-	StatusCode int    `json:"statusCode"`
-	Message    string `json:"message"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 // NewClient creates a new lifecycle management client
@@ -160,11 +162,11 @@ func (c *Client) Wake(ctx context.Context) error {
 
 // callWakeAPI makes the HTTP request to Wake Lambda
 func (c *Client) callWakeAPI(ctx context.Context, reqBody WakeRequest) (*WakeResponse, error) {
-	resp, err := c.callAPIWithSigV4(ctx, "POST", c.config.WakeEndpoint, reqBody)
-	if err != nil {
+	response := &WakeResponse{}
+	if err := c.callAPIWithSigV4(ctx, "POST", c.config.WakeEndpoint, reqBody, response); err != nil {
 		return nil, err
 	}
-	return resp.(*WakeResponse), nil
+	return response, nil
 }
 
 // Kill calls the Kill Lambda to stop the ECS service
@@ -213,24 +215,24 @@ func (c *Client) Kill(ctx context.Context) error {
 
 // callKillAPI makes the HTTP request to Kill Lambda
 func (c *Client) callKillAPI(ctx context.Context, reqBody KillRequest) (*KillResponse, error) {
-	resp, err := c.callAPIWithSigV4(ctx, "POST", c.config.KillEndpoint, reqBody)
-	if err != nil {
+	response := &KillResponse{}
+	if err := c.callAPIWithSigV4(ctx, "POST", c.config.KillEndpoint, reqBody, response); err != nil {
 		return nil, err
 	}
-	return resp.(*KillResponse), nil
+	return response, nil
 }
 
 // callAPIWithSigV4 makes a SigV4 signed HTTP request to Lambda Function URL
-func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body interface{}) (interface{}, error) {
-	// Execute with circuit breaker
-	var response interface{}
-	err := c.circuitBreaker.Execute(func() error {
-		// Marshal request body
-		bodyBytes, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("failed to marshal request: %w", err)
-		}
+// Returns direct JSON response (not wrapped)
+func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body interface{}, responseType interface{}) error {
+	// Marshal request body
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
 
+	// Execute with circuit breaker
+	err = c.circuitBreaker.Execute(func() error {
 		// Create HTTP request
 		req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(bodyBytes))
 		if err != nil {
@@ -273,43 +275,15 @@ func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body 
 			return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, string(respBody))
 		}
 
-		// Parse Lambda Function URL response format
-		var functionURLResp struct {
-			StatusCode int               `json:"statusCode"`
-			Headers    map[string]string `json:"headers"`
-			Body       string            `json:"body"`
-		}
-
-		if err := json.Unmarshal(respBody, &functionURLResp); err != nil {
-			return fmt.Errorf("failed to parse Function URL response: %w", err)
-		}
-
-		// Extract the actual response from the body field
-		bodyData := []byte(functionURLResp.Body)
-
-		// Parse response based on expected type
-		if strings.Contains(url, "/wake") {
-			response = &WakeResponse{}
-		} else if strings.Contains(url, "/kill") {
-			response = &KillResponse{}
-		}
-
-		if err := json.Unmarshal(bodyData, response); err != nil {
+		// Parse direct JSON response
+		if err := json.Unmarshal(respBody, responseType); err != nil {
 			return fmt.Errorf("failed to parse response body: %w", err)
-		}
-
-		if err := json.Unmarshal(respBody, response); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		return nil
 	})
 
-	if err != nil {
-		return nil, err
-	}
-
-	return response, nil
+	return err
 }
 
 // ConfigUpdater defines an interface for updating server IP
@@ -435,11 +409,11 @@ func (c *Client) callQueryAPI(ctx context.Context, instanceID string) (*QueryRes
 	}
 
 	// Call Query API
-	resp, err := c.callAPIWithSigV4(ctx, "POST", c.config.QueryEndpoint, reqBody)
-	if err != nil {
+	response := &QueryResponse{}
+	if err := c.callAPIWithSigV4(ctx, "POST", c.config.QueryEndpoint, reqBody, response); err != nil {
 		return nil, err
 	}
-	return resp.(*QueryResponse), nil
+	return response, nil
 }
 
 // WaitForConnection waits for the agent to establish server connection after wake

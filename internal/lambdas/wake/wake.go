@@ -19,7 +19,7 @@ type WakeRequest struct {
 	ServiceName string `json:"service_name,omitempty"`
 }
 
-// WakeResponse represents the output from the Wake Lambda
+// WakeResponse represents the direct JSON response from Wake Lambda
 type WakeResponse struct {
 	Status             string `json:"status"`
 	InstanceID         string `json:"instance_id"`
@@ -28,13 +28,6 @@ type WakeResponse struct {
 	PendingCount       int32  `json:"pendingCount"`
 	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
 	Message            string `json:"message"`
-}
-
-// FunctionURLResponse wraps the response for Lambda Function URL format
-type FunctionURLResponse struct {
-	StatusCode int               `json:"statusCode"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
 }
 
 // ECSClient interface for testing
@@ -96,57 +89,31 @@ func NewHandlerWithClient(ecsClient ECSClient, clusterName, serviceName string) 
 	}
 }
 
-// HandleRequest processes the wake request for Lambda Function URL
-// Event can be either JSON body or API Gateway Proxy format
+// HandleRequest processes the wake request
+// Receives direct JSON from Lambda Function URL or direct invocation
 func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interface{}, error) {
 	var request WakeRequest
 
-	// Parse the event - could be direct JSON or wrapped in Function URL event
-	switch e := event.(type) {
-	case map[string]interface{}:
-		// Try to unmarshal as request body first
-		if body, ok := e["body"]; ok {
-			// Lambda Function URL passes raw JSON body
-			if bodyStr, ok := body.(string); ok {
-				if err := json.Unmarshal([]byte(bodyStr), &request); err != nil {
-					h.logger.Error("Failed to unmarshal body from event", err)
-					return h.errorResponse(400, "Invalid JSON in request body"), nil
-				}
-			}
-		} else {
-			// Direct JSON invocation
-			data, err := json.Marshal(e)
-			if err != nil {
-				h.logger.Error("Failed to marshal event", err)
-				return h.errorResponse(400, "Invalid request format"), nil
-			}
-			if err := json.Unmarshal(data, &request); err != nil {
-				h.logger.Error("Failed to unmarshal event", err)
-				return h.errorResponse(400, "Invalid request format"), nil
-			}
-		}
-	case string:
-		// Raw JSON string
-		if err := json.Unmarshal([]byte(e), &request); err != nil {
-			h.logger.Error("Failed to unmarshal JSON string", err)
-			return h.errorResponse(400, "Invalid JSON in request body"), nil
-		}
-	case []byte:
-		// Raw bytes
-		if err := json.Unmarshal(e, &request); err != nil {
-			h.logger.Error("Failed to unmarshal bytes", err)
-			return h.errorResponse(400, "Invalid JSON in request body"), nil
-		}
+	// Parse event as JSON
+	data, err := json.Marshal(event)
+	if err != nil {
+		h.logger.Error("Failed to marshal event", err)
+		return map[string]string{"error": "Invalid request format"}, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if err := json.Unmarshal(data, &request); err != nil {
+		h.logger.Error("Failed to unmarshal event", err)
+		return map[string]string{"error": "Invalid JSON in request body"}, fmt.Errorf("invalid json: %w", err)
 	}
 
 	response, err := h.handleWakeRequest(ctx, request)
 	if err != nil {
 		h.logger.Error("Wake request failed", err)
-		return h.errorResponse(500, err.Error()), nil
+		return map[string]string{"error": err.Error()}, fmt.Errorf("wake failed: %w", err)
 	}
 
-	// Return Function URL response format
-	return h.successResponse(response), nil
+	// Return direct JSON response
+	return response, nil
 }
 
 // handleWakeRequest contains the core wake logic
@@ -283,29 +250,4 @@ func (h *Handler) generateInstanceID(clusterName, serviceName string) string {
 	// Use timestamp + cluster + service to create a unique instance ID
 	timestamp := time.Now().Unix()
 	return fmt.Sprintf("%s-%s-%d", clusterName, serviceName, timestamp)
-}
-
-// successResponse wraps the wake response in Function URL format
-func (h *Handler) successResponse(data *WakeResponse) FunctionURLResponse {
-	body, _ := json.Marshal(data)
-	return FunctionURLResponse{
-		StatusCode: 200,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-		Body: string(body),
-	}
-}
-
-// errorResponse returns an error response in Function URL format
-func (h *Handler) errorResponse(statusCode int, message string) FunctionURLResponse {
-	body := map[string]string{"error": message}
-	bodyBytes, _ := json.Marshal(body)
-	return FunctionURLResponse{
-		StatusCode: statusCode,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-		Body: string(bodyBytes),
-	}
 }

@@ -744,42 +744,6 @@ Resources:
         }
 
 Outputs:
-  WakeLambdaArn:
-    Description: ARN of the Wake Lambda function
-    Value: !GetAtt WakeLambdaFunction.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-wake-lambda-arn'
-  
-  SleepLambdaArn:
-    Description: ARN of the Sleep Lambda function
-    Value: !GetAtt SleepLambdaFunction.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-sleep-lambda-arn'
-  
-  KillLambdaArn:
-    Description: ARN of the Kill Lambda function
-    Value: !GetAtt KillLambdaFunction.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-kill-lambda-arn'
-  
-  WakeLambdaProdAliasArn:
-    Description: ARN of the Wake Lambda PROD alias
-    Value: !Ref WakeLambdaProdAlias
-    Export:
-      Name: !Sub '${AWS::StackName}-wake-lambda-prod-alias-arn'
-  
-  SleepLambdaProdAliasArn:
-    Description: ARN of the Sleep Lambda PROD alias
-    Value: !Ref SleepLambdaProdAlias
-    Export:
-      Name: !Sub '${AWS::StackName}-sleep-lambda-prod-alias-arn'
-  
-  KillLambdaProdAliasArn:
-    Description: ARN of the Kill Lambda PROD alias
-    Value: !Ref KillLambdaProdAlias
-    Export:
-      Name: !Sub '${AWS::StackName}-kill-lambda-prod-alias-arn'
-  
   WakeAPIEndpoint:
     Description: Full URL to invoke Wake Lambda Function URL
     Value: !GetAtt WakeLambdaFunctionUrl.FunctionUrl
@@ -787,55 +751,17 @@ Outputs:
       Name: !Sub '${AWS::StackName}-wake-api-endpoint'
   
   KillAPIEndpoint:
-     Description: Full URL to invoke Kill Lambda Function URL
-     Value: !GetAtt KillLambdaFunctionUrl.FunctionUrl
-     Export:
-       Name: !Sub '${AWS::StackName}-kill-api-endpoint'
+    Description: Full URL to invoke Kill Lambda Function URL
+    Value: !GetAtt KillLambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-kill-api-endpoint'
 
   QueryAPIEndpoint:
-     Description: Full URL to invoke Query Lambda Function URL
-     Value: !GetAtt QueryLambdaFunctionUrl.FunctionUrl
-     Export:
-       Name: !Sub '${AWS::StackName}-query-api-endpoint'
-  
-  SleepScheduleRuleName:
-    Description: Name of the EventBridge rule for Sleep Lambda
-    Value: !Ref SleepScheduleRule
-  
-  KillScheduleRuleName:
-    Description: Name of the EventBridge rule for Kill Lambda
-    Value: !Ref KillScheduleRule
-
-  # Monitoring & Observability Outputs
-  AlarmNotificationTopicArn:
-    Description: ARN of SNS topic for alarm notifications
-    Value: !Ref AlarmNotificationTopic
+    Description: Full URL to invoke Query Lambda Function URL
+    Value: !GetAtt QueryLambdaFunctionUrl.FunctionUrl
     Export:
-      Name: !Sub '${AWS::StackName}-alarm-topic-arn'
-
-  DashboardURL:
-    Description: URL to CloudWatch Dashboard
-    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-dashboard'
-
-  WakeLambdaErrorAlarmName:
-    Description: Name of Wake Lambda error alarm
-    Value: !Ref WakeLambdaErrorAlarm
-
-  SleepLambdaErrorAlarmName:
-    Description: Name of Sleep Lambda error alarm
-    Value: !Ref SleepLambdaErrorAlarm
-
-  KillLambdaErrorAlarmName:
-    Description: Name of Kill Lambda error alarm
-    Value: !Ref KillLambdaErrorAlarm
-
-  # IAM Resources Outputs
-  AgentIAMRoleArn:
-    Description: ARN of the IAM role for agents
-    Value: !GetAtt AgentIAMRole.Arn
-    Export:
-      Name: !Sub '${AWS::StackName}-agent-role-arn'
-
+      Name: !Sub '${AWS::StackName}-query-api-endpoint'
+  
   AgentIAMUserAccessKey:
     Description: Access Key ID for agent user
     Value: !Ref AgentAccessKey

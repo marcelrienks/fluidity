@@ -18,18 +18,11 @@ type QueryRequest struct {
 	InstanceID string `json:"instance_id"`
 }
 
-// QueryResponse represents the output from the Query Lambda
+// QueryResponse represents the direct JSON response from Query Lambda
 type QueryResponse struct {
 	Status   string `json:"status"` // "negative", "pending", "ready"
 	PublicIP string `json:"public_ip,omitempty"`
 	Message  string `json:"message"`
-}
-
-// FunctionURLResponse wraps the response for Lambda Function URL format
-type FunctionURLResponse struct {
-	StatusCode int               `json:"statusCode"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
 }
 
 // ECSClient interface for testing
@@ -100,56 +93,31 @@ func NewHandlerWithClient(ecsClient ECSClient, ec2Client EC2Client, clusterName,
 	}
 }
 
-// HandleRequest processes the query request for Lambda Function URL
+// HandleRequest processes the query request
+// Receives direct JSON from Lambda Function URL or direct invocation
 func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interface{}, error) {
 	var request QueryRequest
 
-	// Parse the event - could be direct JSON or wrapped in Function URL event
-	switch e := event.(type) {
-	case map[string]interface{}:
-		// Try to unmarshal as request body first
-		if body, ok := e["body"]; ok {
-			// Lambda Function URL passes raw JSON body
-			if bodyStr, ok := body.(string); ok {
-				if err := json.Unmarshal([]byte(bodyStr), &request); err != nil {
-					h.logger.Error("Failed to unmarshal body from event", err)
-					return h.errorResponse(400, "Invalid JSON in request body"), nil
-				}
-			}
-		} else {
-			// Direct JSON invocation
-			data, err := json.Marshal(e)
-			if err != nil {
-				h.logger.Error("Failed to marshal event", err)
-				return h.errorResponse(400, "Invalid request format"), nil
-			}
-			if err := json.Unmarshal(data, &request); err != nil {
-				h.logger.Error("Failed to unmarshal event", err)
-				return h.errorResponse(400, "Invalid request format"), nil
-			}
-		}
-	case string:
-		// Raw JSON string
-		if err := json.Unmarshal([]byte(e), &request); err != nil {
-			h.logger.Error("Failed to unmarshal JSON string", err)
-			return h.errorResponse(400, "Invalid JSON in request body"), nil
-		}
-	case []byte:
-		// Raw bytes
-		if err := json.Unmarshal(e, &request); err != nil {
-			h.logger.Error("Failed to unmarshal bytes", err)
-			return h.errorResponse(400, "Invalid JSON in request body"), nil
-		}
+	// Parse event as JSON
+	data, err := json.Marshal(event)
+	if err != nil {
+		h.logger.Error("Failed to marshal event", err)
+		return map[string]string{"error": "Invalid request format"}, fmt.Errorf("invalid request: %w", err)
+	}
+
+	if err := json.Unmarshal(data, &request); err != nil {
+		h.logger.Error("Failed to unmarshal event", err)
+		return map[string]string{"error": "Invalid JSON in request body"}, fmt.Errorf("invalid json: %w", err)
 	}
 
 	response, err := h.handleQueryRequest(ctx, request)
 	if err != nil {
 		h.logger.Error("Query request failed", err)
-		return h.errorResponse(500, err.Error()), nil
+		return map[string]string{"error": err.Error()}, fmt.Errorf("query failed: %w", err)
 	}
 
-	// Return Function URL response format
-	return h.successResponse(response), nil
+	// Return direct JSON response
+	return response, nil
 }
 
 // handleQueryRequest contains the core query logic
@@ -356,29 +324,4 @@ func (h *Handler) getServicePublicIP(ctx context.Context) (string, error) {
 	})
 
 	return publicIP, nil
-}
-
-// successResponse wraps the query response in Function URL format
-func (h *Handler) successResponse(data *QueryResponse) FunctionURLResponse {
-	body, _ := json.Marshal(data)
-	return FunctionURLResponse{
-		StatusCode: 200,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-		Body: string(body),
-	}
-}
-
-// errorResponse returns an error response in Function URL format
-func (h *Handler) errorResponse(statusCode int, message string) FunctionURLResponse {
-	body := map[string]string{"error": message}
-	bodyBytes, _ := json.Marshal(body)
-	return FunctionURLResponse{
-		StatusCode: statusCode,
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-		Body: string(bodyBytes),
-	}
 }
