@@ -574,6 +574,7 @@ Resources:
             Action: lambda:InvokeFunctionUrl
             Resource:
               - !GetAtt WakeLambdaFunction.Arn
+              - !GetAtt QueryLambdaFunction.Arn
               - !GetAtt KillLambdaFunction.Arn
           - Effect: Allow
             Action:
