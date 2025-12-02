@@ -80,6 +80,22 @@ func NewClientWithTestMode(tlsConfig *tls.Config, serverAddr string, logLevel st
 	}
 }
 
+// UpdateServerAddress updates the server address for reconnection
+func (c *Client) UpdateServerAddress(serverAddr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Close existing connection if connected
+	if c.connected && c.conn != nil {
+		c.logger.Info("Closing existing connection due to server address change", "old_addr", c.serverAddr, "new_addr", serverAddr)
+		c.conn.Close()
+		c.connected = false
+	}
+
+	c.serverAddr = serverAddr
+	c.logger.Info("Server address updated", "new_addr", serverAddr)
+}
+
 // Connect establishes mTLS connection to server
 func (c *Client) Connect() error {
 	c.mu.Lock()

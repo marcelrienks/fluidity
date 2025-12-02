@@ -230,6 +230,158 @@ aws ecs describe-services \
   --query 'services[0].{Desired:desiredCount,Running:runningCount}'
 ```
 
+### Production Lambda Function URL Testing Scripts
+
+Two Python scripts are available for testing lambda functions in production environments using their Function URLs with proper SigV4 authentication:
+
+#### test_wake_lambda.py
+
+**Purpose:** Test the Wake Lambda Function URL in production with authenticated requests.
+
+**Prerequisites:**
+- AWS CLI configured with `fluidity` profile
+- Python 3 with `boto3` and `requests` packages
+- Valid Lambda Function URL for wake function
+
+**Usage:**
+```bash
+cd scripts
+python3 test_wake_lambda.py <wake_lambda_url>
+```
+
+**Example:**
+```bash
+python3 test_wake_lambda.py https://ldayerz6h2ovcc3yl7o3agl7wu0fhmfo.lambda-url.eu-west-1.on.aws/
+```
+
+**What it does:**
+1. Uses `fluidity` AWS profile credentials
+2. Creates SigV4 signed request to wake lambda URL
+3. Makes authenticated POST request with empty JSON payload
+4. Reports success/failure based on HTTP status code
+
+**Expected Output:**
+```
+Testing Wake Lambda Function URL...
+URL: https://ldayerz6h2ovcc3yl7o3agl7wu0fhmfo.lambda-url.eu-west-1.on.aws/
+Making signed request...
+Status Code: 200
+Response: {"action": "wake", "desiredCount": 1}
+✅ Wake function call successful!
+```
+
+**Debugging Use:**
+- Verify Function URL is accessible
+- Confirm SigV4 authentication is working
+- Check lambda execution permissions
+- Validate ECS service scaling response
+
+#### test_kill_lambda.py
+
+**Purpose:** Test the Kill Lambda Function URL in production with authenticated requests.
+
+**Prerequisites:**
+- AWS CLI configured with `fluidity` profile
+- Python 3 with `boto3` and `requests` packages
+- Valid Lambda Function URL for kill function
+
+**Usage:**
+```bash
+cd scripts
+python3 test_kill_lambda.py <kill_lambda_url>
+```
+
+**Example:**
+```bash
+python3 test_kill_lambda.py https://ulyget5npnb5sryf3hru3l3fkm0uunuo.lambda-url.eu-west-1.on.aws/
+```
+
+**What it does:**
+1. Uses `fluidity` AWS profile credentials
+2. Creates SigV4 signed request to kill lambda URL
+3. Makes authenticated POST request with empty JSON payload
+4. Reports success/failure based on HTTP status code
+
+**Expected Output:**
+```
+Testing Kill Lambda Function URL...
+URL: https://ulyget5npnb5sryf3hru3l3fkm0uunuo.lambda-url.eu-west-1.on.aws/
+Making signed request...
+Status Code: 200
+Response: {"action": "kill", "desiredCount": 0}
+✅ Kill function call successful!
+```
+
+**Debugging Use:**
+- Verify Function URL is accessible
+- Confirm SigV4 authentication is working
+- Check lambda execution permissions
+- Validate ECS service shutdown response
+
+#### Common Debugging Scenarios
+
+**Authentication Errors:**
+```bash
+# Check AWS credentials
+aws sts get-caller-identity --profile fluidity
+
+# Verify lambda permissions
+aws lambda get-policy --function-name fluidity-wake
+```
+
+**Function URL Errors:**
+```bash
+# Check function URL configuration
+aws lambda get-function-url-config --function-name fluidity-wake
+
+# Test with curl (unsigned - will fail auth)
+curl -X POST https://your-function-url.lambda-url.region.on.aws/
+```
+
+**ECS Permission Errors:**
+```bash
+# Check lambda execution role
+aws iam get-role --role-name fluidity-lambda-role
+
+# Verify ECS permissions
+aws iam list-attached-role-policies --role-name fluidity-lambda-role
+```
+
+**Network/Timeout Issues:**
+- Function URLs have 30-second timeout limit
+- Check CloudWatch logs for lambda execution details
+- Verify VPC/subnet configuration if lambda needs VPC access
+
+#### Script Configuration
+
+**AWS Profile:** Scripts use the `fluidity` profile. Configure with:
+```bash
+aws configure --profile fluidity
+```
+
+**Function URLs:** Scripts now accept URLs as command line arguments. Get the URLs from your deployed lambda functions:
+```bash
+# Get wake function URL
+aws lambda get-function-url-config --function-name fluidity-wake --query FunctionUrl --output text
+
+# Get kill function URL
+aws lambda get-function-url-config --function-name fluidity-kill --query FunctionUrl --output text
+```
+
+**Usage with Deployed URLs:**
+```bash
+# Test wake function
+python3 test_wake_lambda.py $(aws lambda get-function-url-config --function-name fluidity-wake --query FunctionUrl --output text)
+
+# Test kill function
+python3 test_kill_lambda.py $(aws lambda get-function-url-config --function-name fluidity-kill --query FunctionUrl --output text)
+```
+
+**Dependencies Installation:**
+```bash
+pip install boto3 requests botocore
+```
+
 ---
 
 ## Lifecycle Example

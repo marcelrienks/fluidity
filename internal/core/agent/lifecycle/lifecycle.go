@@ -273,33 +273,44 @@ func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body 
 			return fmt.Errorf("API returned error status %d: %s", resp.StatusCode, string(respBody))
 		}
 
-		// Parse Lambda Function URL response format
-		var functionURLResp struct {
-			StatusCode int               `json:"statusCode"`
-			Headers    map[string]string `json:"headers"`
-			Body       string            `json:"body"`
-		}
+		// Try to parse as direct JSON response first (for SigV4 authenticated calls)
+		var bodyData []byte
 
-		if err := json.Unmarshal(respBody, &functionURLResp); err != nil {
-			return fmt.Errorf("failed to parse Function URL response: %w", err)
+		// Check if response is direct JSON (SigV4) or Function URL format
+		var testResp struct {
+			StatusCode *int `json:"statusCode,omitempty"`
 		}
+		if err := json.Unmarshal(respBody, &testResp); err != nil || testResp.StatusCode == nil {
+			// Direct JSON response (SigV4 auth)
+			bodyData = respBody
+		} else {
+			// Function URL format response
+			var functionURLResp struct {
+				StatusCode int               `json:"statusCode"`
+				Headers    map[string]string `json:"headers"`
+				Body       string            `json:"body"`
+			}
 
-		// Extract the actual response from the body field
-		bodyData := []byte(functionURLResp.Body)
+			if err := json.Unmarshal(respBody, &functionURLResp); err != nil {
+				return fmt.Errorf("failed to parse Function URL response: %w", err)
+			}
+
+			// Extract the actual response from the body field
+			bodyData = []byte(functionURLResp.Body)
+		}
 
 		// Parse response based on expected type
-		if strings.Contains(url, "/wake") {
+		// Check endpoint by comparing with configured endpoints
+		if c.config.WakeEndpoint != "" && strings.HasPrefix(url, c.config.WakeEndpoint) {
 			response = &WakeResponse{}
-		} else if strings.Contains(url, "/kill") {
+		} else if c.config.KillEndpoint != "" && strings.HasPrefix(url, c.config.KillEndpoint) {
 			response = &KillResponse{}
+		} else if c.config.QueryEndpoint != "" && strings.HasPrefix(url, c.config.QueryEndpoint) {
+			response = &QueryResponse{}
 		}
 
 		if err := json.Unmarshal(bodyData, response); err != nil {
 			return fmt.Errorf("failed to parse response body: %w", err)
-		}
-
-		if err := json.Unmarshal(respBody, response); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
 		}
 
 		return nil

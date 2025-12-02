@@ -2,12 +2,19 @@
 import boto3
 import json
 import requests
+import sys
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
-# Lambda Function URL
-WAKE_URL = "https://ldayerz6h2ovcc3yl7o3agl7wu0fhmfo.lambda-url.eu-west-1.on.aws/"
+# Check for command line argument
+if len(sys.argv) != 2:
+    print("Usage: python3 test_wake_lambda.py <wake_lambda_url>")
+    print("Example: python3 test_wake_lambda.py https://your-function-url.lambda-url.region.on.aws/")
+    sys.exit(1)
+
+# Lambda Function URL from command line argument
+WAKE_URL = sys.argv[1]
 
 # Get credentials from fluidity profile
 session = boto3.Session(profile_name='fluidity')

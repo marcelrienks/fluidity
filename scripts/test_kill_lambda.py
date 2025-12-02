@@ -2,12 +2,19 @@
 import boto3
 import json
 import requests
+import sys
 from botocore.awsrequest import AWSRequest
 from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
 
-# Lambda Function URL
-KILL_URL = "https://ulyget5npnb5sryf3hru3l3fkm0uunuo.lambda-url.eu-west-1.on.aws/"
+# Check for command line argument
+if len(sys.argv) != 2:
+    print("Usage: python3 test_kill_lambda.py <kill_lambda_url>")
+    print("Example: python3 test_kill_lambda.py https://your-function-url.lambda-url.region.on.aws/")
+    sys.exit(1)
+
+# Lambda Function URL from command line argument
+KILL_URL = sys.argv[1]
 
 # Get credentials from fluidity profile
 session = boto3.Session(profile_name='fluidity')

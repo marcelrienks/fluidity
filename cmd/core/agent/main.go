@@ -305,11 +305,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Track consecutive connection failures to detect stale server IP
-		consecutiveFailures := 0
-		const maxConsecutiveFailures = 3            // After 3 failures, try IP rediscovery
-		const rediscoveryBackoff = 30 * time.Second // Wait before retrying rediscovery
-		rediscoveryInProgress := false              // Prevent concurrent rediscovery attempts
+		// Simple logic: if connection fails, immediately wake a new server for this agent
+		// Each agent gets its own dedicated server instance
 
 		for {
 			select {
@@ -320,56 +317,59 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 			// Connect to tunnel server
 			if !tunnelClient.IsConnected() {
-				logger.Info("Attempting to connect to tunnel server")
+				logger.Info("Attempting to connect to tunnel server", "server_ip", cfg.ServerIP)
 				if err := tunnelClient.Connect(); err != nil {
-					consecutiveFailures++
-					logger.Error("Failed to connect to tunnel server", err, "consecutive_failures", consecutiveFailures)
+					logger.Warn("Server not available, starting new server instance for this agent",
+						"server_ip", cfg.ServerIP, "error", err.Error())
 
-					// Check if we should attempt IP rediscovery
-					if lifecycleClient != nil && lifecycleConfig.Enabled && consecutiveFailures >= maxConsecutiveFailures && !rediscoveryInProgress {
-						logger.Warn("Multiple consecutive connection failures detected, attempting IP rediscovery",
-							"failures", consecutiveFailures, "max_failures", maxConsecutiveFailures, "current_ip", cfg.ServerIP)
+					// Immediately wake a new server for this agent (one server per agent model)
+					if lifecycleClient != nil && lifecycleConfig.Enabled {
+						wakeCtx, wakeCancel := context.WithTimeout(ctx, 2*time.Minute)
+						oldIP := cfg.ServerIP
 
-						rediscoveryInProgress = true
+						if wakeErr := lifecycleClient.WakeAndGetIP(wakeCtx, cfg); wakeErr != nil {
+							logger.Error("Failed to wake new server instance", wakeErr)
+							wakeCancel()
+							time.Sleep(10 * time.Second) // Longer backoff before retry
+							continue
+						}
+						wakeCancel()
 
-						// Attempt to rediscover server IP
-						rediscoverCtx, rediscoverCancel := context.WithTimeout(ctx, 2*time.Minute)
-						if rediscoverErr := lifecycleClient.WakeAndGetIP(rediscoverCtx, cfg); rediscoverErr != nil {
-							logger.Error("IP rediscovery failed, will retry connection to current IP",
-								rediscoverErr, "will_retry_in", rediscoveryBackoff)
-							// Reset failure counter but with longer backoff to avoid rapid rediscovery attempts
-							consecutiveFailures = maxConsecutiveFailures - 1
-							time.Sleep(rediscoveryBackoff)
-						} else {
-							logger.Info("IP rediscovery successful, new server IP discovered",
-								"old_ip", cfg.ServerIP, "new_ip", cfg.ServerIP)
-							consecutiveFailures = 0
+						logger.Info("Successfully started new server instance for this agent",
+							"old_ip", oldIP, "new_ip", cfg.ServerIP)
 
-							// Persist the newly discovered IP to config file
-							if configFile != "" {
-								if saveErr := config.SaveConfig(configFile, cfg); saveErr != nil {
-									logger.Warn("Failed to persist rediscovered server IP to config file", "error", saveErr.Error())
-								} else {
-									logger.Info("Persisted rediscovered server IP to config file", "file", configFile)
-								}
+						// Update tunnel client with new server address
+						newServerAddr := cfg.GetServerAddress()
+						tunnelClient.UpdateServerAddress(newServerAddr)
+						logger.Info("Updated tunnel client with new server address", "address", newServerAddr)
+
+						// Persist the new server IP to config file
+						if configFile != "" {
+							if saveErr := config.SaveConfig(configFile, cfg); saveErr != nil {
+								logger.Warn("Failed to persist new server IP to config file", "error", saveErr.Error())
+							} else {
+								logger.Info("Persisted new server IP to config file", "file", configFile)
 							}
 						}
-						rediscoverCancel()
-						rediscoveryInProgress = false
+
+						// Now try to connect to the new server
+						logger.Info("Attempting to connect to new server instance")
+						if connectErr := tunnelClient.Connect(); connectErr != nil {
+							logger.Error("Failed to connect to new server instance", connectErr)
+							time.Sleep(5 * time.Second)
+							continue
+						}
+
+						logger.Info("Successfully connected to new server instance", "server_ip", cfg.ServerIP)
+					} else {
+						logger.Error("Lifecycle management not enabled, cannot start new server", fmt.Errorf("lifecycle disabled"))
+						time.Sleep(30 * time.Second) // Long backoff when no lifecycle management
+						continue
 					}
-
-					time.Sleep(5 * time.Second)
-					continue
 				}
 
-				// Successful connection - reset failure counter
-				if consecutiveFailures > 0 {
-					logger.Info("Connection successful after failures, resetting failure counter",
-						"previous_failures", consecutiveFailures, "server_ip", cfg.ServerIP)
-					consecutiveFailures = 0
-				} else {
-					logger.Info("Connection successful", "server_ip", cfg.ServerIP)
-				}
+				// Successful connection
+				logger.Info("Successfully connected to tunnel server", "server_ip", cfg.ServerIP)
 			}
 
 			// Wait for disconnection or shutdown
