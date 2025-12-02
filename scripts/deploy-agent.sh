@@ -462,15 +462,16 @@ EOF
 setup_aws_credentials() {
     log_substep "Setting up AWS Credentials"
 
-    # Only setup credentials if IAM role ARN is provided (Phase 3)
-    if [[ -z "$AGENT_IAM_ROLE_ARN" ]]; then
-        log_info "IAM role not configured, skipping AWS credentials setup"
+    # Setup credentials if access keys are provided OR IAM role ARN is provided
+    if [[ -z "$AGENT_ACCESS_KEY_ID" && -z "$AGENT_SECRET_ACCESS_KEY" && -z "$AGENT_IAM_ROLE_ARN" ]]; then
+        log_info "IAM credentials not configured, skipping AWS credentials setup"
+        log_info "AWS SDK will use default credential chain (environment variables, IAM roles, or ~/.aws/credentials)"
         return 0
     fi
 
     # Check if we have the access keys
     if [[ -z "$AGENT_ACCESS_KEY_ID" || -z "$AGENT_SECRET_ACCESS_KEY" ]]; then
-        log_warn "IAM access keys not provided, AWS SDK will use default credential chain"
+        log_warn "IAM access keys not fully provided, AWS SDK will use default credential chain"
         log_warn "Ensure credentials are available via ~/.aws/credentials, environment variables, or IAM roles"
         return 0
     fi
@@ -491,7 +492,7 @@ setup_aws_credentials() {
         # Remove existing fluidity profile and recreate it
         sed -i.bak '/^\[fluidity\]$/,/^$/d' "$CREDENTIALS_FILE"
         # Remove any trailing empty lines that might have been left
-        sed -i '/^$/N;/^\n$/d' "$CREDENTIALS_FILE"
+        sed -i '' '/^$/N;/^\n$/d' "$CREDENTIALS_FILE"
     fi
 
     # Add new profile (or recreate existing one)
@@ -510,11 +511,28 @@ setup_aws_credentials() {
     # Set AWS_PROFILE environment variable for the agent
     if [[ "$OS_TYPE" == "windows" ]]; then
         # For Windows, we'll need to set this in the startup script or environment
-        log_info "Windows detected - AWS_PROFILE=fluidity will be used by the agent"
+        log_info "Windows detected - AWS_PROFILE=fluidity needs to be set in environment"
     else
-        # For Linux/macOS, we can set it in the shell profile or export it
+        # For Linux/macOS, add to shell profile so it's set automatically
+        SHELL_PROFILE=""
+        if [[ -f "$HOME/.zshrc" ]]; then
+            SHELL_PROFILE="$HOME/.zshrc"
+        elif [[ -f "$HOME/.bashrc" ]]; then
+            SHELL_PROFILE="$HOME/.bashrc"
+        elif [[ -f "$HOME/.bash_profile" ]]; then
+            SHELL_PROFILE="$HOME/.bash_profile"
+        fi
+        
+        if [[ -n "$SHELL_PROFILE" ]]; then
+            # Check if AWS_PROFILE is already set in the profile
+            if ! grep -q "export AWS_PROFILE=fluidity" "$SHELL_PROFILE" 2>/dev/null; then
+                echo "export AWS_PROFILE=fluidity" >> "$SHELL_PROFILE"
+                log_info "Added AWS_PROFILE=fluidity to $SHELL_PROFILE"
+            fi
+        fi
+        
         log_info "AWS credentials configured for profile: fluidity"
-        log_info "Agent will use AWS_PROFILE=fluidity environment variable"
+        log_info "Agent will automatically use AWS_PROFILE=fluidity"
     fi
 
     log_success "AWS credentials configured securely"
@@ -1189,14 +1207,23 @@ main() {
             log_info ""
             log_info "Next steps:"
             log_info "1. Review configuration: $CONFIG_FILE"
-            log_info "2. Run agent: fluidity (or $AGENT_EXE_PATH)"
+            if grep -q "^\[fluidity\]" ~/.aws/credentials 2>/dev/null; then
+                log_info "2. (Optional) Reload shell: source $SHELL"
+                log_info "3. Run agent: fluidity"
+            else
+                log_info "2. Run agent: fluidity (or $AGENT_EXE_PATH)"
+            fi
             if [[ "$IS_WSL" == "true" ]]; then
                 log_info ""
                 log_info "WSL Deployment Details:"
                 log_info "- Agent binary location: $AGENT_EXE_PATH (WSL filesystem)"
                 log_info "- Configuration location: $CONFIG_FILE (WSL home directory)"
                 log_info "- Access from Windows: \\\\wsl.localhost\\\\Ubuntu\\\\opt\\\\fluidity"
-                log_info "- Run agent in WSL: wsl /opt/fluidity/fluidity-agent"
+                if grep -q "^\[fluidity\]" ~/.aws/credentials 2>/dev/null; then
+                    log_info "- Run agent in WSL: wsl fluidity"
+                else
+                    log_info "- Run agent in WSL: wsl /opt/fluidity/fluidity-agent"
+                fi
             fi
             log_info ""
             ;;
