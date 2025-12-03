@@ -174,7 +174,11 @@ func TestWakeSuccess(t *testing.T) {
 
 		// Send response
 		response := WakeResponse{
-			StatusCode:         200,
+			Status:             "waking",
+			InstanceID:         "test-cluster-test-service-1234567890",
+			DesiredCount:       1,
+			RunningCount:       0,
+			PendingCount:       0,
 			Message:            "Service wake initiated",
 			EstimatedStartTime: "2025-10-29T17:00:00Z",
 		}
@@ -204,7 +208,7 @@ func TestWakeSuccess(t *testing.T) {
 
 	// Call Wake
 	ctx := context.Background()
-	err = client.Wake(ctx)
+	_, err = client.Wake(ctx)
 	if err != nil {
 		t.Errorf("Wake() error = %v", err)
 	}
@@ -223,7 +227,7 @@ func TestWakeDisabled(t *testing.T) {
 
 	// Call Wake - should not error when disabled
 	ctx := context.Background()
-	err = client.Wake(ctx)
+	_, err = client.Wake(ctx)
 	if err != nil {
 		t.Errorf("Wake() error = %v, expected nil when disabled", err)
 	}
@@ -256,7 +260,7 @@ func TestWakeAPIError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = client.Wake(ctx)
+	_, err = client.Wake(ctx)
 	if err == nil {
 		t.Error("Wake() expected error, got nil")
 	}
@@ -276,8 +280,8 @@ func TestKillSuccess(t *testing.T) {
 
 		// Send response
 		response := KillResponse{
-			StatusCode: 200,
-			Message:    "Service shutdown initiated",
+			Status:  "killed",
+			Message: "Service shutdown initiated",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)

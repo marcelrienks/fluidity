@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"fluidity/internal/shared/logger"
 
@@ -23,6 +24,13 @@ type QueryResponse struct {
 	Status   string `json:"status"` // "negative", "pending", "ready"
 	PublicIP string `json:"public_ip,omitempty"`
 	Message  string `json:"message"`
+}
+
+// FunctionURLResponse wraps the response for Lambda Function URL format
+type FunctionURLResponse struct {
+	StatusCode int               `json:"statusCode"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
 }
 
 // ECSClient interface for testing
@@ -55,12 +63,6 @@ func NewHandler(ctx context.Context, clusterName, serviceName string) (*Handler,
 		"serviceName": serviceName,
 	})
 
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		log.Error("Failed to load AWS SDK config", err)
-		return nil, fmt.Errorf("unable to load AWS SDK config: %w", err)
-	}
-
 	if clusterName == "" {
 		log.Error("Missing required parameter: clusterName", nil)
 		return nil, fmt.Errorf("clusterName is required")
@@ -69,6 +71,12 @@ func NewHandler(ctx context.Context, clusterName, serviceName string) (*Handler,
 	if serviceName == "" {
 		log.Error("Missing required parameter: serviceName", nil)
 		return nil, fmt.Errorf("serviceName is required")
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Error("Failed to load AWS SDK config", err)
+		return nil, fmt.Errorf("unable to load AWS SDK config: %w", err)
 	}
 
 	log.Info("Query Lambda handler initialized successfully")
@@ -82,7 +90,7 @@ func NewHandler(ctx context.Context, clusterName, serviceName string) (*Handler,
 	}, nil
 }
 
-// NewHandlerWithClient creates a new query handler with a provided ECS client (for testing)
+// NewHandlerWithClient creates a new query handler with provided clients (for testing)
 func NewHandlerWithClient(ecsClient ECSClient, ec2Client EC2Client, clusterName, serviceName string) *Handler {
 	return &Handler{
 		ecsClient:   ecsClient,
@@ -98,59 +106,115 @@ func NewHandlerWithClient(ecsClient ECSClient, ec2Client EC2Client, clusterName,
 func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interface{}, error) {
 	var request QueryRequest
 
-	// Parse event as JSON
-	data, err := json.Marshal(event)
-	if err != nil {
-		h.logger.Error("Failed to marshal event", err)
-		return map[string]string{"error": "Invalid request format"}, fmt.Errorf("invalid request: %w", err)
-	}
-
-	if err := json.Unmarshal(data, &request); err != nil {
-		h.logger.Error("Failed to unmarshal event", err)
-		return map[string]string{"error": "Invalid JSON in request body"}, fmt.Errorf("invalid json: %w", err)
+	// Parse the event - could be direct JSON or wrapped in Function URL event
+	switch e := event.(type) {
+	case map[string]interface{}:
+		// Try to unmarshal as request body first
+		if body, ok := e["body"]; ok {
+			// Lambda Function URL passes raw JSON body
+			if bodyStr, ok := body.(string); ok {
+				if err := json.Unmarshal([]byte(bodyStr), &request); err != nil {
+					h.logger.Error("Failed to unmarshal body from event", err)
+					return h.errorResponse(400, "Invalid JSON in request body"), nil
+				}
+			}
+		} else {
+			// Direct JSON invocation
+			data, err := json.Marshal(e)
+			if err != nil {
+				h.logger.Error("Failed to marshal event", err)
+				return h.errorResponse(400, "Invalid request format"), nil
+			}
+			if err := json.Unmarshal(data, &request); err != nil {
+				h.logger.Error("Failed to unmarshal event", err)
+				return h.errorResponse(400, "Invalid request format"), nil
+			}
+		}
+	case string:
+		// Raw JSON string
+		if err := json.Unmarshal([]byte(e), &request); err != nil {
+			h.logger.Error("Failed to unmarshal JSON string", err)
+			return h.errorResponse(400, "Invalid JSON in request body"), nil
+		}
+	case []byte:
+		// Raw bytes
+		if err := json.Unmarshal(e, &request); err != nil {
+			h.logger.Error("Failed to unmarshal bytes", err)
+			return h.errorResponse(400, "Invalid JSON in request body"), nil
+		}
 	}
 
 	response, err := h.handleQueryRequest(ctx, request)
 	if err != nil {
 		h.logger.Error("Query request failed", err)
-		return map[string]string{"error": err.Error()}, fmt.Errorf("query failed: %w", err)
+		return h.errorResponse(500, err.Error()), nil
 	}
 
-	// Return direct JSON response
-	return response, nil
+	// Return Function URL response format
+	return h.successResponse(response), nil
 }
 
 // handleQueryRequest contains the core query logic
 func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) (*QueryResponse, error) {
-	if request.InstanceID == "" {
-		h.logger.Error("Missing required parameter: instance_id", nil)
-		return nil, fmt.Errorf("instance_id is required")
-	}
-
 	h.logger.Info("Processing query request", map[string]interface{}{
 		"instanceID": request.InstanceID,
 	})
 
+	if request.InstanceID == "" {
+		return nil, fmt.Errorf("instance_id is required")
+	}
+
+	// Parse instance ID to get cluster and service names
+	// Format: {clusterName}-{serviceName}-{timestamp}
+	parts := strings.Split(request.InstanceID, "-")
+	if len(parts) < 3 {
+		h.logger.Error("Invalid instance ID format", fmt.Errorf("invalid instance ID format"), map[string]interface{}{
+			"instanceID": request.InstanceID,
+		})
+		return nil, fmt.Errorf("invalid instance ID format")
+	}
+
+	// Parse instance ID format: {cluster}-{service}-{timestamp}
+	// For now, assume the format is {cluster}-{service}-{timestamp}
+	timestamp := parts[len(parts)-1]
+	clusterName := strings.Join(parts[:len(parts)-2], "-")
+	serviceName := parts[len(parts)-2]
+
+	h.logger.Debug("Parsed instance ID", map[string]interface{}{
+		"instanceID":  request.InstanceID,
+		"clusterName": clusterName,
+		"serviceName": serviceName,
+		"timestamp":   timestamp,
+	})
+
+	// Allow request to override cluster/service names (for testing)
+	if h.clusterName != "" {
+		clusterName = h.clusterName
+	}
+	if h.serviceName != "" {
+		serviceName = h.serviceName
+	}
+
 	// Step 1: Describe the current service state
 	describeInput := &ecs.DescribeServicesInput{
-		Cluster:  aws.String(h.clusterName),
-		Services: []string{h.serviceName},
+		Cluster:  aws.String(clusterName),
+		Services: []string{serviceName},
 	}
 
 	h.logger.Debug("Describing ECS service state")
 	describeOutput, err := h.ecsClient.DescribeServices(ctx, describeInput)
 	if err != nil {
 		h.logger.Error("Failed to describe ECS service", err, map[string]interface{}{
-			"clusterName": h.clusterName,
-			"serviceName": h.serviceName,
+			"clusterName": clusterName,
+			"serviceName": serviceName,
 		})
 		return nil, fmt.Errorf("failed to describe ECS service: %w", err)
 	}
 
 	if len(describeOutput.Services) == 0 {
 		h.logger.Error("ECS service not found", nil, map[string]interface{}{
-			"clusterName": h.clusterName,
-			"serviceName": h.serviceName,
+			"clusterName": clusterName,
+			"serviceName": serviceName,
 		})
 		return &QueryResponse{
 			Status:  "negative",
@@ -169,58 +233,51 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 		"pendingCount": pendingCount,
 	})
 
-	// Step 2: Check if service is stopped (desiredCount=0)
+	// Step 2: Check service status
 	if desiredCount == 0 {
-		h.logger.Info("Service is stopped", map[string]interface{}{
-			"instanceID": request.InstanceID,
-		})
 		return &QueryResponse{
 			Status:  "negative",
 			Message: "Service is stopped (desiredCount=0)",
 		}, nil
 	}
 
-	// Step 3: Check if service is starting (desiredCount > 0 but no running tasks)
 	if runningCount == 0 && pendingCount > 0 {
-		h.logger.Info("Service is starting", map[string]interface{}{
-			"instanceID":   request.InstanceID,
-			"pendingCount": pendingCount,
-		})
 		return &QueryResponse{
 			Status:  "pending",
 			Message: fmt.Sprintf("Service is starting (pendingCount=%d)", pendingCount),
 		}, nil
 	}
 
-	// Step 4: Check if service is running but no tasks found
-	if runningCount == 0 && pendingCount == 0 {
-		h.logger.Info("Service has desiredCount > 0 but no running or pending tasks", map[string]interface{}{
-			"instanceID":   request.InstanceID,
-			"desiredCount": desiredCount,
-		})
+	if runningCount == 0 {
 		return &QueryResponse{
 			Status:  "negative",
-			Message: "Service has desiredCount > 0 but no running or pending tasks",
+			Message: "Service failed to start (runningCount=0)",
 		}, nil
 	}
 
-	// Step 5: Service is running, try to get the public IP
-	publicIP, err := h.getServicePublicIP(ctx)
+	// Step 3: Service is running, get the public IP
+	h.logger.Info("Service is running, retrieving public IP", map[string]interface{}{
+		"runningCount": runningCount,
+	})
+
+	publicIP, err := h.getPublicIPForService(ctx, clusterName, serviceName)
 	if err != nil {
-		h.logger.Warn("Failed to get public IP for running service", map[string]interface{}{
-			"instanceID": request.InstanceID,
-			"error":      err.Error(),
+		h.logger.Error("Failed to get public IP", err, map[string]interface{}{
+			"clusterName": clusterName,
+			"serviceName": serviceName,
 		})
-		// If we can't get the IP but service is running, consider it pending
+		return nil, fmt.Errorf("failed to get public IP: %w", err)
+	}
+
+	if publicIP == "" {
 		return &QueryResponse{
 			Status:  "pending",
-			Message: "Service is running but IP not yet available",
+			Message: "Service is running but public IP not yet available",
 		}, nil
 	}
 
-	h.logger.Info("Service is ready with public IP", map[string]interface{}{
-		"instanceID": request.InstanceID,
-		"publicIP":   publicIP,
+	h.logger.Info("Successfully retrieved public IP", map[string]interface{}{
+		"publicIP": publicIP,
 	})
 
 	return &QueryResponse{
@@ -230,19 +287,15 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 	}, nil
 }
 
-// getServicePublicIP retrieves the public IP address of the running ECS service
-func (h *Handler) getServicePublicIP(ctx context.Context) (string, error) {
+// getPublicIPForService retrieves the public IP address of the running ECS service
+func (h *Handler) getPublicIPForService(ctx context.Context, clusterName, serviceName string) (string, error) {
 	// List tasks for the service
 	listTasksInput := &ecs.ListTasksInput{
-		Cluster:     aws.String(h.clusterName),
-		ServiceName: aws.String(h.serviceName),
+		Cluster:     aws.String(clusterName),
+		ServiceName: aws.String(serviceName),
 	}
 
-	h.logger.Debug("Listing tasks for service", map[string]interface{}{
-		"clusterName": h.clusterName,
-		"serviceName": h.serviceName,
-	})
-
+	h.logger.Debug("Listing tasks for service")
 	listTasksOutput, err := h.ecsClient.ListTasks(ctx, listTasksInput)
 	if err != nil {
 		return "", fmt.Errorf("failed to list tasks: %w", err)
@@ -252,76 +305,92 @@ func (h *Handler) getServicePublicIP(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no tasks found for service")
 	}
 
-	// Describe the first task (should be the only one for our service)
+	// Describe the first task (assuming single task service)
 	describeTasksInput := &ecs.DescribeTasksInput{
-		Cluster: aws.String(h.clusterName),
+		Cluster: aws.String(clusterName),
 		Tasks:   []string{listTasksOutput.TaskArns[0]},
 	}
 
-	h.logger.Debug("Describing task", map[string]interface{}{
-		"taskArn": listTasksOutput.TaskArns[0],
-	})
-
+	h.logger.Debug("Describing task")
 	describeTasksOutput, err := h.ecsClient.DescribeTasks(ctx, describeTasksInput)
 	if err != nil {
-		return "", fmt.Errorf("failed to describe task: %w", err)
+		return "", fmt.Errorf("failed to describe tasks: %w", err)
 	}
 
 	if len(describeTasksOutput.Tasks) == 0 {
-		return "", fmt.Errorf("task not found")
+		return "", fmt.Errorf("no task details found")
 	}
 
 	task := describeTasksOutput.Tasks[0]
 
-	// Extract network interface ID from task attachments
-	var eniID string
+	// Find the Elastic Network Interface attachment
+	var networkInterfaceID string
 	for _, attachment := range task.Attachments {
 		if attachment.Type != nil && *attachment.Type == "ElasticNetworkInterface" {
 			for _, detail := range attachment.Details {
-				if detail.Name != nil && *detail.Name == "networkInterfaceId" && detail.Value != nil {
-					eniID = *detail.Value
+				if detail.Name != nil && *detail.Name == "networkInterfaceId" {
+					networkInterfaceID = *detail.Value
 					break
 				}
 			}
-		}
-		if eniID != "" {
-			break
+			if networkInterfaceID != "" {
+				break
+			}
 		}
 	}
 
-	if eniID == "" {
+	if networkInterfaceID == "" {
 		return "", fmt.Errorf("no network interface found for task")
 	}
 
 	h.logger.Debug("Found network interface", map[string]interface{}{
-		"eniId": eniID,
+		"networkInterfaceID": networkInterfaceID,
 	})
 
 	// Describe the network interface to get the public IP
-	describeENIInput := &ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []string{eniID},
+	describeNIInput := &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []string{networkInterfaceID},
 	}
 
-	describeENIOutput, err := h.ec2Client.DescribeNetworkInterfaces(ctx, describeENIInput)
+	h.logger.Debug("Describing network interface")
+	describeNIOutput, err := h.ec2Client.DescribeNetworkInterfaces(ctx, describeNIInput)
 	if err != nil {
 		return "", fmt.Errorf("failed to describe network interface: %w", err)
 	}
 
-	if len(describeENIOutput.NetworkInterfaces) == 0 {
+	if len(describeNIOutput.NetworkInterfaces) == 0 {
 		return "", fmt.Errorf("network interface not found")
 	}
 
-	eni := describeENIOutput.NetworkInterfaces[0]
-	if eni.Association == nil || eni.Association.PublicIp == nil {
-		return "", fmt.Errorf("no public IP associated with network interface")
+	networkInterface := describeNIOutput.NetworkInterfaces[0]
+	if networkInterface.Association == nil || networkInterface.Association.PublicIp == nil {
+		return "", nil // No public IP assigned yet
 	}
 
-	publicIP := *eni.Association.PublicIp
-	h.logger.Info("Retrieved public IP for service", map[string]interface{}{
-		"clusterName": h.clusterName,
-		"serviceName": h.serviceName,
-		"publicIP":    publicIP,
-	})
+	return *networkInterface.Association.PublicIp, nil
+}
 
-	return publicIP, nil
+// successResponse wraps the response in Function URL format
+func (h *Handler) successResponse(data *QueryResponse) FunctionURLResponse {
+	body, _ := json.Marshal(data)
+	return FunctionURLResponse{
+		StatusCode: 200,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body: string(body),
+	}
+}
+
+// errorResponse creates an error response in Function URL format
+func (h *Handler) errorResponse(statusCode int, message string) FunctionURLResponse {
+	errorResp := map[string]string{"error": message}
+	body, _ := json.Marshal(errorResp)
+	return FunctionURLResponse{
+		StatusCode: statusCode,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body: string(body),
+	}
 }

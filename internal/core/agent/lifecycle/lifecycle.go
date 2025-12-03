@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"fluidity/internal/core/agent"
 	"fluidity/internal/shared/circuitbreaker"
 	"fluidity/internal/shared/logging"
 	"fluidity/internal/shared/retry"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -115,10 +115,10 @@ func NewClient(config *Config, logger *logging.Logger) (*Client, error) {
 }
 
 // Wake calls the Wake Lambda to start the ECS service
-func (c *Client) Wake(ctx context.Context) error {
+func (c *Client) Wake(ctx context.Context) (*WakeResponse, error) {
 	if !c.config.Enabled {
 		c.logger.Info("Lifecycle management disabled, skipping wake")
-		return nil
+		return nil, nil
 	}
 
 	c.logger.Info("Waking ECS service",
@@ -150,7 +150,7 @@ func (c *Client) Wake(ctx context.Context) error {
 
 	if err != nil {
 		c.logger.Error("Failed to wake ECS service", err)
-		return fmt.Errorf("wake failed: %w", err)
+		return nil, fmt.Errorf("wake failed: %w", err)
 	}
 
 	c.logger.Info("ECS service wake successful",
@@ -158,7 +158,7 @@ func (c *Client) Wake(ctx context.Context) error {
 		"estimatedStartTime", response.EstimatedStartTime,
 	)
 
-	return nil
+	return response, nil
 }
 
 // callWakeAPI makes the HTTP request to Wake Lambda
@@ -223,6 +223,16 @@ func (c *Client) callKillAPI(ctx context.Context, reqBody KillRequest) (*KillRes
 	return response, nil
 }
 
+// callQueryAPI makes the HTTP request to Query Lambda
+func (c *Client) callQueryAPI(ctx context.Context, instanceID string) (*QueryResponse, error) {
+	reqBody := QueryRequest{InstanceID: instanceID}
+	response := &QueryResponse{}
+	if err := c.callAPIWithSigV4(ctx, "POST", c.config.QueryEndpoint, reqBody, response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 // callAPIWithSigV4 makes a SigV4 signed HTTP request to Lambda Function URL
 // Returns direct JSON response (not wrapped)
 func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body interface{}, responseType interface{}) error {
@@ -233,6 +243,7 @@ func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body 
 	}
 
 	// Execute with circuit breaker
+	var response interface{}
 	err = c.circuitBreaker.Execute(func() error {
 		// Create HTTP request
 		req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(bodyBytes))
@@ -319,137 +330,72 @@ func (c *Client) callAPIWithSigV4(ctx context.Context, method, url string, body 
 		return nil
 	})
 
-	return err
-}
-
-// ConfigUpdater defines an interface for updating server IP
-type ConfigUpdater interface {
-	SetServerIP(ip string)
-}
-
-// WakeAndGetIP calls the Wake Lambda to start service, then polls Query Lambda for IP
-func (c *Client) WakeAndGetIP(ctx context.Context, configUpdater ConfigUpdater) error {
-	if !c.config.Enabled {
-		return fmt.Errorf("lifecycle management disabled")
-	}
-
-	c.logger.Info("Starting service wake and IP discovery process",
-		"wakeEndpoint", c.config.WakeEndpoint,
-		"queryEndpoint", c.config.QueryEndpoint,
-		"cluster", c.config.ClusterName,
-		"service", c.config.ServiceName,
-	)
-
-	// Step 1: Call Wake Lambda to start the service and get instance ID
-	instanceID, err := c.callWakeAndGetInstanceID(ctx)
 	if err != nil {
-		c.logger.Error("Failed to wake service and get instance ID", err)
-		return fmt.Errorf("wake failed: %w", err)
+		return err
 	}
 
-	c.logger.Info("Service wake initiated", "instanceID", instanceID)
-
-	// Step 2: Poll Query Lambda until IP is available
-	publicIP, err := c.pollForIP(ctx, instanceID)
-	if err != nil {
-		c.logger.Error("Failed to get server IP from query polling", err)
-		return fmt.Errorf("IP discovery failed: %w", err)
+	// Copy the response to the output parameter
+	switch r := response.(type) {
+	case *WakeResponse:
+		*responseType.(*WakeResponse) = *r
+	case *KillResponse:
+		*responseType.(*KillResponse) = *r
+	case *QueryResponse:
+		*responseType.(*QueryResponse) = *r
 	}
-
-	// Step 3: Update agent config with discovered IP
-	configUpdater.SetServerIP(publicIP)
-	c.logger.Info("Server IP discovered and config updated", "server_ip", publicIP, "instanceID", instanceID)
 
 	return nil
 }
 
-// callWakeAndGetInstanceID calls Wake Lambda and returns the instance ID
-func (c *Client) callWakeAndGetInstanceID(ctx context.Context) (string, error) {
-	// Prepare request body
-	reqBody := WakeRequest{
-		ClusterName: c.config.ClusterName,
-		ServiceName: c.config.ServiceName,
+// WakeAndGetIP wakes the server and polls for its IP address until available
+func (c *Client) WakeAndGetIP(ctx context.Context, agentConfig interface{}) error {
+	if !c.config.Enabled {
+		return fmt.Errorf("lifecycle management disabled")
 	}
 
-	// Call Wake API with retry
-	var response *WakeResponse
-	retryConfig := retry.Config{
-		MaxAttempts:  c.config.MaxRetries,
-		InitialDelay: 500 * time.Millisecond,
-		MaxDelay:     5 * time.Second,
-		Multiplier:   2.0,
-	}
-
-	err := retry.Execute(ctx, retryConfig, retry.AlwaysRetry(), func() error {
-		var err error
-		response, err = c.callWakeAPI(ctx, reqBody)
-		return err
-	})
-
+	// First, wake the server
+	c.logger.Info("Waking ECS service")
+	wakeResp, err := c.Wake(ctx)
 	if err != nil {
-		return "", fmt.Errorf("wake API call failed: %w", err)
+		return fmt.Errorf("wake failed: %w", err)
 	}
 
-	if response.InstanceID == "" {
-		return "", fmt.Errorf("wake response did not contain instance ID")
-	}
+	// Wait a bit for the service to start
+	time.Sleep(5 * time.Second)
 
-	return response.InstanceID, nil
-}
-
-// pollForIP polls the Query Lambda with instance ID until IP is available
-func (c *Client) pollForIP(ctx context.Context, instanceID string) (string, error) {
-	c.logger.Info("Starting IP polling", "instanceID", instanceID, "interval", c.config.ConnectionRetryInterval)
-
-	ticker := time.NewTicker(c.config.ConnectionRetryInterval)
-	defer ticker.Stop()
-
-	for {
+	// Poll for the server IP
+	maxAttempts := 60 // 5 minutes with 5 second intervals
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("IP polling cancelled: %w", ctx.Err())
-		case <-ticker.C:
-			queryResp, err := c.callQueryAPI(ctx, instanceID)
-			if err != nil {
-				c.logger.Warn("Query API call failed, continuing to poll", "error", err.Error())
-				continue
-			}
-
-			switch queryResp.Status {
-			case "ready":
-				if queryResp.PublicIP == "" {
-					c.logger.Warn("Query returned 'ready' status but no IP, continuing to poll")
-					continue
-				}
-				c.logger.Info("Server IP discovered", "instanceID", instanceID, "ip", queryResp.PublicIP)
-				return queryResp.PublicIP, nil
-
-			case "pending":
-				c.logger.Debug("Server still starting", "instanceID", instanceID, "message", queryResp.Message)
-
-			case "negative":
-				return "", fmt.Errorf("server startup failed: %s", queryResp.Message)
-
-			default:
-				c.logger.Warn("Unknown query status, continuing to poll", "status", queryResp.Status)
-			}
+			return ctx.Err()
+		default:
 		}
-	}
-}
 
-// callQueryAPI calls the Query Lambda to check service status
-func (c *Client) callQueryAPI(ctx context.Context, instanceID string) (*QueryResponse, error) {
-	// Prepare request body
-	reqBody := QueryRequest{
-		InstanceID: instanceID,
+		c.logger.Info("Polling for server IP", "attempt", attempt, "max_attempts", maxAttempts)
+
+		// Query for the server IP
+		queryResp, err := c.callQueryAPI(ctx, wakeResp.InstanceID)
+		if err != nil {
+			c.logger.Warn("Query failed, will retry", "error", err.Error(), "attempt", attempt)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		if queryResp.PublicIP != "" {
+			// Update the agent config with the discovered IP
+			if cfg, ok := agentConfig.(*agent.Config); ok {
+				cfg.ServerIP = queryResp.PublicIP
+				c.logger.Info("Server IP discovered and config updated", "server_ip", queryResp.PublicIP)
+			}
+			return nil
+		}
+
+		c.logger.Info("Server not ready yet, waiting...", "attempt", attempt)
+		time.Sleep(5 * time.Second)
 	}
 
-	// Call Query API
-	response := &QueryResponse{}
-	if err := c.callAPIWithSigV4(ctx, "POST", c.config.QueryEndpoint, reqBody, response); err != nil {
-		return nil, err
-	}
-	return response, nil
+	return fmt.Errorf("timeout waiting for server IP after %d attempts", maxAttempts)
 }
 
 // WaitForConnection waits for the agent to establish server connection after wake

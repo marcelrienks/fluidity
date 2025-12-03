@@ -112,15 +112,15 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	if cfg.ServerIP == "" {
 		logger.Info("Server IP not configured, attempting auto-discovery via wake endpoint")
 
-		// Load lifecycle configuration from environment and agent config
+		// Load lifecycle configuration from agent config file
 		lifecycleConfig := &lifecycle.Config{
-			WakeEndpoint:            getConfigValue(os.Getenv("WAKE_ENDPOINT"), cfg.WakeEndpoint),
-			QueryEndpoint:           getConfigValue(os.Getenv("QUERY_ENDPOINT"), cfg.QueryEndpoint),
-			KillEndpoint:            getConfigValue(os.Getenv("KILL_ENDPOINT"), cfg.KillEndpoint),
-			IAMRoleARN:              getConfigValue(os.Getenv("IAM_ROLE_ARN"), cfg.IAMRoleARN),
-			AWSRegion:               getConfigValue(os.Getenv("AWS_REGION"), cfg.AWSRegion),
-			ClusterName:             os.Getenv("ECS_CLUSTER_NAME"),
-			ServiceName:             os.Getenv("ECS_SERVICE_NAME"),
+			WakeEndpoint:            cfg.WakeEndpoint,
+			QueryEndpoint:           cfg.QueryEndpoint,
+			KillEndpoint:            cfg.KillEndpoint,
+			IAMRoleARN:              cfg.IAMRoleARN,
+			AWSRegion:               cfg.AWSRegion,
+			ClusterName:             "", // Not used in current implementation
+			ServiceName:             "", // Not used in current implementation
 			ConnectionTimeout:       90 * time.Second,
 			ConnectionRetryInterval: 5 * time.Second,
 			HTTPTimeout:             30 * time.Second,
@@ -145,7 +145,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		}
 
 		// Call wake to get server IP
-		wakeCtx, wakeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		wakeCtx, wakeCancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer wakeCancel()
 
 		if err := lifecycleClient.WakeAndGetIP(wakeCtx, cfg); err != nil {
@@ -227,15 +227,15 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		"key_file", cfg.KeyFile,
 		"ca_file", cfg.CACertFile)
 
-	// Load lifecycle configuration from environment and agent config
+	// Load lifecycle configuration from agent config file
 	lifecycleConfig := &lifecycle.Config{
-		WakeEndpoint:            getConfigValue(os.Getenv("WAKE_ENDPOINT"), cfg.WakeEndpoint),
-		QueryEndpoint:           getConfigValue(os.Getenv("QUERY_ENDPOINT"), cfg.QueryEndpoint),
-		KillEndpoint:            getConfigValue(os.Getenv("KILL_ENDPOINT"), cfg.KillEndpoint),
-		IAMRoleARN:              getConfigValue(os.Getenv("IAM_ROLE_ARN"), cfg.IAMRoleARN),
-		AWSRegion:               getConfigValue(os.Getenv("AWS_REGION"), cfg.AWSRegion),
-		ClusterName:             os.Getenv("ECS_CLUSTER_NAME"),
-		ServiceName:             os.Getenv("ECS_SERVICE_NAME"),
+		WakeEndpoint:            cfg.WakeEndpoint,
+		QueryEndpoint:           cfg.QueryEndpoint,
+		KillEndpoint:            cfg.KillEndpoint,
+		IAMRoleARN:              cfg.IAMRoleARN,
+		AWSRegion:               cfg.AWSRegion,
+		ClusterName:             "", // Not used in current implementation
+		ServiceName:             "", // Not used in current implementation
 		ConnectionTimeout:       90 * time.Second,
 		ConnectionRetryInterval: 5 * time.Second,
 		HTTPTimeout:             30 * time.Second,

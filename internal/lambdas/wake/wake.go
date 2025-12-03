@@ -30,6 +30,13 @@ type WakeResponse struct {
 	Message            string `json:"message"`
 }
 
+// FunctionURLResponse wraps the response for Lambda Function URL format
+type FunctionURLResponse struct {
+	StatusCode int               `json:"statusCode"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+}
+
 // ECSClient interface for testing
 type ECSClient interface {
 	DescribeServices(ctx context.Context, params *ecs.DescribeServicesInput, optFns ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error)
@@ -94,26 +101,52 @@ func NewHandlerWithClient(ecsClient ECSClient, clusterName, serviceName string) 
 func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interface{}, error) {
 	var request WakeRequest
 
-	// Parse event as JSON
-	data, err := json.Marshal(event)
-	if err != nil {
-		h.logger.Error("Failed to marshal event", err)
-		return map[string]string{"error": "Invalid request format"}, fmt.Errorf("invalid request: %w", err)
-	}
-
-	if err := json.Unmarshal(data, &request); err != nil {
-		h.logger.Error("Failed to unmarshal event", err)
-		return map[string]string{"error": "Invalid JSON in request body"}, fmt.Errorf("invalid json: %w", err)
+	// Parse the event - could be direct JSON or wrapped in Function URL event
+	switch e := event.(type) {
+	case map[string]interface{}:
+		// Try to unmarshal as request body first
+		if body, ok := e["body"]; ok {
+			// Lambda Function URL passes raw JSON body
+			if bodyStr, ok := body.(string); ok {
+				if err := json.Unmarshal([]byte(bodyStr), &request); err != nil {
+					h.logger.Error("Failed to unmarshal body from event", err)
+					return h.errorResponse(400, "Invalid JSON in request body"), nil
+				}
+			}
+		} else {
+			// Direct JSON invocation
+			data, err := json.Marshal(e)
+			if err != nil {
+				h.logger.Error("Failed to marshal event", err)
+				return h.errorResponse(400, "Invalid request format"), nil
+			}
+			if err := json.Unmarshal(data, &request); err != nil {
+				h.logger.Error("Failed to unmarshal event", err)
+				return h.errorResponse(400, "Invalid request format"), nil
+			}
+		}
+	case string:
+		// Raw JSON string
+		if err := json.Unmarshal([]byte(e), &request); err != nil {
+			h.logger.Error("Failed to unmarshal JSON string", err)
+			return h.errorResponse(400, "Invalid JSON in request body"), nil
+		}
+	case []byte:
+		// Raw bytes
+		if err := json.Unmarshal(e, &request); err != nil {
+			h.logger.Error("Failed to unmarshal bytes", err)
+			return h.errorResponse(400, "Invalid JSON in request body"), nil
+		}
 	}
 
 	response, err := h.handleWakeRequest(ctx, request)
 	if err != nil {
 		h.logger.Error("Wake request failed", err)
-		return map[string]string{"error": err.Error()}, fmt.Errorf("wake failed: %w", err)
+		return h.errorResponse(500, err.Error()), nil
 	}
 
-	// Return direct JSON response
-	return response, nil
+	// Return Function URL response format
+	return h.successResponse(response), nil
 }
 
 // handleWakeRequest contains the core wake logic
@@ -169,49 +202,22 @@ func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*
 		"pendingCount": pendingCount,
 	})
 
-	// Step 2: Check if service is already running or starting
-	if desiredCount > 0 {
-		status := "already_running"
-		message := fmt.Sprintf("Service already has desiredCount=%d", desiredCount)
+	// Step 2: Always increment the desired count to allow multiple instances
+	newDesiredCount := desiredCount + 1
 
-		if runningCount == 0 && pendingCount > 0 {
-			status = "starting"
-			message = fmt.Sprintf("Service is starting (desiredCount=%d, pendingCount=%d)", desiredCount, pendingCount)
-			h.logger.Info("Service is already starting", map[string]interface{}{
-				"desiredCount": desiredCount,
-				"pendingCount": pendingCount,
-			})
-		} else if runningCount > 0 {
-			message = fmt.Sprintf("Service is running (desiredCount=%d, runningCount=%d)", desiredCount, runningCount)
-			h.logger.Info("Service is already running", map[string]interface{}{
-				"desiredCount": desiredCount,
-				"runningCount": runningCount,
-			})
-		}
-
-		// Generate instance ID for this service instance
-		instanceID := h.generateInstanceID(clusterName, serviceName)
-
-		return &WakeResponse{
-			Status:       status,
-			InstanceID:   instanceID,
-			DesiredCount: desiredCount,
-			RunningCount: runningCount,
-			PendingCount: pendingCount,
-			Message:      message,
-		}, nil
-	}
-
-	// Step 3: Service is stopped (desiredCount=0), start it
-	h.logger.Info("Service is stopped, initiating wake", map[string]interface{}{
-		"clusterName": clusterName,
-		"serviceName": serviceName,
+	h.logger.Info("Incrementing service desired count", map[string]interface{}{
+		"clusterName":    clusterName,
+		"serviceName":    serviceName,
+		"currentDesired": desiredCount,
+		"newDesired":     newDesiredCount,
+		"runningCount":   runningCount,
+		"pendingCount":   pendingCount,
 	})
 
 	updateInput := &ecs.UpdateServiceInput{
 		Cluster:      aws.String(clusterName),
 		Service:      aws.String(serviceName),
-		DesiredCount: aws.Int32(1),
+		DesiredCount: aws.Int32(newDesiredCount),
 	}
 
 	_, err = h.ecsClient.UpdateService(ctx, updateInput)
@@ -226,22 +232,43 @@ func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*
 	// Generate instance ID for this service instance
 	instanceID := h.generateInstanceID(clusterName, serviceName)
 
-	// Estimate start time based on Fargate cold start (typically 60-90 seconds)
-	estimatedStartTime := time.Now().Add(75 * time.Second).Format(time.RFC3339)
+	// Determine status based on current state
+	status := "waking"
+	message := fmt.Sprintf("Service desired count incremented to %d", newDesiredCount)
+	estimatedStartTime := ""
 
-	h.logger.Info("Service wake initiated successfully", map[string]interface{}{
-		"instanceID":         instanceID,
-		"estimatedStartTime": estimatedStartTime,
-	})
+	if runningCount > 0 {
+		status = "scaling"
+		message = fmt.Sprintf("Service scaling up (desiredCount=%d, runningCount=%d)", newDesiredCount, runningCount)
+		h.logger.Info("Service is scaling up", map[string]interface{}{
+			"desiredCount": newDesiredCount,
+			"runningCount": runningCount,
+		})
+	} else if pendingCount > 0 {
+		status = "starting"
+		message = fmt.Sprintf("Service is starting additional instances (desiredCount=%d, pendingCount=%d)", newDesiredCount, pendingCount)
+		h.logger.Info("Service is starting additional instances", map[string]interface{}{
+			"desiredCount": newDesiredCount,
+			"pendingCount": pendingCount,
+		})
+	} else {
+		// Estimate start time based on Fargate cold start (typically 60-90 seconds)
+		estimatedStartTime = time.Now().Add(75 * time.Second).Format(time.RFC3339)
+		message = "Service wake initiated. ECS task starting (estimated 60-90 seconds)"
+		h.logger.Info("Service wake initiated successfully", map[string]interface{}{
+			"instanceID":         instanceID,
+			"estimatedStartTime": estimatedStartTime,
+		})
+	}
 
 	return &WakeResponse{
-		Status:             "waking",
+		Status:             status,
 		InstanceID:         instanceID,
-		DesiredCount:       1,
-		RunningCount:       0,
-		PendingCount:       0,
+		DesiredCount:       newDesiredCount,
+		RunningCount:       runningCount,
+		PendingCount:       pendingCount,
 		EstimatedStartTime: estimatedStartTime,
-		Message:            "Service wake initiated. ECS task starting (estimated 60-90 seconds)",
+		Message:            message,
 	}, nil
 }
 
@@ -250,4 +277,29 @@ func (h *Handler) generateInstanceID(clusterName, serviceName string) string {
 	// Use timestamp + cluster + service to create a unique instance ID
 	timestamp := time.Now().Unix()
 	return fmt.Sprintf("%s-%s-%d", clusterName, serviceName, timestamp)
+}
+
+// successResponse wraps the response in Function URL format
+func (h *Handler) successResponse(data *WakeResponse) FunctionURLResponse {
+	body, _ := json.Marshal(data)
+	return FunctionURLResponse{
+		StatusCode: 200,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body: string(body),
+	}
+}
+
+// errorResponse creates an error response in Function URL format
+func (h *Handler) errorResponse(statusCode int, message string) FunctionURLResponse {
+	errorResp := map[string]string{"error": message}
+	body, _ := json.Marshal(errorResp)
+	return FunctionURLResponse{
+		StatusCode: statusCode,
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Body: string(body),
+	}
 }

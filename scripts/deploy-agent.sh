@@ -492,7 +492,7 @@ setup_aws_credentials() {
         # Remove existing fluidity profile and recreate it
         sed -i.bak '/^\[fluidity\]$/,/^$/d' "$CREDENTIALS_FILE"
         # Remove any trailing empty lines that might have been left
-        sed -i '' '/^$/N;/^\n$/d' "$CREDENTIALS_FILE"
+        sed -i '/^$/d' "$CREDENTIALS_FILE"
     fi
 
     # Add new profile (or recreate existing one)
