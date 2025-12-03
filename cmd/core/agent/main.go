@@ -263,7 +263,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	if lifecycleClient != nil && lifecycleConfig.Enabled {
 		logger.Info("Lifecycle management enabled, waking ECS service")
 		wakeCtx, wakeCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := lifecycleClient.Wake(wakeCtx); err != nil {
+		_, err := lifecycleClient.Wake(wakeCtx)
+		if err != nil {
 			// Log warning but continue - fallback to connecting without wake
 			logger.Warn("Failed to wake ECS service, continuing anyway", "error", err.Error())
 		}
