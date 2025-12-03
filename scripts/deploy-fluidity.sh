@@ -538,8 +538,8 @@ deploy_agent() {
         rm -f "$temp_agent_output"
         
         # Extract agent installation details from output
-        AGENT_INSTALL_PATH=$(echo "$agent_output" | grep -oP 'Agent binary installed: \K[^\/\\]*(?:\/|\\).*' | head -1)
-        AGENT_CONFIG_PATH=$(echo "$agent_output" | grep -oP 'Configuration file (?:created|written): \K.*' | head -1)
+        AGENT_INSTALL_PATH=$(echo "$agent_output" | awk -F': ' '/Agent binary installed:/{print $2; exit}' | sed -E 's/\r$//')
+        AGENT_CONFIG_PATH=$(echo "$agent_output" | awk -F': ' '/Configuration file (created|written):/{print $2; exit}' | sed -E 's/\r$//')
         
         # Fallback to using INSTALL_PATH if extraction fails
         if [[ -z "$AGENT_INSTALL_PATH" ]]; then

@@ -259,9 +259,9 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		logger.Warn("Failed to create lifecycle client", "error", err.Error())
 	}
 
-	// If lifecycle is enabled, call Wake API before connecting
-	if lifecycleClient != nil && lifecycleConfig.Enabled {
-		logger.Info("Lifecycle management enabled, waking ECS service")
+	// If lifecycle is enabled and no server IP is configured, call Wake API before connecting
+	if lifecycleClient != nil && lifecycleConfig.Enabled && cfg.ServerIP == "" {
+		logger.Info("Lifecycle management enabled and no server IP configured, waking ECS service")
 		wakeCtx, wakeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		_, err := lifecycleClient.Wake(wakeCtx)
 		if err != nil {
@@ -292,18 +292,9 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 	// Connection management goroutine
 	go func() {
-		// If lifecycle is enabled, wait for server connection after wake
+		// If lifecycle is enabled, log wake completion and proceed immediately to connect
 		if lifecycleClient != nil && lifecycleConfig.Enabled {
-			logger.Info("Waiting for server connection after wake")
-			waitCtx, waitCancel := context.WithTimeout(ctx, lifecycleConfig.ConnectionTimeout)
-			err := lifecycleClient.WaitForConnection(waitCtx, func() bool {
-				return tunnelClient.IsConnected()
-			})
-			waitCancel()
-
-			if err != nil {
-				logger.Warn("Server connection wait timeout, will continue with normal connection retry", "error", err.Error())
-			}
+			logger.Info("Lifecycle wake completed; proceeding to establish tunnel connection")
 		}
 
 		// Simple logic: if connection fails, immediately wake a new server for this agent
@@ -320,53 +311,12 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			if !tunnelClient.IsConnected() {
 				logger.Info("Attempting to connect to tunnel server", "server_ip", cfg.ServerIP)
 				if err := tunnelClient.Connect(); err != nil {
-					logger.Warn("Server not available, starting new server instance for this agent",
-						"server_ip", cfg.ServerIP, "error", err.Error())
-
-					// Immediately wake a new server for this agent (one server per agent model)
-					if lifecycleClient != nil && lifecycleConfig.Enabled {
-						wakeCtx, wakeCancel := context.WithTimeout(ctx, 2*time.Minute)
-						oldIP := cfg.ServerIP
-
-						if wakeErr := lifecycleClient.WakeAndGetIP(wakeCtx, cfg); wakeErr != nil {
-							logger.Error("Failed to wake new server instance", wakeErr)
-							wakeCancel()
-							time.Sleep(10 * time.Second) // Longer backoff before retry
-							continue
-						}
-						wakeCancel()
-
-						logger.Info("Successfully started new server instance for this agent",
-							"old_ip", oldIP, "new_ip", cfg.ServerIP)
-
-						// Update tunnel client with new server address
-						newServerAddr := cfg.GetServerAddress()
-						tunnelClient.UpdateServerAddress(newServerAddr)
-						logger.Info("Updated tunnel client with new server address", "address", newServerAddr)
-
-						// Persist the new server IP to config file
-						if configFile != "" {
-							if saveErr := config.SaveConfig(configFile, cfg); saveErr != nil {
-								logger.Warn("Failed to persist new server IP to config file", "error", saveErr.Error())
-							} else {
-								logger.Info("Persisted new server IP to config file", "file", configFile)
-							}
-						}
-
-						// Now try to connect to the new server
-						logger.Info("Attempting to connect to new server instance")
-						if connectErr := tunnelClient.Connect(); connectErr != nil {
-							logger.Error("Failed to connect to new server instance", connectErr)
-							time.Sleep(5 * time.Second)
-							continue
-						}
-
-						logger.Info("Successfully connected to new server instance", "server_ip", cfg.ServerIP)
-					} else {
-						logger.Error("Lifecycle management not enabled, cannot start new server", fmt.Errorf("lifecycle disabled"))
-						time.Sleep(30 * time.Second) // Long backoff when no lifecycle management
-						continue
-					}
+					// Connection attempt failed. Summarize and stop to avoid repeat wake loops.
+					logger.Error("Failed to connect to tunnel server", err)
+					logger.Info("Summary: step=connect, status=failed, server_ip", cfg.ServerIP)
+					// Stop the agent
+					cancel()
+					return
 				}
 
 				// Successful connection

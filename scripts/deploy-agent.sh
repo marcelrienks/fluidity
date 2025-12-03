@@ -443,6 +443,7 @@ kill_endpoint: "$KILL_ENDPOINT"
 # from ~/.aws/credentials, environment variables, or IAM roles
 iam_role_arn: "$AGENT_IAM_ROLE_ARN"
 aws_region: "$REGION"
+aws_profile: "fluidity"
 
 # TLS certificates
 cert_file: "$CERT_PATH"
@@ -490,9 +491,10 @@ setup_aws_credentials() {
     if grep -q "\[fluidity\]" "$CREDENTIALS_FILE" 2>/dev/null; then
         log_info "Fluidity profile already exists in AWS credentials"
         # Remove existing fluidity profile and recreate it
-        sed -i.bak '/^\[fluidity\]$/,/^$/d' "$CREDENTIALS_FILE"
-        # Remove any trailing empty lines that might have been left
-        sed -i '/^$/d' "$CREDENTIALS_FILE"
+        # Remove existing [fluidity] profile block in a portable way (works on macOS and Linux)
+        awk 'BEGIN{in_block=0} /^\[fluidity\]$/{in_block=1; next} /^\[.*\]$/{ if(in_block==1) { in_block=0 } } { if(!in_block) print }' "$CREDENTIALS_FILE" > "$CREDENTIALS_FILE.tmp" && mv "$CREDENTIALS_FILE.tmp" "$CREDENTIALS_FILE"
+        # Remove empty lines
+        awk 'NF' "$CREDENTIALS_FILE" > "$CREDENTIALS_FILE.tmp" && mv "$CREDENTIALS_FILE.tmp" "$CREDENTIALS_FILE"
     fi
 
     # Add new profile (or recreate existing one)
@@ -508,32 +510,11 @@ setup_aws_credentials() {
     # Set proper permissions
     chmod 600 "$CREDENTIALS_FILE"
 
-    # Set AWS_PROFILE environment variable for the agent
-    if [[ "$OS_TYPE" == "windows" ]]; then
-        # For Windows, we'll need to set this in the startup script or environment
-        log_info "Windows detected - AWS_PROFILE=fluidity needs to be set in environment"
-    else
-        # For Linux/macOS, add to shell profile so it's set automatically
-        SHELL_PROFILE=""
-        if [[ -f "$HOME/.zshrc" ]]; then
-            SHELL_PROFILE="$HOME/.zshrc"
-        elif [[ -f "$HOME/.bashrc" ]]; then
-            SHELL_PROFILE="$HOME/.bashrc"
-        elif [[ -f "$HOME/.bash_profile" ]]; then
-            SHELL_PROFILE="$HOME/.bash_profile"
-        fi
-        
-        if [[ -n "$SHELL_PROFILE" ]]; then
-            # Check if AWS_PROFILE is already set in the profile
-            if ! grep -q "export AWS_PROFILE=fluidity" "$SHELL_PROFILE" 2>/dev/null; then
-                echo "export AWS_PROFILE=fluidity" >> "$SHELL_PROFILE"
-                log_info "Added AWS_PROFILE=fluidity to $SHELL_PROFILE"
-            fi
-        fi
-        
-        log_info "AWS credentials configured for profile: fluidity"
-        log_info "Agent will automatically use AWS_PROFILE=fluidity"
-    fi
+    # Do NOT modify the user's AWS_PROFILE environment variable.
+    # The installer creates a 'fluidity' profile in ~/.aws/credentials but will not change AWS_PROFILE.
+    # The agent configuration will explicitly reference the 'fluidity' profile when connecting to Lambda.
+    log_info "AWS credentials configured for profile: fluidity in $CREDENTIALS_FILE"
+    log_info "Installer did not change AWS_PROFILE; the agent will use the 'fluidity' profile from its configuration"
 
     log_success "AWS credentials configured securely"
 }
@@ -1005,6 +986,7 @@ kill_endpoint: "${KILL_ENDPOINT}"
 # from ~/.aws/credentials, environment variables, or IAM roles
 iam_role_arn: "${AGENT_IAM_ROLE_ARN}"
 aws_region: "${REGION}"
+aws_profile: "fluidity"
 
 cert_file: "${CERT_PATH}"
 key_file: "${KEY_PATH}"
