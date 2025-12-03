@@ -242,26 +242,22 @@ Resources:
        ManagedPolicyArns:
          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
        Policies:
-         - PolicyName: ECSQueryPermissions
-           PolicyDocument:
-             Version: '2012-10-17'
-             Statement:
-               - Sid: DescribeECSService
-                 Effect: Allow
-                 Action:
-                   - ecs:DescribeServices
-                 Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
-               - Sid: ListAndDescribeECSTasks
-                 Effect: Allow
-                 Action:
-                   - ecs:ListTasks
-                   - ecs:DescribeTasks
-                 Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ECSClusterName}'
-               - Sid: DescribeNetworkInterfaces
-                 Effect: Allow
-                 Action:
-                   - ec2:DescribeNetworkInterfaces
-                 Resource: '*'
+          - PolicyName: ECSQueryPermissions
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: ECSQueryPermissions
+                  Effect: Allow
+                  Action:
+                    - ecs:DescribeServices
+                    - ecs:ListTasks
+                    - ecs:DescribeTasks
+                  Resource: '*'
+                - Sid: DescribeNetworkInterfaces
+                  Effect: Allow
+                  Action:
+                    - ec2:DescribeNetworkInterfaces
+                  Resource: '*'
        Tags:
          - Key: Application
            Value: Fluidity
