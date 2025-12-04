@@ -5,9 +5,10 @@ Development roadmap by phase.
 | Phase | Status | Key Features |
 |-------|--------|-----------------|
 | **1** | ✅ Complete | mTLS, HTTP/HTTPS/WebSocket tunneling, Circuit breaker, Retry logic, Docker (~44MB), Cross-platform, 75+ tests (~77% coverage) |
-| **2** | 🚧 In Progress | Wake/Sleep/Kill Lambdas, CloudFormation (Fargate + Lambda), CloudWatch metrics, EventBridge schedulers, Function URLs |
-| **3** | 🚧 In Progress | IAM Authentication (partial), SigV4 signing (implemented), Tunnel IAM auth (basic), Enhanced security (partial), Default credential chain (partial) |
+| **2** | ✅ Complete | Wake/Sleep/Kill Lambdas, CloudFormation (Fargate + Lambda), CloudWatch metrics, EventBridge schedulers, Function URLs |
+| **3** | ✅ Complete | IAM Authentication (partial), SigV4 signing (implemented), Tunnel IAM auth (basic), Enhanced security (partial), Default credential chain (partial) |
 | **4** | 📋 Planned | CI/CD (GitHub Actions), Production certificates (trusted CA), Enhanced error handling, Performance optimization, Load testing |
+| **5** | 📋 Planned | Remove AWS_Profile reliance (auto-use 'fluidity' profile), Add spinners to deploy/agent logs |
 
 ## Phase 2 - Deployment & Lambda Updates
 
@@ -274,6 +275,33 @@ func TestLifecycleWithIAM(t *testing.T)
 - Advanced monitoring and alerting
 - Performance optimization
 - Load testing and scaling validation
+
+## Phase 5 - UX/UI Enhancements
+
+### Required Changes
+
+#### 1. Automatic AWS Profile Usage
+- **Current State**: Agent relies on AWS_PROFILE environment variable to select 'fluidity' profile
+- **Required Change**: Agent should automatically use 'fluidity' profile for SigV4 signing without requiring AWS_PROFILE
+- **Implementation**:
+  - Update AWS config loading to explicitly use 'fluidity' profile
+  - Remove dependency on AWS_PROFILE environment variable
+  - Ensure backward compatibility if AWS_PROFILE is set
+- **Files to Update**:
+  - `internal/core/agent/lifecycle/lifecycle.go` - AWS config loading
+  - `scripts/deploy-agent.sh` - Remove AWS_PROFILE setup
+
+#### 2. Add Spinners to Logs
+- **Current State**: Deploy and agent logs are plain text with basic progress indicators
+- **Required Change**: Add interactive spinners/progress indicators to improve user experience during long-running operations
+- **Implementation**:
+  - Add spinner library dependency (e.g., `github.com/briandowns/spinner`)
+  - Integrate spinners into deploy scripts for long operations
+  - Add spinners to agent startup and connection processes
+- **Files to Update**:
+  - `scripts/deploy-agent.sh` - Add spinners to deployment steps
+  - `scripts/deploy-server.sh` - Add spinners to server deployment
+  - `cmd/core/agent/main.go` - Add spinners to agent startup/connection
 
 ---
 
