@@ -1,0 +1,16 @@
+# Agent Dockerfile for local builds
+# Uses pre-built binary from build/ directory
+# alpine/curl - optimal working image with ca-certificates (20.5MB base)
+FROM alpine/curl:latest
+
+# Create app directory
+WORKDIR /root/
+
+# Copy pre-built binary
+COPY build/fluidity-agent .
+
+# Expose proxy port
+EXPOSE 8080
+
+# Command to run
+ENTRYPOINT ["./fluidity-agent"]
