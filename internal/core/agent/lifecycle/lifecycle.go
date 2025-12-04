@@ -406,8 +406,8 @@ func (c *Client) WaitForConnection(ctx context.Context, checkFn func() bool) err
 	}
 
 	c.logger.Info("Waiting for server connection",
-		"timeout", c.config.ConnectionTimeout,
-		"retryInterval", c.config.ConnectionRetryInterval,
+		"timeout", c.config.ConnectionTimeout.String(),
+		"retryInterval", c.config.ConnectionRetryInterval.String(),
 	)
 
 	// Create timeout context

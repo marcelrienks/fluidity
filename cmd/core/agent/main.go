@@ -119,7 +119,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			AWSRegion:               cfg.AWSRegion,
 			ClusterName:             "", // Not used in current implementation
 			ServiceName:             "", // Not used in current implementation
-			ConnectionTimeout:       90 * time.Second,
+			ConnectionTimeout:       30 * time.Second,
 			ConnectionRetryInterval: 5 * time.Second,
 			HTTPTimeout:             30 * time.Second,
 			MaxRetries:              3,
