@@ -1,0 +1,293 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Fluidity - AWS Fargate (ECS) deployment for tunnel server with mTLS certificate management via AWS Secrets Manager.
+  Run ./scripts/generate-certs.sh to generate certificates before deploying.
+  Set DesiredCount=0 when not in use (no charges), DesiredCount=1 to start (~$9/month for 24/7).
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "ECS Configuration"
+        Parameters:
+          - ClusterName
+          - ServiceName
+          - ContainerImage
+          - DesiredCount
+      - Label:
+          default: "Container Resources"
+        Parameters:
+          - Cpu
+          - Memory
+          - ContainerPort
+      - Label:
+          default: "Networking"
+        Parameters:
+          - VpcId
+          - PublicSubnets
+          - AssignPublicIp
+          - AllowedIngressCidr
+      - Label:
+          default: "Logging"
+        Parameters:
+          - LogGroupName
+          - LogRetentionDays
+      - Label:
+          default: "Certificates (Base64-encoded PEM)"
+        Parameters:
+          - CertPem
+          - KeyPem
+          - CaPem
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: fluidity
+    Description: ECS Cluster name
+  ServiceName:
+    Type: String
+    Default: fluidity-server
+    Description: ECS Service name
+  ContainerImage:
+    Type: String
+    Description: Full image URI, e.g. <ACCOUNT>.dkr.ecr.<REGION>.amazonaws.com/fluidity-server:latest
+  ContainerPort:
+    Type: Number
+    Default: 8443
+    Description: Container port to expose (TCP)
+  Cpu:
+    Type: String
+    Default: '256'
+    AllowedValues: ['256','512','1024','2048','4096']
+    Description: Task CPU units (256 = 0.25 vCPU)
+  Memory:
+    Type: String
+    Default: '512'
+    AllowedValues: ['512','1024','2048','3072','4096','5120','6144','7168','8192','16384','30720']
+    Description: Task memory (MiB)
+  DesiredCount:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 10
+    Description: Number of running tasks (set to 1 to start, 0 to stop)
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where tasks will run (use default VPC id or your own)
+  PublicSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: One or more public subnet IDs (AssignPublicIp must be enabled)
+  AllowedIngressCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to connect to port (use your public IP/32 for security)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+  AssignPublicIp:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: Assign a public IP to tasks (required for public internet access)
+  LogGroupName:
+    Type: String
+    Default: /ecs/fluidity/server
+    Description: CloudWatch Logs group name
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653]
+    Description: Log retention in days (7 recommended to minimize costs)
+  CertificatesSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing certificates (created externally)
+
+Resources:
+
+  
+  # ============================================================================
+  # LOGGING
+  # ============================================================================
+  
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ============================================================================
+  # IAM ROLES
+  # ============================================================================
+  
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-${ServiceName}-exec'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref CertificatesSecretArn
+      Path: '/'
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ClusterName}-${ServiceName}-task'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: CloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PutMetricData
+                Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: Fluidity
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fluidity server security group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          CidrIp: !Ref AllowedIngressCidr
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref ServiceName
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: server
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          Secrets:
+            - Name: CERT_PEM
+              ValueFrom: !Sub '${CertificatesSecretArn}:cert_pem::'
+            - Name: KEY_PEM
+              ValueFrom: !Sub '${CertificatesSecretArn}:key_pem::'
+            - Name: CA_PEM
+              ValueFrom: !Sub '${CertificatesSecretArn}:ca_pem::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Cluster
+      - TaskDefinition
+    Properties:
+      Cluster: !Ref Cluster
+      ServiceName: !Ref ServiceName
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: false
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PublicSubnets
+          SecurityGroups: [!Ref SecurityGroup]
+          AssignPublicIp: !Ref AssignPublicIp
+
+Outputs:
+
+  ClusterArn:
+    Description: ECS Cluster ARN
+    Value: !Ref Cluster
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterArn'
+  
+  ServiceNameOut:
+    Description: Service name
+    Value: !Ref Service
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceName'
+  
+  TaskDefinitionArn:
+    Description: Task definition ARN
+    Value: !Ref TaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskDefinitionArn'
+  
+  SecurityGroupId:
+    Description: Security group ID for the service
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityGroupId'
+  
+  LogGroupOut:
+    Description: CloudWatch Log Group name
+    Value: !Ref LogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'
+  
+  TaskRoleArn:
+    Description: Task role ARN (for runtime permissions)
+    Value: !GetAtt TaskRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskRoleArn'
+  
+  ExecutionRoleArn:
+    Description: Execution role ARN (for image pull and logs)
+    Value: !GetAtt ExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ExecutionRoleArn'
+  
+  CertificateSecretArn:
+    Description: ARN of the Secrets Manager secret containing certificates (externally managed)
+    Value: !Ref CertificatesSecretArn
+    Export:
+      Name: !Sub '${AWS::StackName}-CertificateSecretArn'
+  
+  GetPublicIPCommand:
+    Description: AWS CLI command to get the task's public IP (after starting)
+    Value: !Sub |
+      aws ecs list-tasks --cluster ${ClusterName} --service-name ${ServiceName} --query 'taskArns[0]' --output text | xargs -I {} aws ecs describe-tasks --cluster ${ClusterName} --tasks {} --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text | xargs -I {} aws ec2 describe-network-interfaces --network-interface-ids {} --query 'NetworkInterfaces[0].Association.PublicIp' --output text

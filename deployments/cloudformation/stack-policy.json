@@ -1,0 +1,28 @@
+{
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "Update:Delete",
+      "Resource": [
+        "LogicalResourceId/FluidityAPI",
+        "LogicalResourceId/APIStage",
+        "LogicalResourceId/FluidityAPIKey",
+        "LogicalResourceId/FluidityUsagePlan",
+        "LogicalResourceId/WakeLambdaFunction",
+        "LogicalResourceId/SleepLambdaFunction",
+        "LogicalResourceId/KillLambdaFunction",
+        "LogicalResourceId/SleepScheduleRule",
+        "LogicalResourceId/KillScheduleRule",
+        "LogicalResourceId/Service",
+        "LogicalResourceId/TaskDefinition"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "Update:*",
+      "Resource": "*"
+    }
+  ]
+}

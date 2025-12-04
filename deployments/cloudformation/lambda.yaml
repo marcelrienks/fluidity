@@ -1,0 +1,768 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Fluidity Lambda Control Plane - Wake/Sleep/Kill functions for ECS lifecycle management'
+
+Parameters:
+  LambdaS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment packages
+    Default: ''
+  
+  LambdaS3KeyPrefix:
+    Type: String
+    Description: S3 key prefix for Lambda packages
+    Default: 'fluidity/'
+  BuildVersion:
+    Type: String
+    Description: Build version for Lambda ZIP filenames
+    Default: ''
+  
+  ECSClusterName:
+    Type: String
+    Description: Name of the ECS cluster running the Fluidity server
+    Default: fluidity
+  
+  ECSServiceName:
+    Type: String
+    Description: Name of the ECS service for the Fluidity server
+    Default: fluidity-server
+  
+  IdleThresholdMinutes:
+    Type: Number
+    Description: Minutes of inactivity before Sleep Lambda scales down the service
+    Default: 15
+    MinValue: 1
+    MaxValue: 1440
+  
+  LookbackPeriodMinutes:
+    Type: Number
+    Description: Minutes to look back when querying CloudWatch metrics
+    Default: 10
+    MinValue: 1
+    MaxValue: 60
+  
+  SleepCheckIntervalMinutes:
+    Type: Number
+    Description: How often (in minutes) to check if service should sleep
+    Default: 5
+    MinValue: 1
+    MaxValue: 60
+  
+  DailyKillTime:
+    Type: String
+    Description: Cron expression for daily kill (UTC). Default is 11 PM UTC daily.
+    Default: 'cron(0 23 * * ? *)'
+  
+  WakeLambdaTimeout:
+    Type: Number
+    Description: Timeout for Wake Lambda in seconds
+    Default: 30
+    MinValue: 10
+    MaxValue: 900
+  
+  SleepLambdaTimeout:
+    Type: Number
+    Description: Timeout for Sleep Lambda in seconds
+    Default: 60
+    MinValue: 10
+    MaxValue: 900
+  
+  KillLambdaTimeout:
+    Type: Number
+    Description: Timeout for Kill Lambda in seconds
+    Default: 30
+    MinValue: 10
+    MaxValue: 900
+  
+  WakeLambdaReservedConcurrency:
+    Type: Number
+    Description: Reserved concurrent executions for Wake Lambda
+    Default: 5
+    MinValue: 1
+    MaxValue: 100
+  
+  SleepLambdaReservedConcurrency:
+    Type: Number
+    Description: Reserved concurrent executions for Sleep Lambda
+    Default: 2
+    MinValue: 1
+    MaxValue: 100
+
+  KillLambdaReservedConcurrency:
+    Type: Number
+    Description: Reserved concurrent executions for Kill Lambda
+    Default: 5
+    MinValue: 1
+    MaxValue: 100
+
+  QueryLambdaTimeout:
+    Type: Number
+    Description: Timeout for Query Lambda in seconds
+    Default: 30
+    MinValue: 10
+    MaxValue: 900
+
+  QueryLambdaReservedConcurrency:
+    Type: Number
+    Description: Reserved concurrent executions for Query Lambda
+    Default: 5
+    MinValue: 1
+    MaxValue: 100
+  
+
+
+Resources:
+  # ============================================================
+  # IAM Roles - Least Privilege Policies
+  # ============================================================
+  
+  WakeLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-wake-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ECSWakePermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DescribeECSService
+                Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
+              - Sid: UpdateECSService
+                Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
+              - Sid: ListAndDescribeECSTasks
+                Effect: Allow
+                Action:
+                  - ecs:ListTasks
+                  - ecs:DescribeTasks
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ECSClusterName}'
+              - Sid: DescribeNetworkInterfaces
+                Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                Resource: '*'
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Lambda-Wake
+  
+  SleepLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-sleep-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ECSSleepPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DescribeECSService
+                Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
+              - Sid: UpdateECSService
+                Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
+              - Sid: GetCloudWatchMetrics
+                Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                Resource: '*'
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Lambda-Sleep
+
+  KillLambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+       RoleName: !Sub '${AWS::StackName}-kill-lambda-role'
+       AssumeRolePolicyDocument:
+         Version: '2012-10-17'
+         Statement:
+           - Effect: Allow
+             Principal:
+               Service: lambda.amazonaws.com
+             Action: sts:AssumeRole
+       ManagedPolicyArns:
+         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+       Policies:
+         - PolicyName: ECSKillPermissions
+           PolicyDocument:
+             Version: '2012-10-17'
+             Statement:
+               - Sid: UpdateECSService
+                 Effect: Allow
+                 Action:
+                   - ecs:UpdateService
+                 Resource: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:service/${ECSClusterName}/${ECSServiceName}'
+       Tags:
+         - Key: Application
+           Value: Fluidity
+         - Key: Component
+           Value: Lambda-Kill
+
+  QueryLambdaExecutionRole:
+     Type: AWS::IAM::Role
+     Properties:
+       RoleName: !Sub '${AWS::StackName}-query-lambda-role'
+       AssumeRolePolicyDocument:
+         Version: '2012-10-17'
+         Statement:
+           - Effect: Allow
+             Principal:
+               Service: lambda.amazonaws.com
+             Action: sts:AssumeRole
+       ManagedPolicyArns:
+         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+       Policies:
+          - PolicyName: ECSQueryPermissions
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: ECSQueryPermissions
+                  Effect: Allow
+                  Action:
+                    - ecs:DescribeServices
+                    - ecs:ListTasks
+                    - ecs:DescribeTasks
+                  Resource: '*'
+                - Sid: DescribeNetworkInterfaces
+                  Effect: Allow
+                  Action:
+                    - ec2:DescribeNetworkInterfaces
+                  Resource: '*'
+       Tags:
+         - Key: Application
+           Value: Fluidity
+         - Key: Component
+           Value: Lambda-Query
+
+  # ============================================================
+  # Lambda Functions - Placeholder (will be updated with actual code)
+  # ============================================================
+  # Note: These are placeholders. You'll need to build the Go binaries,
+  # upload them to S3, and update the Code section with the S3 bucket/key.
+  
+  WakeLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WakeLambdaLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-wake'
+      Description: 'Wakes the Fluidity ECS service by setting DesiredCount to 1'
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Role: !GetAtt WakeLambdaExecutionRole.Arn
+      Timeout: !Ref WakeLambdaTimeout
+      MemorySize: 128
+      Environment:
+        Variables:
+          ECS_CLUSTER_NAME: !Ref ECSClusterName
+          ECS_SERVICE_NAME: !Ref ECSServiceName
+          LOG_LEVEL: info
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Sub '${LambdaS3KeyPrefix}wake-${BuildVersion}.zip'
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Lambda-Wake
+        - Key: Version
+          Value: '1.0.0'
+  
+  SleepLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: SleepLambdaLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-sleep'
+      Description: 'Checks CloudWatch metrics and scales down ECS service if idle'
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Role: !GetAtt SleepLambdaExecutionRole.Arn
+      Timeout: !Ref SleepLambdaTimeout
+      MemorySize: 128
+      Environment:
+        Variables:
+          ECS_CLUSTER_NAME: !Ref ECSClusterName
+          ECS_SERVICE_NAME: !Ref ECSServiceName
+          IDLE_THRESHOLD_MINS: !Ref IdleThresholdMinutes
+          LOOKBACK_PERIOD_MINS: !Ref LookbackPeriodMinutes
+          LOG_LEVEL: info
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Sub '${LambdaS3KeyPrefix}sleep-${BuildVersion}.zip'
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Lambda-Sleep
+        - Key: Version
+          Value: '1.0.0'
+  
+  KillLambdaFunction:
+     Type: AWS::Lambda::Function
+     DependsOn: KillLambdaLogGroup
+     Properties:
+       FunctionName: !Sub '${AWS::StackName}-kill'
+       Description: 'Immediately stops the Fluidity ECS service by setting DesiredCount to 0'
+       Runtime: provided.al2023
+       Handler: bootstrap
+       Role: !GetAtt KillLambdaExecutionRole.Arn
+       Timeout: !Ref KillLambdaTimeout
+       MemorySize: 128
+       Environment:
+         Variables:
+           ECS_CLUSTER_NAME: !Ref ECSClusterName
+           ECS_SERVICE_NAME: !Ref ECSServiceName
+           LOG_LEVEL: info
+       Code:
+         S3Bucket: !Ref LambdaS3Bucket
+         S3Key: !Sub '${LambdaS3KeyPrefix}kill-${BuildVersion}.zip'
+       Tags:
+         - Key: Application
+           Value: Fluidity
+         - Key: Component
+           Value: Lambda-Kill
+         - Key: Version
+           Value: '1.0.0'
+
+  QueryLambdaFunction:
+     Type: AWS::Lambda::Function
+     DependsOn: QueryLambdaLogGroup
+     Properties:
+       FunctionName: !Sub '${AWS::StackName}-query'
+       Description: 'Queries the status of a Fluidity ECS service instance and returns IP when ready'
+       Runtime: provided.al2023
+       Handler: bootstrap
+       Role: !GetAtt QueryLambdaExecutionRole.Arn
+       Timeout: !Ref QueryLambdaTimeout
+       MemorySize: 128
+       Environment:
+         Variables:
+           ECS_CLUSTER_NAME: !Ref ECSClusterName
+           ECS_SERVICE_NAME: !Ref ECSServiceName
+           LOG_LEVEL: info
+       Code:
+         S3Bucket: !Ref LambdaS3Bucket
+         S3Key: !Sub '${LambdaS3KeyPrefix}query-${BuildVersion}.zip'
+       Tags:
+         - Key: Application
+           Value: Fluidity
+         - Key: Component
+           Value: Lambda-Query
+         - Key: Version
+           Value: '1.0.0'
+  
+  # ============================================================
+  # Lambda Versions and Aliases
+  # ============================================================
+  
+  WakeLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref WakeLambdaFunction
+      Description: 'Version 1.0.0 - Initial release'
+  
+  WakeLambdaProdAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref WakeLambdaFunction
+      FunctionVersion: !GetAtt WakeLambdaVersion.Version
+      Name: PROD
+      Description: 'Production alias for Wake Lambda'
+  
+  SleepLambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref SleepLambdaFunction
+      Description: 'Version 1.0.0 - Initial release'
+  
+  SleepLambdaProdAlias:
+    Type: AWS::Lambda::Alias
+    Properties:
+      FunctionName: !Ref SleepLambdaFunction
+      FunctionVersion: !GetAtt SleepLambdaVersion.Version
+      Name: PROD
+      Description: 'Production alias for Sleep Lambda'
+  
+  KillLambdaVersion:
+     Type: AWS::Lambda::Version
+     Properties:
+       FunctionName: !Ref KillLambdaFunction
+       Description: 'Version 1.0.0 - Initial release'
+
+  KillLambdaProdAlias:
+     Type: AWS::Lambda::Alias
+     Properties:
+       FunctionName: !Ref KillLambdaFunction
+       FunctionVersion: !GetAtt KillLambdaVersion.Version
+       Name: PROD
+       Description: 'Production alias for Kill Lambda'
+
+  QueryLambdaVersion:
+     Type: AWS::Lambda::Version
+     Properties:
+       FunctionName: !Ref QueryLambdaFunction
+       Description: 'Version 1.0.0 - Initial release'
+
+  QueryLambdaProdAlias:
+     Type: AWS::Lambda::Alias
+     Properties:
+       FunctionName: !Ref QueryLambdaFunction
+       FunctionVersion: !GetAtt QueryLambdaVersion.Version
+       Name: PROD
+       Description: 'Production alias for Query Lambda'
+  
+  # ============================================================
+  # EventBridge Rules for Automated Scheduling
+  # ============================================================
+  
+  SleepScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-sleep-schedule'
+      Description: !Sub 'Invokes Sleep Lambda every ${SleepCheckIntervalMinutes} minutes to check for idle service'
+      ScheduleExpression: !Sub 'rate(${SleepCheckIntervalMinutes} minutes)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SleepLambdaProdAlias.AliasArn
+          Id: SleepLambdaTarget
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+  
+  KillScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-kill-schedule'
+      Description: 'Daily shutdown of Fluidity ECS service'
+      ScheduleExpression: !Ref DailyKillTime
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt KillLambdaProdAlias.AliasArn
+          Id: KillLambdaTarget
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+  
+  # ============================================================
+  # Lambda Permissions for EventBridge
+  # ============================================================
+  
+  SleepLambdaEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SleepLambdaProdAlias
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SleepScheduleRule.Arn
+  
+  KillLambdaEventBridgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref KillLambdaProdAlias
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt KillScheduleRule.Arn
+  
+  # ============================================================
+  # CloudWatch Log Groups
+  # ============================================================
+  
+  WakeLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-wake'
+      RetentionInDays: 7
+  
+  SleepLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-sleep'
+      RetentionInDays: 7
+  
+  KillLambdaLogGroup:
+     Type: AWS::Logs::LogGroup
+     DeletionPolicy: Delete
+     Properties:
+       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-kill'
+       RetentionInDays: 7
+
+  QueryLambdaLogGroup:
+     Type: AWS::Logs::LogGroup
+     DeletionPolicy: Delete
+     Properties:
+       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-query'
+       RetentionInDays: 7
+  
+  # ============================================================
+  # IAM Resources for Agent Authentication
+  # ============================================================
+
+  # Agent IAM Role (for EC2/ECS instances)
+  AgentIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-agent-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref AgentIAMPolicy
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Agent-IAM-Role
+
+  # Agent IAM User (for local development)
+  AgentIAMUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub '${AWS::StackName}-agent-user'
+      ManagedPolicyArns:
+        - !Ref AgentIAMPolicy
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Agent-IAM-User
+
+  # IAM Policy for Agent
+  AgentIAMPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunctionUrl
+            Resource:
+              - !GetAtt WakeLambdaFunction.Arn
+              - !GetAtt QueryLambdaFunction.Arn
+              - !GetAtt KillLambdaFunction.Arn
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource: !Sub arn:aws:secretsmanager:*:*:secret:fluidity-certificates-*
+
+  # Access Key for user
+  AgentAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref AgentIAMUser
+
+  # ============================================================
+  # Lambda Function URLs (IAM Auth)
+  # ============================================================
+
+  # Wake Lambda Function URL
+  WakeLambdaFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt WakeLambdaFunction.Arn
+      AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
+
+   # Kill Lambda Function URL
+  KillLambdaFunctionUrl:
+     Type: AWS::Lambda::Url
+     Properties:
+       TargetFunctionArn: !GetAtt KillLambdaFunction.Arn
+       AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
+
+   # Query Lambda Function URL
+  QueryLambdaFunctionUrl:
+     Type: AWS::Lambda::Url
+     Properties:
+       TargetFunctionArn: !GetAtt QueryLambdaFunction.Arn
+       AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
+
+  # ========================================
+  # Monitoring & Observability
+  # ========================================
+
+  # SNS Topic for Alarm Notifications
+  AlarmNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-alarms'
+      DisplayName: 'Fluidity Lambda Control Plane Alarms'
+
+  # CloudWatch Alarm: Lambda Errors
+  WakeLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-wake-lambda-errors'
+      AlarmDescription: 'Alert when Wake Lambda has execution errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WakeLambdaFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      TreatMissingData: notBreaching
+
+  SleepLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-sleep-lambda-errors'
+      AlarmDescription: 'Alert when Sleep Lambda has execution errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SleepLambdaFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      TreatMissingData: notBreaching
+
+  KillLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-kill-lambda-errors'
+      AlarmDescription: 'Alert when Kill Lambda has execution errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref KillLambdaFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      TreatMissingData: notBreaching
+
+  # CloudWatch Dashboard
+  FluidityDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-dashboard'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", { "stat": "Sum" } ],
+                  [ ".", "Errors", { "stat": "Sum" } ],
+                  [ ".", "Duration", { "stat": "Average" } ],
+                  [ ".", "Throttles", { "stat": "Sum" } ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Lambda Metrics (All Functions)"
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  [ "Fluidity", "ActiveConnections", { "stat": "Maximum" } ],
+                  [ ".", "LastActivityEpochSeconds", { "stat": "Maximum" } ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Fluidity Server Metrics"
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "Count", { "stat": "Sum" } ],
+                  [ ".", "4XXError", { "stat": "Sum" } ],
+                  [ ".", "5XXError", { "stat": "Sum" } ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "API Gateway Metrics"
+              }
+            },
+            {
+              "type": "log",
+              "properties": {
+                "query": "fields @timestamp, @message | filter @message like /ERROR/ | stats count() by bin(300s)",
+                "region": "${AWS::Region}",
+                "title": "Lambda Errors (Last Hour)",
+                "queryId": "error-logs"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  WakeAPIEndpoint:
+    Description: Full URL to invoke Wake Lambda Function URL
+    Value: !GetAtt WakeLambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-wake-api-endpoint'
+  
+  KillAPIEndpoint:
+    Description: Full URL to invoke Kill Lambda Function URL
+    Value: !GetAtt KillLambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-kill-api-endpoint'
+
+  QueryAPIEndpoint:
+    Description: Full URL to invoke Query Lambda Function URL
+    Value: !GetAtt QueryLambdaFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-query-api-endpoint'
+  
+  AgentIAMUserAccessKey:
+    Description: Access Key ID for agent user
+    Value: !Ref AgentAccessKey
+
+  AgentIAMUserSecretKey:
+    Description: Secret Access Key for agent user
+    Value: !GetAtt AgentAccessKey.SecretAccessKey
