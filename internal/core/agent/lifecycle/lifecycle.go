@@ -364,7 +364,8 @@ func (c *Client) WakeAndGetIP(ctx context.Context, agentConfig interface{}) erro
 	time.Sleep(5 * time.Second)
 
 	// Poll for the server IP
-	maxAttempts := 60 // 5 minutes with 5 second intervals
+	maxAttempts := 10 // ~30 seconds with 3 second intervals
+	pollInterval := 3 * time.Second
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		select {
 		case <-ctx.Done():
@@ -378,7 +379,7 @@ func (c *Client) WakeAndGetIP(ctx context.Context, agentConfig interface{}) erro
 		queryResp, err := c.callQueryAPI(ctx, wakeResp.InstanceID)
 		if err != nil {
 			c.logger.Warn("Query failed, will retry", "error", err.Error(), "attempt", attempt)
-			time.Sleep(5 * time.Second)
+			time.Sleep(pollInterval)
 			continue
 		}
 
@@ -392,7 +393,7 @@ func (c *Client) WakeAndGetIP(ctx context.Context, agentConfig interface{}) erro
 		}
 
 		c.logger.Info("Server not ready yet, waiting...", "attempt", attempt)
-		time.Sleep(5 * time.Second)
+		time.Sleep(pollInterval)
 	}
 
 	return fmt.Errorf("timeout waiting for server IP after %d attempts", maxAttempts)
