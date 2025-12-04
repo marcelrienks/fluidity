@@ -255,6 +255,7 @@ func (c *Client) handleResponses() {
 	for {
 		select {
 		case <-c.ctx.Done():
+			c.logger.Info("handleResponses: context cancelled, exiting")
 			return
 		default:
 		}
@@ -264,6 +265,8 @@ func (c *Client) handleResponses() {
 			c.logger.Error("Failed to decode envelope", err)
 			return
 		}
+
+		c.logger.Debug("Received envelope", "type", env.Type)
 
 		switch env.Type {
 		case "http_response":
@@ -681,13 +684,8 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 		return fmt.Errorf("failed to send IAM auth request: %w", err)
 	}
 
-	// Wait for the IAM auth response (will be delivered through handleResponses)
-	// For now, just give it a moment to process
-	select {
-	case <-time.After(5 * time.Second):
-		c.logger.Info("IAM authentication request sent, continuing with tunnel operations")
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("IAM authentication cancelled")
-	}
+	// IAM auth response will be processed asynchronously by handleResponses
+	// We don't block here - just log and continue
+	c.logger.Info("IAM authentication request sent, response will be processed asynchronously")
+	return nil
 }
