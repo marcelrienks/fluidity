@@ -35,7 +35,6 @@
 #   --vpc-id <vpc>                 VPC ID (auto-detect default VPC)
 #   --public-subnets <subnets>     Comma-separated subnet IDs (auto-detect)
 #   --allowed-cidr <cidr>          Allowed ingress CIDR (auto-detect your IP)
-#   --server-ip <ip>               Server IP (for agent, defaults to Fargate task public IP)
 #   --local-proxy-port <port>      Agent listening port (default: 8080 on Windows, 8080 on Linux/macOS)
 #   --cert-path <path>             Path to client certificate (optional)
 #   --key-path <path>              Path to client key (optional)
@@ -56,7 +55,7 @@
 #   ./deploy-fluidity.sh deploy
 #   ./deploy-fluidity.sh deploy --local-proxy-port 8080
 #   ./deploy-fluidity.sh deploy-server --region us-west-2
-#   ./deploy-fluidity.sh deploy-agent --server-ip 192.168.1.100
+#   ./deploy-fluidity.sh deploy-agent
 #   ./deploy-fluidity.sh status
 #   ./deploy-fluidity.sh delete
 #
@@ -266,10 +265,6 @@ parse_arguments() {
                 ALLOWED_CIDR="$2"
                 shift 2
                 ;;
-            --server-ip)
-                SERVER_IP="$2"
-                shift 2
-                ;;
             --local-proxy-port)
                 LOCAL_PROXY_PORT="$2"
                 shift 2
@@ -476,19 +471,8 @@ deploy_agent() {
         exit 1
     fi
     
-    # If SERVER_IP not provided via command line, try to extract from running Fargate task
-    # (optional - agent will get it from wake function)
-    if [[ -z "$SERVER_IP" && -n "$SERVER_IP_COMMAND" ]]; then
-        log_debug "Fargate task detection skipped - IP will be obtained from wake function"
-    fi
-    
     local args=("deploy")
-    
-    # Pass server configuration
-    if [[ -n "$SERVER_IP" ]]; then
-        args+=(--server-ip "$SERVER_IP")
-    fi
-    
+
     args+=(--server-port "$SERVER_PORT")
     args+=(--local-proxy-port "$LOCAL_PROXY_PORT")
     
@@ -658,7 +642,7 @@ main() {
             log_info "Kill Lambda: $KILL_ENDPOINT"
             log_info "Query Lambda: $QUERY_ENDPOINT"
             log_info "Server Port: $SERVER_PORT"
-            log_info "Server IP: (Obtain from AWS console or use wake function)"
+            log_info "Server IP: (Agent obtains server IP from lifecycle wake/query at runtime)"
             
             log_substep "Local Agent Deployment"
             log_info "Installation Path: $AGENT_INSTALL_PATH"

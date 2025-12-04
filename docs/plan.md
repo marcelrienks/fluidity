@@ -1,6 +1,6 @@
 # Project Plan — Outstanding Items
 
-Outstanding features and work items (as of 2025-12-04T06:19:24.228Z)
+Outstanding features and work items (as of 2025-12-04T06:32:59.047Z)
 
 This document lists only the remaining work to be completed; completed items have been removed.
 
@@ -10,9 +10,9 @@ This document lists only the remaining work to be completed; completed items hav
    - Update deploy scripts to support IAM role ARNs and remove reliance on AWS_PROFILE
 
 2. Agent: Lifecycle, Configuration & TLS
-   - Agent should support dynamic discovery when server IP is absent (wake → query → update config)
-   - Persist discovered server IP to agent config when --save is used
-   - Implement --force-wake CLI flag to force lifecycle wake/query and overwrite configured IP
+   - Agent must always start a server instance on startup via lifecycle (wake → query → connect)
+   - Agent MUST NOT persist discovered server IPs to disk; server instances are ephemeral and owned by the agent runtime
+   - Remove CLI options that allow persisting or forcing discovery (no --save, no --force-wake, no --server-ip override)
    - Update TLS loading to support Secrets Manager via default credential chain and remove explicit credentials
    - Add CLI documentation and behavior guarantees around fatal connect-on-failure semantics
 
@@ -42,7 +42,6 @@ This document lists only the remaining work to be completed; completed items hav
    - Performance optimization and load-testing validation
 
 Notes
-- Failure to connect after either using configured IP or after discovery is treated as fatal: agent should log an error and exit so external orchestrators can retry.
-- The --force-wake flag must be documented and implemented to overwrite any configured IP and perform lifecycle discovery unconditionally.
+- Agent must attempt to Kill the server it started when exiting cleanly or on unrecoverable errors so external orchestrators get a clean slate.
 
-Last updated: 2025-12-04T06:19:24.228Z
+Last updated: 2025-12-04T06:32:59.047Z

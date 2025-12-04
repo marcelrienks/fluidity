@@ -47,13 +47,11 @@ Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate f
    - Deploy manager for coordinating multi-component deployments
 
 6. **Dynamic Lifecycle Management**
-   - **Server Discovery**: Agent auto-discovers server IP via Lambda endpoints
-   - **On-Demand Server Wake**: Agent triggers server startup when needed
-   - **Auto-Configuration**: Agent writes discovered IPs to config for persistence
-   - **Connection Lifecycle**: Automatic reconnection with intelligent failure detection
-   - **Resilient Recovery**: After 3 consecutive failures, agent re-triggers full IP discovery cycle
-   - **Cost Optimization**: Server auto-scale down when idle, wake on demand
-   - **Infrastructure Resilience**: Handles server restarts, IP drift, and cloud updates automatically
+   - **Server Startup**: On every agent start the agent calls lifecycle Wake → Query to start a dedicated server instance and obtain its IP.
+   - **Ephemeral Server**: The agent does not persist discovered server IPs to disk; servers are ephemeral and owned by the agent runtime.
+   - **Connection Lifecycle**: The agent attempts an mTLS connection to the started server and exits on unrecoverable connection failure.
+   - **Shutdown**: On clean exit or unrecoverable error the agent calls lifecycle Kill to terminate the server instance it started.
+   - **Cost Optimization**: Server auto-scales down when idle; agent ensures termination of its server instance on shutdown.
 
 ### Non-Functional
 

@@ -9,7 +9,7 @@
 
 Fluidity is a secure HTTP/HTTPS/WebSocket tunneling solution designed for environments with restrictive firewalls. It enables applications to access external services through a cloud-hosted tunnel server using mutual TLS authentication.
 
-**Intended Use Case**: Deploy the server infrastructure first, then deploy agents that can dynamically discover and wake up servers as needed. The agent automatically manages server lifecycle - discovering IPs, waking idle servers, and maintaining connections.
+**Intended Use Case**: Deploy the server infrastructure (lifecycle Lambdas) first; agents always start a dedicated server instance on startup via lifecycle Wake/Query and manage that server for the lifetime of the agent process. Agents do not persist discovered server IPs to disk.
 
 _Predominantly vibe coded with mixture of claude and grok as a learning excercise._
 
@@ -27,15 +27,12 @@ Fluidity follows a specific deployment and runtime workflow:
 3. **Orchestration**: Use the deploy manager to coordinate deployments with appropriate configurations
 
 ### Runtime Behavior
-- **Server Discovery**: Agent startup checks for server IP; if not configured, triggers wake Lambda to start server
-- **Dynamic IP Resolution**: Agent polls query Lambda to discover the running server's IP address
-- **Auto-Configuration**: Discovered IP is written to agent config for future use
-- **Connection Management**: Agent maintains persistent tunnel connection; if lost, attempts reconnection
-- **Resilient Recovery**: After 3 consecutive connection failures, agent automatically re-triggers IP discovery cycle
-- **Lifecycle Management**: Server can auto-scale down when idle; agent wakes it up as needed
-- **Infrastructure Resilience**: Agent handles server restarts, IP changes, and cloud infrastructure updates automatically
+- **Server startup**: On every agent start the agent calls lifecycle Wake/Query to start a server instance and obtain its IP address.
+- **Ephemeral server**: The agent does not persist the discovered server IP; the server instance is ephemeral and scoped to the agent process.
+- **Connection management**: The agent attempts an mTLS connection to the started server; if the connection fails the agent logs the error and exits so external orchestrators can retry.
+- **Shutdown**: On clean exit or unrecoverable error the agent will call lifecycle Kill to terminate the server instance it started.
 
-This design enables cost-effective, on-demand tunneling infrastructure that scales with usage.
+This model provides predictable one-server-per-agent lifecycle management and simplifies failure semantics for orchestration systems.
 
 ## Prerequisites
 

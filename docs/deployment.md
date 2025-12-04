@@ -65,10 +65,10 @@ Fluidity is designed with a specific deployment workflow to enable dynamic serve
    - Agent will dynamically discover server IPs at runtime
 
 3. **Runtime Operation**
-   - Agent startup: checks for configured server IP
-   - If no IP configured: calls wake Lambda → polls query Lambda → discovers IP → writes to config
-   - If connection fails: repeats discovery cycle
-   - Server can scale down when idle; agent wakes it up on demand
+   - Agent startup: the agent always calls lifecycle Wake → Query to start a dedicated server instance and obtain its IP.
+   - The agent does not write discovered IPs to disk; the server instance is ephemeral and owned by the agent runtime.
+   - If the connection to the started server fails the agent logs the error and exits; it does not re-trigger lifecycle discovery.
+   - Server can scale down when idle; the agent will call lifecycle Kill on shutdown to terminate its server.
 
 ### Why This Workflow?
 
@@ -312,19 +312,18 @@ wsl bash scripts/deploy-fluidity.sh deploy `
   --vpc-id vpc-12345678 `
   --public-subnets subnet-11111111,subnet-22222222 `
   --allowed-cidr 203.0.113.45/32 `
-  --server-ip 203.0.113.50 `
   --local-proxy-port 8080
 ```
-
 **With explicit parameters (macOS/Linux):**
+
 ```bash
 bash scripts/deploy-fluidity.sh deploy \
   --region eu-west-1 \
   --vpc-id vpc-12345678 \
   --public-subnets subnet-11111111,subnet-22222222 \
   --allowed-cidr 203.0.113.45/32 \
-  --server-ip 203.0.113.50 \
   --local-proxy-port 8080
+# Note: agent no longer consumes a `--server-ip`; the orchestrator configures lifecycle endpoints (wake/query/kill) which the agent uses to start its server.
 ```
 
 **Check status (Windows PowerShell):**
@@ -402,7 +401,7 @@ User runs: deploy-fluidity.sh deploy
 --vpc-id <vpc-id>          # VPC ID (auto-detected)
 --public-subnets <subnets> # Comma-separated subnet IDs (auto-detected)
 --allowed-cidr <cidr>      # Ingress CIDR (auto-detected from your IP)
---server-ip <ip>           # Server IP for agent configuration
+--wake-endpoint <url>      # Lifecycle wake endpoint (agent requires lifecycle endpoints)
 --local-proxy-port <port>  # Agent port (default: 8080)
 --skip-build                # Use existing agent binary
 --debug                     # Enable debug logging
@@ -452,9 +451,9 @@ bash scripts/deploy-fluidity.sh delete                     # Delete infrastructu
    - Updates with server/Lambda details
 
 5. **Configuration validated:**
-   - Checks required fields (server_ip)
+   - Validates required lifecycle configuration (wake/query/kill endpoints) and TLS credentials
    - Requests missing values interactively if needed
-   - Deployment fails cleanly if config incomplete
+   - Deployment fails cleanly if lifecycle endpoints or TLS credentials are missing
 
 6. **Deployment completes:**
    - Both server and agent ready
@@ -477,8 +476,8 @@ bash scripts/deploy-fluidity.sh delete                     # Delete infrastructu
 
 **Manual Update:**
 ```bash
-./scripts/deploy-agent.sh deploy --server-ip 192.168.1.100 --local-proxy-port 9000
-# Updates agent.yaml with new values, preserves others
+./scripts/deploy-agent.sh deploy --local-proxy-port 9000
+# Updates agent.yaml with lifecycle endpoint values supplied by the orchestrator if needed
 ```
 
 **Interactive Input:**
@@ -516,7 +515,7 @@ cat ~/.config/fluidity/agent.yaml
 | deploy-server.sh | status | Check stack | `./deploy-server.sh status` |
 | deploy-server.sh | outputs | Show endpoints | `./deploy-server.sh outputs` |
 | deploy-server.sh | delete | Remove stack | `./deploy-server.sh delete` |
-| deploy-agent.sh | deploy | Build + install | `./deploy-agent.sh deploy --server-ip X` |
+| deploy-agent.sh | deploy | Build + install | `./deploy-agent.sh deploy` |
 | deploy-agent.sh | status | Check install | `./deploy-agent.sh status` |
 | deploy-agent.sh | uninstall | Remove agent | `./deploy-agent.sh uninstall` |
 
@@ -528,7 +527,6 @@ cat ~/.config/fluidity/agent.yaml
 | `--vpc-id` | `--vpc-id vpc-123` | Specify VPC ID |
 | `--public-subnets` | `--public-subnets sub-1,sub-2` | Specify subnets |
 | `--allowed-cidr` | `--allowed-cidr 203.0.113.45/32` | Specify ingress CIDR |
-| `--server-ip` | `--server-ip 192.168.1.100` | Specify server IP |
 | `--local-proxy-port` | `--local-proxy-port 9000` | Specify proxy port |
 | `--cert-path` | `--cert-path ./certs/client.crt` | Specify certificate |
 | `--key-path` | `--key-path ./certs/client.key` | Specify key |
@@ -559,7 +557,6 @@ bash scripts/deploy-fluidity.sh deploy \
   --vpc-id vpc-12345678 \
   --public-subnets subnet-11111111,subnet-22222222 \
   --allowed-cidr 203.0.113.45/32 \
-  --server-ip 203.0.113.50 \
   --local-proxy-port 8080
 ```
 
@@ -588,7 +585,7 @@ $SERVER_IP = "203.0.113.42"
 
 **Step 3: Deploy agent with server**
 ```powershell
-wsl bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
+wsl bash scripts/deploy-fluidity.sh deploy-agent
 ```
 
 **macOS/Linux:**
@@ -606,24 +603,24 @@ SERVER_IP=203.0.113.42
 
 **Step 3: Deploy agent with server**
 ```bash
-bash scripts/deploy-fluidity.sh deploy-agent --server-ip $SERVER_IP
+bash scripts/deploy-fluidity.sh deploy-agent
 ```
 
 ### Manual Server IP Deployment
 
-If server IP changes or Fargate task restarts:
+Manual recovery: To recover from a server restart or IP change, re-run the orchestrator (deploy-fluidity.sh deploy) so the agent receives fresh lifecycle endpoint configuration and will start a new server on next start.
 
 **Windows PowerShell:**
 ```powershell
-wsl bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
+wsl bash scripts/deploy-fluidity.sh deploy
 ```
 
 **macOS/Linux:**
 ```bash
-bash scripts/deploy-fluidity.sh deploy-agent --server-ip 198.51.100.99
+bash scripts/deploy-fluidity.sh deploy
 ```
 
-Configuration updates automatically.
+Configuration updates automatically via the orchestrator.
 
 ### Custom Installation Path
 
@@ -784,16 +781,16 @@ macOS/Linux:
 
 Windows (PowerShell with WSL):
 ```powershell
-wsl bash scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
+wsl bash scripts/deploy-agent.sh deploy
 # Or if using orchestrator:
-wsl bash scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
+wsl bash scripts/deploy-fluidity.sh deploy
 ```
 
 macOS/Linux:
 ```bash
-sudo -E bash scripts/deploy-agent.sh deploy --server-ip 192.168.1.100
+sudo -E bash scripts/deploy-agent.sh deploy
 # Or if using orchestrator:
-bash scripts/deploy-fluidity.sh deploy --server-ip 192.168.1.100
+bash scripts/deploy-fluidity.sh deploy
 ```
 
 **"Failed to get AWS parameters"**

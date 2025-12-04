@@ -29,7 +29,6 @@
 #   status      Show deployment status
 #
 # OPTIONS:
-#   --server-ip <ip>           Server IP address
 #   --server-port <port>       Server port (default: 8443)
 #   --local-proxy-port <port>  Agent listening port (default: 8080)
 #   --wake-endpoint <url>      Wake Lambda Function URL
@@ -47,13 +46,13 @@
 #   -h, --help                 Show this help message
 #
 # EXAMPLES:
-#   ./deploy-agent.sh deploy --server-ip 192.168.1.100 --server-port 8443 --local-proxy-port 8080
-#   ./deploy-agent.sh deploy --server-ip 192.168.1.100 --wake-endpoint <url> --kill-endpoint <url>
+#   ./deploy-agent.sh deploy --server-port 8443 --local-proxy-port 8080
+#   ./deploy-agent.sh deploy --wake-endpoint <url> --kill-endpoint <url>
 #   ./deploy-agent.sh status
 #   ./deploy-agent.sh uninstall
 #
 # After deployment, run the agent with:
-#   fluidity --server-ip 192.168.1.100
+#   fluidity
 #
 ###############################################################################
 
@@ -255,10 +254,6 @@ parse_arguments() {
     shift || true
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --server-ip)
-                SERVER_IP="$2"
-                shift 2
-                ;;
             --server-port)
                 SERVER_PORT="$2"
                 shift 2
@@ -532,10 +527,6 @@ update_config_file() {
     cp "$CONFIG_FILE" "$temp_file" 2>/dev/null || touch "$temp_file"
     
     # Update each value if provided
-    if [[ -n "$SERVER_IP" ]]; then
-        sed -i "s/^server_ip:.*/server_ip: \"$SERVER_IP\"/" "$temp_file" || echo "server_ip: \"$SERVER_IP\"" >> "$temp_file"
-        updated=true
-    fi
     
     if [[ -n "$SERVER_PORT" && "$SERVER_PORT" != "8443" ]]; then
         sed -i "s/^server_port:.*/server_port: $SERVER_PORT/" "$temp_file" || echo "server_port: $SERVER_PORT" >> "$temp_file"
@@ -573,15 +564,7 @@ update_config_file() {
 validate_config() {
     log_substep "Validating Configuration"
     
-    # Server IP is optional - can be obtained from wake function or added manually later
-    if [[ -z "$SERVER_IP" ]]; then
-        log_warn "Server IP not configured"
-        log_warn "The agent can obtain it by calling the wake function"
-        log_warn "Or add it manually to: $CONFIG_FILE"
-    else
-        log_info "Server IP configured: $SERVER_IP"
-    fi
-    
+    # Server IP is not provided via CLI anymore. Agent starts a server via lifecycle at runtime.
     log_success "Configuration is valid"
 }
 

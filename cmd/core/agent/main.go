@@ -22,14 +22,12 @@ import (
 
 var (
 	configFile string
-	serverIP   string
 	serverPort int
 	proxyPort  int
 	logLevel   string
 	certFile   string
 	keyFile    string
 	caCertFile string
-	saveConfig bool
 )
 
 // getConfigValue returns the first non-empty value
@@ -55,14 +53,12 @@ func main() {
 	}
 
 	rootCmd.Flags().StringVarP(&configFile, "config", "c", "", "Configuration file path")
-	rootCmd.Flags().StringVar(&serverIP, "server-ip", "", "Tunnel server IP address")
 	rootCmd.Flags().IntVar(&serverPort, "server-port", 0, "Tunnel server port")
 	rootCmd.Flags().IntVar(&proxyPort, "proxy-port", 0, "Local proxy port")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level (debug, info, warn, error)")
 	rootCmd.Flags().StringVar(&certFile, "cert", "", "Client certificate file")
 	rootCmd.Flags().StringVar(&keyFile, "key", "", "Client private key file")
 	rootCmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
-	rootCmd.Flags().BoolVar(&saveConfig, "save", false, "Persist supplied overrides back to the configuration file")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -76,9 +72,6 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 	// Build configuration overrides from CLI flags
 	overrides := make(map[string]interface{})
-	if serverIP != "" {
-		overrides["server_ip"] = serverIP
-	}
 	if serverPort != 0 {
 		overrides["server_port"] = serverPort
 	}
@@ -111,13 +104,14 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	// Track if auto-discovery was performed (which already wakes the service)
 	autoDiscovered := false
 	var lifecycleClient *lifecycle.Client
+	var lifecycleConfig *lifecycle.Config
 
-	// Auto-discover server IP if not provided
-	if cfg.ServerIP == "" {
-		logger.Info("Server IP not configured, attempting auto-discovery via wake endpoint")
+	// Start server via lifecycle on every agent start
+	{
+		logger.Info("Starting server via lifecycle wake/query")
 
 		// Load lifecycle configuration from agent config file
-		lifecycleConfig := &lifecycle.Config{
+		lifecycleConfig = &lifecycle.Config{
 			WakeEndpoint:            cfg.WakeEndpoint,
 			QueryEndpoint:           cfg.QueryEndpoint,
 			KillEndpoint:            cfg.KillEndpoint,
@@ -134,12 +128,12 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 		// Lifecycle is disabled if endpoints are not configured
 		if lifecycleConfig.WakeEndpoint == "" {
-			return fmt.Errorf("server IP address is required (use --server-ip or config file) or configure WAKE_ENDPOINT for auto-discovery")
+			return fmt.Errorf("lifecycle wake endpoint (WAKE_ENDPOINT) is required in configuration")
 		}
 
 		if err := lifecycleConfig.Validate(); err != nil {
 			logger.Warn("Lifecycle configuration validation failed", "error", err.Error())
-			return fmt.Errorf("server IP address is required (use --server-ip or config file) or fix lifecycle configuration")
+			return fmt.Errorf("lifecycle configuration invalid: fix WAKE/QUERY/KILL endpoints or credentials")
 		}
 
 		// Create lifecycle client
@@ -156,44 +150,26 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to auto-discover server IP: %w", err)
 		}
 
-		logger.Info("Auto-discovered server IP", "server_ip", cfg.ServerIP)
+		logger.Info("Started server via lifecycle", "server_ip", cfg.ServerIP)
 		autoDiscovered = true
-
-		// Persist the discovered IP to config file
-		if configFile != "" {
-			if err := config.SaveConfig(configFile, cfg); err != nil {
-				logger.Warn("Failed to persist discovered server IP to config file", "error", err.Error())
-			} else {
-				logger.Info("Persisted discovered server IP to config file", "file", configFile)
-			}
-		}
 	}
+
+	// Ensure lifecycle Kill is attempted on exit or error
+	defer func() {
+		if lifecycleClient != nil {
+			logger.Info("Ensuring lifecycle Kill on exit")
+			killCtx, killCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if kerr := lifecycleClient.Kill(killCtx); kerr != nil {
+				logger.Warn("Failed to kill ECS service", "error", kerr.Error())
+			}
+			killCancel()
+		}
+	}()
 
 	logger.Info("Starting Fluidity tunnel agent",
 		"server", cfg.GetServerAddress(),
 		"proxy_port", cfg.LocalProxyPort,
 		"log_level", cfg.LogLevel)
-
-	// Validate required configuration (after auto-discovery)
-	if cfg.ServerIP == "" {
-		return fmt.Errorf("server IP address is required (use --server-ip or config file)")
-	}
-
-	// Persist merged configuration only if --save specified
-	if saveConfig {
-		// Save in same directory as binary
-		exePath, err := os.Executable()
-		if err != nil {
-			logger.Warn("Failed to determine binary location", "error", err.Error())
-		} else {
-			finalPath := filepath.Join(filepath.Dir(exePath), "agent.yaml")
-			if err := config.SaveConfig(finalPath, cfg); err != nil {
-				logger.Warn("Failed to persist configuration", "file", finalPath, "error", err.Error())
-			} else {
-				logger.Info("Configuration saved", "file", finalPath)
-			}
-		}
-	}
 
 	// Load TLS configuration (with Secrets Manager support if enabled)
 	var tlsConfig *tls.Config
@@ -232,43 +208,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		"key_file", cfg.KeyFile,
 		"ca_file", cfg.CACertFile)
 
-	// Load lifecycle configuration from agent config file
-	lifecycleConfig := &lifecycle.Config{
-		WakeEndpoint:            cfg.WakeEndpoint,
-		QueryEndpoint:           cfg.QueryEndpoint,
-		KillEndpoint:            cfg.KillEndpoint,
-		IAMRoleARN:              cfg.IAMRoleARN,
-		AWSRegion:               cfg.AWSRegion,
-		ClusterName:             "", // Not used in current implementation
-		ServiceName:             "", // Not used in current implementation
-		ConnectionTimeout:       90 * time.Second,
-		ConnectionRetryInterval: 5 * time.Second,
-		HTTPTimeout:             30 * time.Second,
-		MaxRetries:              3,
-		Enabled:                 true,
-	}
-
-	// Lifecycle is disabled if endpoints are not configured
-	if lifecycleConfig.WakeEndpoint == "" || lifecycleConfig.QueryEndpoint == "" || lifecycleConfig.KillEndpoint == "" {
-		lifecycleConfig.Enabled = false
-	}
-
-	if err := lifecycleConfig.Validate(); err != nil {
-		logger.Warn("Lifecycle configuration validation failed", "error", err.Error())
-		lifecycleConfig.Enabled = false
-	}
-
-	// Create lifecycle client (reuse if already created during auto-discovery)
-	if lifecycleClient == nil {
-		lifecycleClient, err = lifecycle.NewClient(lifecycleConfig, logger)
-		if err != nil {
-			logger.Warn("Failed to create lifecycle client", "error", err.Error())
-		}
-	}
-
-	// If lifecycle is enabled, call Wake API before connecting
-	// Skip if auto-discovery already woke the service
-	if lifecycleClient != nil && lifecycleConfig.Enabled && !autoDiscovered {
+	// If auto-discovery didn't start service, call Wake before connecting
+	if !autoDiscovered {
 		logger.Info("Lifecycle management enabled, waking ECS service")
 		wakeCtx, wakeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		_, err := lifecycleClient.Wake(wakeCtx)
@@ -300,8 +241,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 	// Connection management goroutine
 	go func() {
-		// If lifecycle is enabled, wait for server connection after wake
-		if lifecycleClient != nil && lifecycleConfig.Enabled {
+		// Wait for server connection after wake
+		if lifecycleClient != nil {
 			logger.Info("Waiting for server connection after wake")
 			waitCtx, waitCancel := context.WithTimeout(ctx, lifecycleConfig.ConnectionTimeout)
 			err := lifecycleClient.WaitForConnection(waitCtx, func() bool {
@@ -328,55 +269,14 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			if !tunnelClient.IsConnected() {
 				logger.Info("Attempting to connect to tunnel server", "server_ip", cfg.ServerIP)
 				if err := tunnelClient.Connect(); err != nil {
-					logger.Warn("Server not available, starting new server instance for this agent",
-						"server_ip", cfg.ServerIP, "error", err.Error())
-
-					// Immediately wake a new server for this agent (one server per agent model)
-					if lifecycleClient != nil && lifecycleConfig.Enabled {
-						wakeCtx, wakeCancel := context.WithTimeout(ctx, 2*time.Minute)
-						oldIP := cfg.ServerIP
-
-						if wakeErr := lifecycleClient.WakeAndGetIP(wakeCtx, cfg); wakeErr != nil {
-							logger.Error("Failed to wake new server instance", wakeErr)
-							wakeCancel()
-							time.Sleep(10 * time.Second) // Longer backoff before retry
-							continue
-						}
-						wakeCancel()
-
-						logger.Info("Successfully started new server instance for this agent",
-							"old_ip", oldIP, "new_ip", cfg.ServerIP)
-
-						// Update tunnel client with new server address
-						newServerAddr := cfg.GetServerAddress()
-						tunnelClient.UpdateServerAddress(newServerAddr)
-						logger.Info("Updated tunnel client with new server address", "address", newServerAddr)
-
-						// Persist the new server IP to config file
-						if configFile != "" {
-							if saveErr := config.SaveConfig(configFile, cfg); saveErr != nil {
-								logger.Warn("Failed to persist new server IP to config file", "error", saveErr.Error())
-							} else {
-								logger.Info("Persisted new server IP to config file", "file", configFile)
-							}
-						}
-
-						// Now try to connect to the new server
-						logger.Info("Attempting to connect to new server instance")
-						if connectErr := tunnelClient.Connect(); connectErr != nil {
-							logger.Error("Failed to connect to new server instance", connectErr)
-							time.Sleep(5 * time.Second)
-							continue
-						}
-
-						logger.Info("Successfully connected to new server instance", "server_ip", cfg.ServerIP)
-					} else {
-						logger.Error("Lifecycle management not enabled, cannot start new server", fmt.Errorf("lifecycle disabled"))
-						time.Sleep(30 * time.Second) // Long backoff when no lifecycle management
-						continue
-					}
+					// Do not attempt to start a new server here — the server was started at agent startup.
+					logger.Error("Failed to connect to tunnel server, exiting", err)
+					// cancel context and notify main loop to perform shutdown and lifecycle kill
+					cancel()
+					// notify main waiter
+					sigChan <- syscall.SIGTERM
+					return
 				}
-
 				// Successful connection
 				logger.Info("Successfully connected to tunnel server", "server_ip", cfg.ServerIP)
 			}
