@@ -251,6 +251,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		}
 
 		logger.Info("Successfully connected to tunnel server", "server_ip", cfg.ServerIP)
+		logger.Info("Agent ready for receiving proxy requests", "listen_addr", fmt.Sprintf("http://127.0.0.1:%d", cfg.LocalProxyPort))
 
 		// Wait for disconnection or shutdown
 		select {
