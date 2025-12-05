@@ -19,22 +19,24 @@ import (
 	"github.com/sirupsen/logrus"
 ) // Client manages the tunnel connection to server
 type Client struct {
-	config      *tls.Config
-	serverAddr  string
-	conn        *tls.Conn
-	mu          sync.RWMutex
-	requests    map[string]chan *protocol.Response
-	connectCh   map[string]chan *protocol.ConnectData
-	connectAcks map[string]chan *protocol.ConnectAck
-	wsCh        map[string]chan *protocol.WebSocketMessage
-	wsAcks      map[string]chan *protocol.WebSocketAck
-	logger      *logging.Logger
-	ctx         context.Context
-	cancel      context.CancelFunc
-	connected   bool
-	reconnectCh chan bool
-	awsConfig   aws.Config
-	signer      *v4.Signer
+	config              *tls.Config
+	serverAddr          string
+	conn                *tls.Conn
+	mu                  sync.RWMutex
+	requests            map[string]chan *protocol.Response
+	connectCh           map[string]chan *protocol.ConnectData
+	connectAcks         map[string]chan *protocol.ConnectAck
+	wsCh                map[string]chan *protocol.WebSocketMessage
+	wsAcks              map[string]chan *protocol.WebSocketAck
+	iamAuthResponseCh   chan *protocol.IAMAuthResponse
+	iamAuthRequestID    string
+	logger              *logging.Logger
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	connected           bool
+	reconnectCh         chan bool
+	awsConfig           aws.Config
+	signer              *v4.Signer
 }
 
 // NewClient creates a new tunnel client
@@ -268,6 +270,22 @@ func (c *Client) handleResponses() {
 
 		c.logger.Debug("Received envelope", "type", env.Type)
 
+		// Validate message type
+		validTypes := map[string]bool{
+			"http_response":     true,
+			"connect_ack":       true,
+			"connect_data":      true,
+			"connect_close":     true,
+			"ws_ack":            true,
+			"ws_message":        true,
+			"ws_close":          true,
+			"iam_auth_response": true,
+		}
+		if !validTypes[env.Type] {
+			c.logger.Warn("Received unknown message type, ignoring", "type", env.Type)
+			continue
+		}
+
 		switch env.Type {
 		case "http_response":
 			// Parse payload as Response
@@ -409,10 +427,21 @@ func (c *Client) handleResponses() {
 				c.logger.Error("Failed to parse iam_auth_response", err)
 				continue
 			}
-			if resp.Ok {
-				c.logger.Info("IAM authentication approved by server")
+			c.mu.RLock()
+			respCh := c.iamAuthResponseCh
+			c.mu.RUnlock()
+			if respCh != nil {
+				select {
+				case respCh <- &resp:
+				case <-time.After(1 * time.Second):
+					c.logger.Warn("IAM auth response channel blocked", "id", resp.ID)
+				}
 			} else {
-				c.logger.Warn("IAM authentication denied by server", "error", resp.Error)
+				if resp.Ok {
+					c.logger.Debug("Received IAM authentication approval")
+				} else {
+					c.logger.Warn("IAM authentication denied", "error", resp.Error)
+				}
 			}
 
 		default:
@@ -614,30 +643,31 @@ func (c *Client) WebSocketMessageChannel(id string) <-chan *protocol.WebSocketMe
 func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	// Skip IAM auth if AWS config not loaded (test mode)
 	if c.awsConfig.Region == "" || c.signer == nil {
-		c.logger.Info("AWS config not loaded, skipping IAM authentication")
+		c.logger.Debug("AWS config not loaded, skipping IAM authentication")
 		return nil
 	}
 
 	// Check if AWS credentials are available (skip IAM auth if not configured)
 	creds, err := c.awsConfig.Credentials.Retrieve(ctx)
 	if err != nil {
-		c.logger.Info("AWS credentials not available, skipping IAM authentication", "error", err)
+		c.logger.Debug("AWS credentials not available, skipping IAM authentication", "error", err)
 		return nil
 	}
 	if creds.AccessKeyID == "" {
-		c.logger.Info("AWS credentials not configured, skipping IAM authentication")
+		c.logger.Debug("AWS credentials not configured, skipping IAM authentication")
 		return nil
 	}
 
 	c.logger.Info("Performing IAM authentication")
 
 	// Create IAM auth request
+	authReqID := protocol.GenerateID()
 	authReq := protocol.IAMAuthRequest{
-		ID:            protocol.GenerateID(),
+		ID:            authReqID,
 		Timestamp:     time.Now(),
 		Service:       "tunnel",
 		Region:        c.awsConfig.Region,
-		AccessKeyID:   "", // Will be filled from credentials
+		AccessKeyID:   creds.AccessKeyID,
 		Signature:     "",
 		SignedHeaders: "",
 	}
@@ -645,26 +675,28 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	// Create a dummy request for signing
 	dummyReq, err := http.NewRequest("POST", fmt.Sprintf("https://fluidity-server.%s.amazonaws.com/auth", c.awsConfig.Region), nil)
 	if err != nil {
+		c.logger.Error("Failed to create IAM auth signing request", err)
 		return fmt.Errorf("failed to create dummy request: %w", err)
 	}
-
-	// Retrieve credentials
-	creds, err = c.awsConfig.Credentials.Retrieve(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve AWS credentials: %w", err)
-	}
-
-	authReq.AccessKeyID = creds.AccessKeyID
 
 	// Sign the request
 	err = c.signer.SignHTTP(ctx, creds, dummyReq, "", "execute-api", c.awsConfig.Region, time.Now())
 	if err != nil {
+		c.logger.Error("Failed to sign IAM auth request", err)
 		return fmt.Errorf("failed to sign auth request: %w", err)
 	}
 
 	// Extract signature components
 	authReq.Signature = dummyReq.Header.Get("Authorization")
 	authReq.SignedHeaders = dummyReq.Header.Get("X-Amz-SignedHeaders")
+
+	// Create channel for IAM auth response
+	respChan := make(chan *protocol.IAMAuthResponse, 1)
+	c.mu.Lock()
+	// Store response channel temporarily (will be picked up by handleResponses)
+	c.iamAuthResponseCh = respChan
+	c.iamAuthRequestID = authReqID
+	c.mu.Unlock()
 
 	// Send auth request over tunnel
 	envelope := protocol.Envelope{
@@ -675,17 +707,32 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	c.mu.RLock()
 	if !c.connected || c.conn == nil {
 		c.mu.RUnlock()
+		c.logger.Error("Failed to send IAM auth request", fmt.Errorf("not connected to server"))
 		return fmt.Errorf("not connected to server")
 	}
 	conn := c.conn
 	c.mu.RUnlock()
 
+	c.logger.Debug("Sending IAM authentication request", "id", authReqID)
 	if err := json.NewEncoder(conn).Encode(envelope); err != nil {
+		c.logger.Error("Failed to encode and send IAM auth request", err)
 		return fmt.Errorf("failed to send IAM auth request: %w", err)
 	}
 
-	// IAM auth response will be processed asynchronously by handleResponses
-	// We don't block here - just log and continue
-	c.logger.Info("IAM authentication request sent, response will be processed asynchronously")
-	return nil
+	// Wait for IAM auth response with timeout
+	select {
+	case resp := <-respChan:
+		if resp.Ok {
+			c.logger.Info("IAM authentication approved by server")
+			return nil
+		}
+		c.logger.Error("IAM authentication denied by server", fmt.Errorf(resp.Error))
+		return fmt.Errorf("IAM authentication denied: %s", resp.Error)
+	case <-time.After(30 * time.Second):
+		c.logger.Error("IAM authentication timeout", fmt.Errorf("no response from server after 30s"))
+		return fmt.Errorf("IAM authentication timeout: no response from server after 30 seconds")
+	case <-ctx.Done():
+		c.logger.Error("IAM authentication cancelled", fmt.Errorf("context cancelled"))
+		return fmt.Errorf("IAM authentication cancelled")
+	}
 }

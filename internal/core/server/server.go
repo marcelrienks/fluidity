@@ -288,6 +288,21 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 			break
 		}
 
+		// Validate message type
+		validTypes := map[string]bool{
+			"http_request":  true,
+			"connect_open":  true,
+			"connect_data":  true,
+			"connect_close": true,
+			"ws_open":       true,
+			"ws_message":    true,
+			"ws_close":      true,
+		}
+		if !validTypes[env.Type] {
+			s.logger.Warn("Received unknown message type from client, ignoring", "type", env.Type)
+			continue
+		}
+
 		switch env.Type {
 		case "http_request":
 			m, _ := env.Payload.(map[string]any)
@@ -801,23 +816,49 @@ func (s *Server) performIAMAuthentication(decoder *json.Decoder, encoder *json.E
 	// Read the IAM auth request
 	var env protocol.Envelope
 	if err := decoder.Decode(&env); err != nil {
+		s.logger.Error("Failed to read IAM auth request envelope", err)
 		return fmt.Errorf("failed to read IAM auth request: %w", err)
 	}
 
 	if env.Type != "iam_auth_request" {
+		s.logger.Error("Invalid envelope type during IAM auth", fmt.Errorf("expected iam_auth_request, got %s", env.Type))
 		return fmt.Errorf("expected iam_auth_request, got %s", env.Type)
 	}
 
-	authReq, ok := env.Payload.(protocol.IAMAuthRequest)
-	if !ok {
-		return fmt.Errorf("invalid IAM auth request format")
+	// Parse payload
+	payloadBytes, err := json.Marshal(env.Payload)
+	if err != nil {
+		s.logger.Error("Failed to marshal IAM auth request payload", err)
+		return fmt.Errorf("failed to marshal IAM auth request payload: %w", err)
 	}
 
-	s.logger.Info("Processing IAM authentication request", "client", authReq.AccessKeyID)
+	var authReq protocol.IAMAuthRequest
+	if err := json.Unmarshal(payloadBytes, &authReq); err != nil {
+		s.logger.Error("Failed to unmarshal IAM auth request", err)
+		return fmt.Errorf("failed to parse IAM auth request: %w", err)
+	}
+
+	if authReq.ID == "" {
+		s.logger.Error("Missing IAM auth request ID", nil)
+		return fmt.Errorf("missing IAM auth request ID")
+	}
+	if authReq.AccessKeyID == "" {
+		s.logger.Error("Missing AccessKeyID in IAM auth request", nil)
+		return fmt.Errorf("missing AccessKeyID in IAM auth request")
+	}
+	if authReq.Signature == "" {
+		s.logger.Error("Missing signature in IAM auth request", nil)
+		return fmt.Errorf("missing signature in IAM auth request")
+	}
+
+	s.logger.Info("Processing IAM authentication request", "request_id", authReq.ID, "access_key_id", authReq.AccessKeyID)
 
 	// For now, accept all IAM authentication requests
-	// In production, you would validate the SigV4 signature here
-	// This requires implementing SigV4 verification logic
+	// In production, you would validate the SigV4 signature here:
+	// 1. Reconstruct the signed request from components
+	// 2. Verify SigV4 signature using AWS SDK
+	// 3. Check timestamp is within 5-minute window (prevent replay attacks)
+	// 4. Verify AccessKeyID matches authorized agent user
 
 	authResp := protocol.IAMAuthResponse{
 		ID: authReq.ID,
@@ -825,14 +866,16 @@ func (s *Server) performIAMAuthentication(decoder *json.Decoder, encoder *json.E
 	}
 
 	// Send response
-	err := encoder.Encode(protocol.Envelope{
+	respEnv := protocol.Envelope{
 		Type:    "iam_auth_response",
 		Payload: authResp,
-	})
-	if err != nil {
+	}
+	
+	if err := encoder.Encode(respEnv); err != nil {
+		s.logger.Error("Failed to send IAM auth response", err)
 		return fmt.Errorf("failed to send IAM auth response: %w", err)
 	}
 
-	s.logger.Info("IAM authentication successful", "client", authReq.AccessKeyID)
+	s.logger.Info("IAM authentication successful", "request_id", authReq.ID, "access_key_id", authReq.AccessKeyID)
 	return nil
 }
