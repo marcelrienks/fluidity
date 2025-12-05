@@ -130,6 +130,10 @@ log_debug() {
     fi
 }
 
+log_warn() {
+    echo -e "${PALE_YELLOW}[WARN] $*${RESET}" >&2
+}
+
 # ============================================================================
 # HELP & VALIDATION
 # ============================================================================
@@ -274,7 +278,9 @@ check_prerequisites() {
     }
 
     # Check Docker daemon and attempt to start if not running
+    log_debug "Checking Docker daemon accessibility..."
     if ! docker ps &>/dev/null 2>&1; then
+        log_debug "docker ps failed with exit code: $?"
         log_info "Docker daemon is not accessible, attempting to start..."
         
         # Detect OS and attempt to start Docker
@@ -287,13 +293,24 @@ check_prerequisites() {
                 ps_exe="powershell.exe"  # Fallback if path doesn't exist
             fi
             # Start Docker Desktop silently in background
-            if ! "$ps_exe" -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe' -WindowStyle Hidden"; then
-                log_error "Failed to start Docker Desktop via PowerShell"
-                exit 1
+            log_debug "Attempting to start Docker Desktop via PowerShell..."
+            if "$ps_exe" -Command "Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe' -WindowStyle Hidden" 2>/dev/null; then
+                log_info "Docker Desktop startup command sent successfully"
+            else
+                log_warn "PowerShell command failed, trying alternative Docker Desktop paths..."
+                # Try alternative installation paths
+                if "$ps_exe" -Command "Start-Process 'C:\Program Files\Docker\Docker Desktop.exe' -WindowStyle Hidden" 2>/dev/null; then
+                    log_info "Docker Desktop started from alternative path"
+                elif "$ps_exe" -Command "Start-Process 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Docker\Docker Desktop.lnk' -WindowStyle Hidden" 2>/dev/null; then
+                    log_info "Docker Desktop started from Start Menu"
+                else
+                    log_error "Failed to start Docker Desktop via all known methods"
+                    echo "Please start Docker Desktop manually and ensure WSL integration is enabled"
+                    exit 1
+                fi
             fi
-            log_info "Docker Desktop startup command sent"
-            log_info "Giving Docker Desktop time to initialize..."
-            sleep 10
+            log_info "Waiting for Docker Desktop to initialize..."
+            sleep 20
         elif [[ "$(uname -s)" == "Darwin" ]]; then
             # macOS
             log_info "macOS detected - attempting to start Docker Desktop"
@@ -322,6 +339,7 @@ check_prerequisites() {
         
         # Wait for Docker daemon to become available (extended timeout for Windows)
         log_info "Waiting for Docker daemon to start (up to 180 seconds)..."
+        log_info "This may take several minutes if Docker Desktop needs to start..."
         (
             local wait_time=0
             local max_wait=${FLUIDITY_DOCKER_WAIT_SECS:-180}

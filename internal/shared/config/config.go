@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,9 +20,13 @@ func LoadConfig[T any](configFile string, overrides map[string]interface{}) (*T,
 
 	// Try to load config file if path is provided
 	if configFile != "" {
-		v.SetConfigFile(configFile)
-		if err := v.ReadInConfig(); err != nil {
+		configData, err := os.ReadFile(configFile)
+		if err != nil {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
+		}
+		v.SetConfigType("yaml")
+		if err := v.ReadConfig(bytes.NewReader(configData)); err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
 		}
 	} else {
 		// No config file specified - check if one exists in installation directory
@@ -31,9 +36,13 @@ func LoadConfig[T any](configFile string, overrides map[string]interface{}) (*T,
 			configPath := filepath.Join(exeDir, "agent.yaml")
 			if _, err := os.Stat(configPath); err == nil {
 				// Config file exists, try to read it
-				v.SetConfigFile(configPath)
-				if err := v.ReadInConfig(); err != nil {
+				configData, err := os.ReadFile(configPath)
+				if err != nil {
 					return nil, fmt.Errorf("failed to read config file: %w", err)
+				}
+				v.SetConfigType("yaml")
+				if err := v.ReadConfig(bytes.NewReader(configData)); err != nil {
+					return nil, fmt.Errorf("failed to parse config file: %w", err)
 				}
 			}
 			// If config file doesn't exist, just use defaults

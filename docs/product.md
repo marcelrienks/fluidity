@@ -1,84 +1,51 @@
-# Product Requirements
+# Product
+
+Fluidity is a secure HTTP/HTTPS/WebSocket tunnel for restrictive firewall environments using mTLS authentication.
 
 ## Overview
 
-Fluidity is an HTTP/HTTPS/WebSocket tunnel that bypasses restrictive corporate firewalls using mTLS authentication between a local agent and cloud-hosted server.
+Enable applications behind restrictive firewalls to access external services through a secure, on-demand tunnel infrastructure.
 
-## Target Users
+## Use Cases
 
-- Developers behind restrictive corporate firewalls
-- Remote workers accessing blocked services
-- Users needing secure outbound access
+- Developers behind corporate firewalls accessing blocked services
+- Remote workers needing secure outbound access
+- Applications requiring tunneled HTTP/HTTPS/WebSocket traffic
 
-## Core Requirements
+## Core Features
 
-### Functional
+- **HTTP/HTTPS Tunneling**: All methods, headers, body, large payloads
+- **WebSocket Support**: Bidirectional, concurrent connections, keepalive
+- **Security**: mTLS (TLS 1.3), private CA, no plaintext
+- **Reliability**: Auto-reconnect, circuit breaker, exponential backoff
+- **Deployment**: Local, Docker (~44MB), AWS Fargate
+- **Lifecycle**: Agent auto-starts server on startup, auto-scales down when idle
+- **Cost Efficient**: Pay only for server runtime
 
-1. **HTTP/HTTPS Tunneling**
-   - Support all HTTP methods (GET, POST, PUT, DELETE, etc.)
-   - Handle HTTPS via CONNECT method
-   - Preserve headers and body
-   - Support large payloads
+## Technical Stack
 
-2. **WebSocket Support**
-   - Bidirectional communication
-   - Multiple concurrent connections
-   - Ping/pong keepalive
+- **Language**: Go 1.23+
+- **Container**: Alpine Docker (~44MB)
+- **Cloud**: AWS (ECS Fargate, Lambda, CloudWatch)
+- **Security**: mTLS with private CA
 
-3. **Security**
-   - mTLS authentication (TLS 1.3)
-   - Private CA for certificate management
-   - No plaintext transmission
-   - Client certificate validation
+## Constraints
 
-4. **Reliability**
-   - Auto-reconnection on connection loss
-   - Circuit breaker for target failures
-   - Retry logic with exponential backoff
-   - Graceful shutdown
-
-5. **Deployment**
-   - Cross-platform (Windows/macOS/Linux)
-   - Docker containers (~44MB)
-   - AWS Fargate deployment
-
-6. **Lifecycle Management** (Phase 2)
-   - Auto-start server on agent startup
-   - Auto-scale down when idle
-   - Scheduled shutdown
-
-### Non-Functional
-
-1. **Performance**
-   - Minimal latency overhead
-   - Support 100+ concurrent connections
-   - Resource-efficient (<100MB memory)
-
-2. **Usability**
-   - Simple configuration (YAML)
-   - Easy certificate generation
-   - Automated testing scripts
-   - Clear documentation
-
-
+- Cross-platform: Windows (WSL), macOS, Linux
+- Server lifecycle: Ephemeral, one per agent
+- Discovery: Dynamic via Lambda endpoints
+- Failure semantics: Agent exits on connection failure
+- Deployment order: Server/Lambda first, then agent
 
 ## Success Metrics
 
 - Successfully tunnel HTTP/HTTPS/WebSocket traffic
-- <500ms average latency overhead
-- 99%+ uptime for cloud deployment
+- <500ms latency overhead
+- 99%+ uptime (cloud deployment)
 - <10 minutes setup time
+- Server discovery within 30 seconds
+- Cost-effective idle scaling
 
-## Out of Scope
+---
 
-- GUI/Desktop application
-- Browser extension
-- Mobile clients
-- Multi-tenant support
-- Commercial support
-
-## Related Documentation
-
-- [Architecture](architecture.md) - System design
-- [Plan](plan.md) - Development roadmap
-- [Deployment Guide](deployment.md) - Setup
+See [Architecture](architecture.md) for technical design | [Deployment](deployment.md) for setup

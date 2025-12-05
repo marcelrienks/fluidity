@@ -29,10 +29,10 @@
 #   status      Show deployment status
 #
 # OPTIONS:
-#   --server-ip <ip>           Server IP address
 #   --server-port <port>       Server port (default: 8443)
 #   --local-proxy-port <port>  Agent listening port (default: 8080)
 #   --wake-endpoint <url>      Wake Lambda Function URL
+#   --query-endpoint <url>     Query Lambda Function URL
 #   --kill-endpoint <url>      Kill Lambda Function URL
 #   --cert-path <path>         Path to client certificate
 #   --key-path <path>          Path to client private key
@@ -42,17 +42,20 @@
 #   --secret-access-key <key>  AWS secret access key
 #   --install-path <path>      Custom installation path (optional)
 #   --log-level <level>        Log level (info/debug/error, default: info)
+#   --preserve-config          Do not overwrite existing config file (for redeploying binary updates)
+#                              When used, all other config arguments become optional
 #   --debug                    Enable debug logging
 #   -h, --help                 Show this help message
 #
 # EXAMPLES:
-#   ./deploy-agent.sh deploy --server-ip 192.168.1.100 --server-port 8443 --local-proxy-port 8080
-#   ./deploy-agent.sh deploy --server-ip 192.168.1.100 --wake-endpoint <url> --kill-endpoint <url>
+#   ./deploy-agent.sh deploy --server-port 8443 --local-proxy-port 8080
+#   ./deploy-agent.sh deploy --wake-endpoint <url> --kill-endpoint <url>
+#   ./deploy-agent.sh deploy --preserve-config --skip-build  # Redeploy binary only (config preserved)
 #   ./deploy-agent.sh status
 #   ./deploy-agent.sh uninstall
 #
 # After deployment, run the agent with:
-#   fluidity --server-ip 192.168.1.100
+#   fluidity
 #
 ###############################################################################
 
@@ -73,6 +76,7 @@ SERVER_IP=""
 SERVER_PORT="8443"
 LOCAL_PROXY_PORT="8080"
 WAKE_ENDPOINT=""
+QUERY_ENDPOINT=""
 KILL_ENDPOINT=""
 CERT_PATH=""
 KEY_PATH=""
@@ -82,12 +86,14 @@ LOG_LEVEL="info"
 AGENT_IAM_ROLE_ARN=""
 AGENT_ACCESS_KEY_ID=""
 AGENT_SECRET_ACCESS_KEY=""
+REGION=""
 INSTALL_PATH=""
 CONFIG_FILE=""
 
 # Feature Flags
 DEBUG=false
 SKIP_BUILD=false
+PRESERVE_CONFIG=false
 
 # Detect OS and set defaults
 # Check if running in WSL
@@ -223,9 +229,20 @@ wsl_to_windows_path() {
     fi
 }
 
-check_sudo() {
-    # Sudo no longer required - using user-based installation paths
-    return 0
+
+
+detect_region() {
+    if [[ -z "$REGION" ]]; then
+        if REGION=$(aws configure get region 2>/dev/null); then
+            [[ -n "$REGION" ]] && log_info "Region auto-detected: $REGION" || {
+                log_warn "Region could not be auto-detected from AWS config"
+                REGION=""
+            }
+        else
+            log_warn "AWS CLI not available or not configured"
+            REGION=""
+        fi
+    fi
 }
 
 # ============================================================================
@@ -241,10 +258,6 @@ parse_arguments() {
     shift || true
     while [[ $# -gt 0 ]]; do
         case $1 in
-            --server-ip)
-                SERVER_IP="$2"
-                shift 2
-                ;;
             --server-port)
                 SERVER_PORT="$2"
                 shift 2
@@ -253,14 +266,18 @@ parse_arguments() {
                 LOCAL_PROXY_PORT="$2"
                 shift 2
                 ;;
-            --wake-endpoint)
-                WAKE_ENDPOINT="$2"
-                shift 2
-                ;;
-            --kill-endpoint)
-                KILL_ENDPOINT="$2"
-                shift 2
-                ;;
+             --wake-endpoint)
+                 WAKE_ENDPOINT="$2"
+                 shift 2
+                 ;;
+             --query-endpoint)
+                 QUERY_ENDPOINT="$2"
+                 shift 2
+                 ;;
+             --kill-endpoint)
+                 KILL_ENDPOINT="$2"
+                 shift 2
+                 ;;
             --cert-path)
                 CERT_PATH="$2"
                 shift 2
@@ -297,6 +314,10 @@ parse_arguments() {
                 ;;
             --skip-build)
                 SKIP_BUILD=true
+                shift
+                ;;
+            --preserve-config)
+                PRESERVE_CONFIG=true
                 shift
                 ;;
             --debug)
@@ -369,12 +390,15 @@ load_config_file() {
             local_proxy_port)
                 [[ -z "$LOCAL_PROXY_PORT" || "$LOCAL_PROXY_PORT" == "8080" ]] && LOCAL_PROXY_PORT="$value"
                 ;;
-            wake_endpoint)
-                [[ -z "$WAKE_ENDPOINT" ]] && WAKE_ENDPOINT="$value"
-                ;;
-            kill_endpoint)
-                [[ -z "$KILL_ENDPOINT" ]] && KILL_ENDPOINT="$value"
-                ;;
+             wake_endpoint)
+                 [[ -z "$WAKE_ENDPOINT" ]] && WAKE_ENDPOINT="$value"
+                 ;;
+             query_endpoint)
+                 [[ -z "$QUERY_ENDPOINT" ]] && QUERY_ENDPOINT="$value"
+                 ;;
+             kill_endpoint)
+                 [[ -z "$KILL_ENDPOINT" ]] && KILL_ENDPOINT="$value"
+                 ;;
             cert_file)
                 [[ -z "$CERT_PATH" ]] && CERT_PATH="$value"
                 ;;
@@ -414,13 +438,15 @@ local_proxy_port: $LOCAL_PROXY_PORT
 
 # Lambda endpoints (optional, for control plane integration)
 wake_endpoint: "$WAKE_ENDPOINT"
+query_endpoint: "$QUERY_ENDPOINT"
 kill_endpoint: "$KILL_ENDPOINT"
 
 # IAM Configuration (for Phase 3 IAM authentication)
+# Note: AWS credentials are resolved via AWS SDK default credential chain
+# from ~/.aws/credentials, environment variables, or IAM roles
 iam_role_arn: "$AGENT_IAM_ROLE_ARN"
 aws_region: "$REGION"
-access_key_id: "$AGENT_ACCESS_KEY_ID"
-secret_access_key: "$AGENT_SECRET_ACCESS_KEY"
+aws_profile: "fluidity"
 
 # TLS certificates
 cert_file: "$CERT_PATH"
@@ -436,6 +462,66 @@ EOF
     log_success "Configuration file created: $CONFIG_FILE"
 }
 
+# Setup AWS credentials for IAM authentication
+setup_aws_credentials() {
+    log_substep "Setting up AWS Credentials"
+
+    # Setup credentials if access keys are provided OR IAM role ARN is provided
+    if [[ -z "$AGENT_ACCESS_KEY_ID" && -z "$AGENT_SECRET_ACCESS_KEY" && -z "$AGENT_IAM_ROLE_ARN" ]]; then
+        log_info "IAM credentials not configured, skipping AWS credentials setup"
+        log_info "AWS SDK will use default credential chain (environment variables, IAM roles, or ~/.aws/credentials)"
+        return 0
+    fi
+
+    # Check if we have the access keys
+    if [[ -z "$AGENT_ACCESS_KEY_ID" || -z "$AGENT_SECRET_ACCESS_KEY" ]]; then
+        log_warn "IAM access keys not fully provided, AWS SDK will use default credential chain"
+        log_warn "Ensure credentials are available via ~/.aws/credentials, environment variables, or IAM roles"
+        return 0
+    fi
+
+    # Create AWS credentials directory if it doesn't exist
+    AWS_DIR="$HOME/.aws"
+    CREDENTIALS_FILE="$AWS_DIR/credentials"
+
+    if [[ ! -d "$AWS_DIR" ]]; then
+        mkdir -p "$AWS_DIR"
+        chmod 700 "$AWS_DIR"
+        log_info "Created AWS credentials directory: $AWS_DIR"
+    fi
+
+    # Check if fluidity profile already exists
+    if grep -q "\[fluidity\]" "$CREDENTIALS_FILE" 2>/dev/null; then
+        log_info "Fluidity profile already exists in AWS credentials"
+        # Remove existing fluidity profile and recreate it
+        # Remove existing [fluidity] profile block in a portable way (works on macOS and Linux)
+        awk 'BEGIN{in_block=0} /^\[fluidity\]$/{in_block=1; next} /^\[.*\]$/{ if(in_block==1) { in_block=0 } } { if(!in_block) print }' "$CREDENTIALS_FILE" > "$CREDENTIALS_FILE.tmp" && mv "$CREDENTIALS_FILE.tmp" "$CREDENTIALS_FILE"
+        # Remove empty lines
+        awk 'NF' "$CREDENTIALS_FILE" > "$CREDENTIALS_FILE.tmp" && mv "$CREDENTIALS_FILE.tmp" "$CREDENTIALS_FILE"
+    fi
+
+    # Add new profile (or recreate existing one)
+    {
+        echo ""
+        echo "[fluidity]"
+        echo "aws_access_key_id = $AGENT_ACCESS_KEY_ID"
+        echo "aws_secret_access_key = $AGENT_SECRET_ACCESS_KEY"
+        echo "region = $REGION"
+    } >> "$CREDENTIALS_FILE"
+    log_info "Configured fluidity profile in AWS credentials"
+
+    # Set proper permissions
+    chmod 600 "$CREDENTIALS_FILE"
+
+    # Do NOT modify the user's AWS_PROFILE environment variable.
+    # The installer creates a 'fluidity' profile in ~/.aws/credentials but will not change AWS_PROFILE.
+    # The agent configuration will explicitly reference the 'fluidity' profile when connecting to Lambda.
+    log_info "AWS credentials configured for profile: fluidity in $CREDENTIALS_FILE"
+    log_info "Installer did not change AWS_PROFILE; the agent will use the 'fluidity' profile from its configuration"
+
+    log_success "AWS credentials configured securely"
+}
+
 update_config_file() {
     log_substep "Updating Configuration File"
     
@@ -449,10 +535,6 @@ update_config_file() {
     cp "$CONFIG_FILE" "$temp_file" 2>/dev/null || touch "$temp_file"
     
     # Update each value if provided
-    if [[ -n "$SERVER_IP" ]]; then
-        sed -i "s/^server_ip:.*/server_ip: \"$SERVER_IP\"/" "$temp_file" || echo "server_ip: \"$SERVER_IP\"" >> "$temp_file"
-        updated=true
-    fi
     
     if [[ -n "$SERVER_PORT" && "$SERVER_PORT" != "8443" ]]; then
         sed -i "s/^server_port:.*/server_port: $SERVER_PORT/" "$temp_file" || echo "server_port: $SERVER_PORT" >> "$temp_file"
@@ -464,15 +546,20 @@ update_config_file() {
         updated=true
     fi
     
-    if [[ -n "$WAKE_ENDPOINT" ]]; then
-        sed -i "s|^wake_endpoint:.*|wake_endpoint: \"$WAKE_ENDPOINT\"|" "$temp_file" || echo "wake_endpoint: \"$WAKE_ENDPOINT\"" >> "$temp_file"
-        updated=true
-    fi
-    
-    if [[ -n "$KILL_ENDPOINT" ]]; then
-        sed -i "s|^kill_endpoint:.*|kill_endpoint: \"$KILL_ENDPOINT\"|" "$temp_file" || echo "kill_endpoint: \"$KILL_ENDPOINT\"" >> "$temp_file"
-        updated=true
-    fi
+     if [[ -n "$WAKE_ENDPOINT" ]]; then
+         sed -i "s|^wake_endpoint:.*|wake_endpoint: \"$WAKE_ENDPOINT\"|" "$temp_file" || echo "wake_endpoint: \"$WAKE_ENDPOINT\"" >> "$temp_file"
+         updated=true
+     fi
+
+     if [[ -n "$QUERY_ENDPOINT" ]]; then
+         sed -i "s|^query_endpoint:.*|query_endpoint: \"$QUERY_ENDPOINT\"|" "$temp_file" || echo "query_endpoint: \"$QUERY_ENDPOINT\"" >> "$temp_file"
+         updated=true
+     fi
+
+     if [[ -n "$KILL_ENDPOINT" ]]; then
+         sed -i "s|^kill_endpoint:.*|kill_endpoint: \"$KILL_ENDPOINT\"|" "$temp_file" || echo "kill_endpoint: \"$KILL_ENDPOINT\"" >> "$temp_file"
+         updated=true
+     fi
     
     if [[ "$updated" == "true" ]]; then
         mv "$temp_file" "$CONFIG_FILE"
@@ -485,15 +572,7 @@ update_config_file() {
 validate_config() {
     log_substep "Validating Configuration"
     
-    # Server IP is optional - can be obtained from wake function or added manually later
-    if [[ -z "$SERVER_IP" ]]; then
-        log_warn "Server IP not configured"
-        log_warn "The agent can obtain it by calling the wake function"
-        log_warn "Or add it manually to: $CONFIG_FILE"
-    else
-        log_info "Server IP configured: $SERVER_IP"
-    fi
-    
+    # Server IP is not provided via CLI anymore. Agent starts a server via lifecycle at runtime.
     log_success "Configuration is valid"
 }
 
@@ -796,12 +875,79 @@ install_agent() {
 }
 
 # ============================================================================
+# CERTIFICATE MANAGEMENT
+# ============================================================================
+
+copy_certificates_to_installation() {
+    log_substep "Copying Certificates to Installation Directory"
+
+    # Check if certificate paths are provided
+    if [[ -z "$CERT_PATH" || -z "$KEY_PATH" || -z "$CA_CERT_PATH" ]]; then
+        log_info "Certificate paths not provided, skipping certificate copy"
+        return 0
+    fi
+
+    # Check if certificate files exist
+    if [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" || ! -f "$CA_CERT_PATH" ]]; then
+        log_warn "Certificate files not found, skipping certificate copy"
+        log_warn "Cert: $CERT_PATH"
+        log_warn "Key: $KEY_PATH"
+        log_warn "CA: $CA_CERT_PATH"
+        return 0
+    fi
+
+    # Create certs subdirectory in installation directory
+    local certs_dir="$INSTALL_PATH/certs"
+    mkdir -p "$certs_dir"
+
+    # Copy certificates to installation directory
+    log_info "Copying certificates to: $certs_dir"
+    cp "$CERT_PATH" "$certs_dir/client.crt" || {
+        log_error_start
+        echo "Failed to copy client certificate"
+        log_error_end
+        return 1
+    }
+    cp "$KEY_PATH" "$certs_dir/client.key" || {
+        log_error_start
+        echo "Failed to copy client key"
+        log_error_end
+        return 1
+    }
+    cp "$CA_CERT_PATH" "$certs_dir/ca.crt" || {
+        log_error_start
+        echo "Failed to copy CA certificate"
+        log_error_end
+        return 1
+    }
+
+    # Set proper permissions (owner read/write only for private key)
+    chmod 644 "$certs_dir/client.crt"
+    chmod 644 "$certs_dir/ca.crt"
+    chmod 600 "$certs_dir/client.key"
+
+    # Update certificate paths to point to copied files
+    CERT_PATH="$certs_dir/client.crt"
+    KEY_PATH="$certs_dir/client.key"
+    CA_CERT_PATH="$certs_dir/ca.crt"
+
+    log_success "Certificates copied to installation directory"
+}
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 
 setup_configuration() {
     log_minor "Step 4: Configure Agent"
- 
+
+    # Check if we should preserve existing config
+    if [[ "$PRESERVE_CONFIG" == "true" && -f "$CONFIG_FILE" ]]; then
+        log_info "Preserving existing configuration: $CONFIG_FILE"
+        load_config_file
+        return
+    fi
+
     # Load existing config if available (for potential merging)
     if [[ -f "$CONFIG_FILE" ]]; then
         load_config_file
@@ -816,6 +962,9 @@ setup_configuration() {
         load_config_file
     fi
 
+    # Copy certificates to installation directory if provided
+    copy_certificates_to_installation
+
     # Always write a fresh config reflecting current CLI overrides + existing values
     mkdir -p "$INSTALL_PATH"
     cat > "$CONFIG_FILE" << EOF
@@ -827,13 +976,15 @@ server_port: ${SERVER_PORT}
 local_proxy_port: ${LOCAL_PROXY_PORT}
 
 wake_endpoint: "${WAKE_ENDPOINT}"
+query_endpoint: "${QUERY_ENDPOINT}"
 kill_endpoint: "${KILL_ENDPOINT}"
 
 # IAM Configuration (for Phase 3 IAM authentication)
+# Note: AWS credentials are resolved via AWS SDK default credential chain
+# from ~/.aws/credentials, environment variables, or IAM roles
 iam_role_arn: "${AGENT_IAM_ROLE_ARN}"
 aws_region: "${REGION}"
-access_key_id: "${AGENT_ACCESS_KEY_ID}"
-secret_access_key: "${AGENT_SECRET_ACCESS_KEY}"
+aws_profile: "fluidity"
 
 cert_file: "${CERT_PATH}"
 key_file: "${KEY_PATH}"
@@ -1005,7 +1156,7 @@ main() {
     parse_arguments "$@"
     
     # Validate installation requirements
-    check_sudo
+    detect_region
     
     log_header "Fluidity Agent Deployment"
     log_info "OS: $OS_TYPE"
@@ -1016,6 +1167,13 @@ main() {
     
     case "$ACTION" in
         deploy)
+            # When preserving config, all other arguments are optional
+            if [[ "$PRESERVE_CONFIG" == "true" ]]; then
+                log_info "Mode: Update binary with config preservation"
+                log_info "Existing configuration will not be overwritten"
+                log_info ""
+            fi
+            
             log_minor "Step 1: Check Prerequisites"
             check_prerequisites
             
@@ -1023,8 +1181,13 @@ main() {
             install_agent
             setup_configuration
             
-            if ! validate_config; then
-                exit 1
+            # Only validate/setup AWS credentials if not preserving config
+            if [[ "$PRESERVE_CONFIG" != "true" ]]; then
+                setup_aws_credentials
+
+                if ! validate_config; then
+                    exit 1
+                fi
             fi
             
             if ! verify_installation; then
@@ -1033,16 +1196,28 @@ main() {
             
             log_success "Deployment completed successfully"
             log_info ""
+            if [[ "$PRESERVE_CONFIG" == "true" ]]; then
+                log_info "Binary updated. Configuration preserved."
+            fi
             log_info "Next steps:"
             log_info "1. Review configuration: $CONFIG_FILE"
-            log_info "2. Run agent: fluidity (or $AGENT_EXE_PATH)"
+            if grep -q "^\[fluidity\]" ~/.aws/credentials 2>/dev/null; then
+                log_info "2. (Optional) Reload shell: source $SHELL"
+                log_info "3. Run agent: fluidity"
+            else
+                log_info "2. Run agent: fluidity (or $AGENT_EXE_PATH)"
+            fi
             if [[ "$IS_WSL" == "true" ]]; then
                 log_info ""
                 log_info "WSL Deployment Details:"
                 log_info "- Agent binary location: $AGENT_EXE_PATH (WSL filesystem)"
                 log_info "- Configuration location: $CONFIG_FILE (WSL home directory)"
                 log_info "- Access from Windows: \\\\wsl.localhost\\\\Ubuntu\\\\opt\\\\fluidity"
-                log_info "- Run agent in WSL: wsl /opt/fluidity/fluidity-agent"
+                if grep -q "^\[fluidity\]" ~/.aws/credentials 2>/dev/null; then
+                    log_info "- Run agent in WSL: wsl fluidity"
+                else
+                    log_info "- Run agent in WSL: wsl /opt/fluidity/fluidity-agent"
+                fi
             fi
             log_info ""
             ;;

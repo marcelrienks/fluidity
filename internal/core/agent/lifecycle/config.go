@@ -16,6 +16,9 @@ type Config struct {
 	// WakeEndpoint is the full URL to the Wake Lambda API endpoint
 	WakeEndpoint string
 
+	// QueryEndpoint is the full URL to the Query Lambda API endpoint
+	QueryEndpoint string
+
 	// KillEndpoint is the full URL to the Kill Lambda API endpoint
 	KillEndpoint string
 
@@ -49,6 +52,7 @@ type Config struct {
 func LoadConfig() (*Config, error) {
 	config := &Config{
 		WakeEndpoint:            os.Getenv("WAKE_ENDPOINT"),
+		QueryEndpoint:           os.Getenv("QUERY_ENDPOINT"),
 		KillEndpoint:            os.Getenv("KILL_ENDPOINT"),
 		IAMRoleARN:              os.Getenv("IAM_ROLE_ARN"),
 		AWSRegion:               getEnvOrDefault("AWS_REGION", ""),
@@ -62,7 +66,7 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Lifecycle is disabled if endpoints are not configured
-	if config.WakeEndpoint == "" || config.KillEndpoint == "" {
+	if config.WakeEndpoint == "" || config.QueryEndpoint == "" || config.KillEndpoint == "" {
 		config.Enabled = false
 	}
 
@@ -88,6 +92,10 @@ func (c *Config) Validate() error {
 
 	if c.WakeEndpoint == "" {
 		return fmt.Errorf("WAKE_ENDPOINT is required when lifecycle is enabled")
+	}
+
+	if c.QueryEndpoint == "" {
+		return fmt.Errorf("QUERY_ENDPOINT is required when lifecycle is enabled")
 	}
 
 	if c.KillEndpoint == "" {

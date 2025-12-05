@@ -1,477 +1,149 @@
-# Project Plan
+# Outstanding Work
 
-Development roadmap by phase.
+Priority items required to complete implementation.
 
-| Phase | Status | Key Features |
-|-------|--------|-----------------|
-| **1** | ✅ Complete | mTLS, HTTP/HTTPS/WebSocket tunneling, Circuit breaker, Retry logic, Docker (~44MB), Cross-platform, 75+ tests (~77% coverage) |
-| **2** | 🚧 In Progress | Wake/Sleep/Kill Lambdas, CloudFormation (Fargate + Lambda), CloudWatch metrics, EventBridge schedulers, Function URLs |
-| **3** | 🚧 In Progress | IAM Authentication (partial), SigV4 signing (implemented), Tunnel IAM auth (basic), Enhanced security (partial), Default credential chain (partial) |
-| **4** | 📋 Planned | CI/CD (GitHub Actions), Production certificates (trusted CA), Enhanced error handling, Performance optimization, Load testing |
+## 1. Agent: IAM Authentication (Required)
 
-## Phase 2 - Deployment & Lambda Updates
+**Current Status**: Agent connects successfully but IAM auth hangs.
 
-### Required Changes
+**Issue**: Agent sends IAM auth request via `json.Encoder` on WebSocket connection, which is not the correct protocol.
 
-#### 1. Wake Lambda Function Enhancement
-- **Current State**: Wake function only returns ECS service status (running, starting, stopped)
-- **Required Change**: Enhance to return the Fargate task's public IP address
-- **Implementation**:
-  - Query ECS service for task details
-  - Extract network interface ID from task attachments
-  - Call EC2 API to get public IP from network interface
-  - Include `public_ip` field in `WakeResponse`
-- **Agent Impact**: Agent will receive IP from wake response and store in config for future connections
+**Required Changes**:
 
-#### 2. Agent Configuration Management
-- **Current State**: Agent requires server IP at deployment time
-- **Required Change**: Make server IP optional during deployment
-- **Implementation**:
-  - Allow empty `server_ip` in config file during deployment
-  - Agent can call wake function to get server IP on first run
-  - Store returned IP in config for future use
-  - Update config file after receiving IP from wake function
-- **Deployment Flow**:
-  1. User runs: `sudo bash scripts/deploy-fluidity.sh deploy`
-  2. Deploys server infrastructure and agent (without server IP if unavailable)
-  3. Agent prompts for server IP (optional - can be skipped)
-  4. Agent user calls wake function which returns IP
-  5. Agent updates config with IP from wake response
-  6. Future agent runs use stored IP from config
+### Agent Side (cmd/core/agent/agent.go):
+1. Fix `authenticateWithIAM()` to properly encode IAM request using WebSocket protocol, not raw JSON:
+   - Use proper WebSocket frame encoding
+   - Ensure `Envelope` type with `"iam_auth_request"` is marshaled correctly
+   - Add timeout for IAM auth response (default: 30 seconds)
 
-#### 3. Deployment Script Updates
-- **Server Deployment**: Remove verbose CloudFormation stack output, export only essential variables
-- **Agent Deployment**: 
-  - Make sudo check explicit at startup
-  - Skip interactive IP prompt if server IP can be obtained later
-  - Pass endpoints from server deployment to agent
-  - No blocking wait for Fargate task - allow agent to handle IP resolution
-- **Sudo Requirements**: Both scripts check for sudo/root privilege at startup and exit with clear message if not running as root
+2. Implement IAM auth request structure:
+   ```go
+   type IAMAuthRequest struct {
+       ID            string    // Unique request ID
+       Timestamp     time.Time // Request timestamp
+       Service       string    // "tunnel"
+       Region        string    // AWS region
+       AccessKeyID   string    // AWS access key
+       Signature     string    // SigV4 authorization header
+       SignedHeaders string    // Signed header names
+   }
+   ```
 
-### Benefits
-- Complete deployment without manual IP extraction
-- IP obtained automatically from wake function when needed
-- Cleaner output and better user experience
-- Graceful handling of timing (task startup delays)
-- Agent can store IP for future use, eliminating repeated lookup
+3. Sign requests using AWS SigV4:
+   - Use `aws-sdk-go-v2/aws/signer/v4` to generate signatures
+   - Sign POST request to `https://fluidity-server.<region>.amazonaws.com/auth`
+   - Include timestamp in signed request
 
-## Phase 3 - IAM Authentication & Enhanced Security
+4. Handle IAM auth response:
+   - Success: Proceed to ready state and log "Agent ready for receiving proxy requests"
+   - Failure: Close connection and exit
+   - Timeout: Exit with clear error message
 
-### Current Status: 🚧 In Progress (Partial Implementation)
+### Server Side (internal/core/server/server.go):
+1. Fix IAM auth request handler to properly parse WebSocket frames:
+   - Decode incoming `Envelope` with type `"iam_auth_request"`
+   - Extract IAM auth request payload
 
-**Completed Components:**
-- ✅ SigV4 signing implementation for lifecycle operations
-- ✅ Basic tunnel IAM authentication handshake
-- ✅ Protocol updates with IAM message types
-- ✅ Test mode support for development/testing
-- ✅ Configuration loading fixes for credential chain
+2. Validate IAM signature:
+   - Reconstruct the signed request from components
+   - Verify SigV4 signature using AWS SDK
+   - Check timestamp is within 5-minute window (prevent replay attacks)
+   - Verify AccessKeyID matches authorized agent user
 
-**Remaining Work:**
-- 🔄 CloudFormation IAM role/policy updates
-- 🔄 Server-side IAM signature validation
-- 🔄 Certificate management with IAM credentials
-- 🔄 Complete removal of legacy API key authentication
-- 🔄 Deploy script updates for IAM configuration
+3. Send IAM auth response back to agent:
+   ```go
+   type IAMAuthResponse struct {
+       ID        string // Echo request ID
+       Approved  bool   // true/false
+       Error     string // Error message if denied
+       ExpiresAt time.Time // Credential expiration time
+   }
+   ```
 
-### Overview
-Implement comprehensive IAM authentication for all agent communications and operations, replacing API key authentication with AWS SigV4 signed requests and IAM-based tunnel authentication.
+4. On success: Mark connection as authenticated and ready for proxy traffic
+   - Log "IAM authentication approved" 
+   - Begin accepting HTTP requests from agent
 
-### Required Changes
+5. On failure: Close connection cleanly with error
 
-#### 1. CloudFormation Infrastructure Updates
-- **File:** `deployments/cloudformation/lambda.yaml`
-- **Status:** 📋 Not Started
-- **Add IAM user/role with enhanced permissions:**
-  ```yaml
-  Resources:
-    AgentIAMRole:
-      Type: AWS::IAM::Role
-      Properties:
-        RoleName: !Sub fluidity-agent-role-${AWS::StackName}
-        AssumeRolePolicyDocument:
-          Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Principal:
-                Service: ec2.amazonaws.com  # For EC2 instances, adjust as needed
-              Action: sts:AssumeRole
-        ManagedPolicyArns:
-          - !Ref AgentIAMPolicy
+## 2. Agent Connection State Machine
 
-    AgentIAMPolicy:
-      Type: AWS::IAM::ManagedPolicy
-      Properties:
-        PolicyDocument:
-          Version: "2012-10-17"
-          Statement:
-            - Effect: Allow
-              Action: lambda:InvokeFunctionUrl
-              Resource:
-                - !GetAtt WakeLambda.Arn
-                - !GetAtt KillLambda.Arn
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-                - secretsmanager:DescribeSecret
-              Resource: !Sub arn:aws:secretsmanager:*:*:secret:fluidity-certificates-*
+**Current Flow**:
+1. Connect (TLS handshake) ✅
+2. Send IAM auth request ❌ (fails - protocol issue)
+3. Wait for response (hangs) ❌
 
-    AgentIAMUser:
-      Type: AWS::IAM::User
-      Properties:
-        UserName: !Sub fluidity-agent-user-${AWS::StackName}
+**Required Flow**:
+1. Connect (TLS handshake) ✅
+2. Start response handler goroutine ✅
+3. Send IAM auth request (properly encoded) ← **FIX NEEDED**
+4. Wait for IAM auth response (with timeout) ← **IMPLEMENT**
+5. On success: Mark ready and return ← **IMPLEMENT**
+6. On failure: Close and return error ← **PARTIALLY DONE**
 
-    AgentAccessKey:
-      Type: AWS::IAM::AccessKey
-      Properties:
-        UserName: !Ref AgentIAMUser
+## 3. WebSocket Protocol Fixes
 
-    AgentUserPolicyAttachment:
-      Type: AWS::IAM::UserPolicyAttachment
-      Properties:
-        UserName: !Ref AgentIAMUser
-        PolicyArn: !Ref AgentIAMPolicy
-  ```
+**Issue**: Current code treats WebSocket as raw stream with `json.Encoder`
 
-#### 2. Agent Lifecycle Client Updates
-- **File:** `internal/core/agent/lifecycle/lifecycle.go`
-- **Status:** ✅ Complete (SigV4 signing implemented)
-- **Replace API key authentication with SigV4 signing:**
-  - Remove `APIKey` field from `Config` struct
-  - Update `callWakeAPI()` and `callKillAPI()` to use AWS SDK SigV4 signer
-  - Use default AWS credential chain instead of explicit credentials
+**Required**:
+1. Verify `gorilla/websocket` is used for all WebSocket operations
+2. Ensure all `Envelope` messages use proper WebSocket frame encoding:
+   - `conn.WriteJSON(envelope)` for sending (automatic marshaling)
+   - Message handler loop uses `ReadJSON()` for receiving
 
-#### 3. Certificate Management Updates
-- **File:** `cmd/core/agent/main.go`
-- **Status:** 🔄 In Progress
-- **Update TLS configuration loading:**
-  - Modify `secretsmanager.LoadTLSConfigFromSecretsOrFallback()` calls
-  - Use default credential chain for Secrets Manager access
-  - Remove explicit credential passing
+3. Add message type validation to `handleResponses()`:
+   - Only accept known message types: `"iam_auth_response"`, `"http_response"`, etc.
+   - Reject unknown types with error
 
-#### 4. Tunnel Authentication Enhancement
-- **File:** `internal/core/agent/agent.go`
-- **Status:** ✅ Complete (Basic implementation)
-- **Add IAM-based tunnel authentication:**
-  - Implement `authenticateWithIAM()` method
-  - Add IAM authentication handshake after TLS connection
-  - Send SigV4 signed authentication request to server
+## 4. Error Handling & Logging
 
-#### 5. Server Authentication Validation
-- **File:** `internal/core/server/server.go`
-- **Status:** 📋 Not Started
-- **Add IAM authentication validation:**
-  - Implement `handleIAMAuth()` method
-  - Validate SigV4 signatures from connecting agents
-  - Check IAM permissions for tunnel access
+**Agent**:
+- Add detailed error messages for:
+  - IAM auth request encode failures
+  - IAM auth response timeout
+  - IAM auth response decode failures
+  - Authentication denied errors
 
-#### 6. Protocol Updates
-- **File:** `internal/shared/protocol/protocol.go`
-- **Status:** ✅ Complete
-- **Add IAM authentication message types:**
-  - `IAMAuthRequest` struct for authentication requests
-  - `IAMAuthResponse` struct for authentication responses
+**Server**:
+- Add detailed error messages for:
+  - Invalid envelope format
+  - Missing IAM auth request fields
+  - SigV4 signature validation failures
+  - Timestamp validation failures
 
-#### 7. Configuration Updates
-- **File:** `internal/core/agent/config.go`
-- **Status:** 🔄 In Progress
-- **Update configuration structure:**
-  - Remove explicit AWS credential fields
-  - Add `IAMRoleARN` and `AWSRegion` fields
-  - Update config loading to use default credential chain
+## 5. Configuration
 
-#### 8. Deploy Script Updates
-- **File:** `scripts/deploy-server.sh`
-- **Status:** 📋 Not Started
-- **Collect IAM role ARN from CloudFormation outputs**
-- **File:** `scripts/deploy-agent.sh`
-- **Status:** 📋 Not Started
-- **Configure agent with IAM role ARN instead of access keys**
+**Agent** (`agent.yaml`):
+- Already has: `aws_profile`, `iam_role_arn`, AWS credential fields
+- No changes needed (already configured via deploy script)
 
-### Security Benefits
+**Server**:
+- Already loads AWS config for SigV4 validation
+- No changes needed
 
-1. **Unified Authentication**: Single IAM credential chain for all AWS operations
-2. **Enhanced Security**: IAM authentication for control plane (Lambda) and data plane (tunnel)
-3. **Standard AWS Patterns**: Uses AWS SDK default credential resolution
-4. **Role-Based Access**: Support for IAM roles and temporary credentials
-5. **Auditability**: All authentication events logged through AWS IAM
+## 6. Testing
 
-### Implementation Order
+1. Unit tests for IAM auth request generation
+2. Unit tests for SigV4 signature validation
+3. Integration test: agent connects and completes IAM auth
+4. Integration test: IAM auth timeout handling
+5. Integration test: Invalid signature rejection
 
-1. ✅ Implement SigV4 signing in lifecycle client
-2. ✅ Add IAM authentication to tunnel protocol
-3. 🔄 Update CloudFormation template with IAM resources
-4. 📋 Update server to validate IAM authentication
-5. 📋 Update certificate loading to use IAM
-6. 📋 Remove legacy API key authentication
-7. 📋 Update deploy scripts for IAM role configuration
+## 7. Security Notes
 
-### Testing Plan & Current Status
+- SigV4 signature includes request body, preventing tampering
+- 5-minute timestamp window prevents replay attacks
+- AccessKeyID must be in authorized agent list
+- Consider rate limiting failed auth attempts per client
 
-#### Test Coverage Analysis
-**Current State:** 100+ tests with mixed coverage quality
-- ✅ **Unit Tests**: 17+ tests, 100% coverage for shared components
-- ✅ **Lambda Tests**: Comprehensive AWS mocking, good coverage
-- ⚠️ **Integration Tests**: Basic functionality works, IAM auth gaps
-- ⚠️ **E2E Tests**: Build system works, runtime issues with IAM
+## 8. Future Enhancements (Not Required)
 
-#### Critical Testing Gaps (Priority 1)
-**IAM Authentication Testing:**
-- Missing comprehensive IAM auth success/failure tests
-- No SigV4 signature validation tests
-- Integration tests timeout due to IAM credential issues
-- Server-side IAM validation not tested
-
-**Recommended New Tests:**
-```go
-// Agent IAM authentication tests
-func TestAgentIAMAuthenticationSuccess(t *testing.T)
-func TestAgentIAMAuthenticationFailure(t *testing.T)
-func TestAgentIAMAuthTimeout(t *testing.T)
-
-// Server IAM validation tests
-func TestServerIAMAuthValidation(t *testing.T)
-func TestServerIAMAuthRejection(t *testing.T)
-
-// Integration tests with IAM
-func TestTunnelWithIAMAuth(t *testing.T)
-func TestLifecycleWithIAM(t *testing.T)
-```
-
-#### Test Infrastructure Improvements (Priority 2)
-- **AWS Mocking**: Implement proper AWS SDK v2 mocking for all tests
-- **Test Modes**: Support IAM and non-IAM test configurations
-- **Credential Management**: Mock AWS credentials for consistent testing
-- **Performance Tests**: Add load testing and performance benchmarks
-
-#### Test Quality Metrics
-- **Coverage Target**: 80%+ across all components
-- **Reliability Target**: <5% flaky test rate
-- **Speed Targets**: Unit <30s, Integration <5min, E2E <10min
-- **IAM Coverage**: 100% of authentication paths tested
-
-#### Testing Implementation Phases
-
-**Phase 3A (Current - Week 1-2):**
-- Fix IAM authentication test gaps
-- Add proper AWS mocking to lifecycle tests
-- Implement server-side IAM validation tests
-
-**Phase 3B (Week 3-4):**
-- Enhance error scenario coverage
-- Add performance benchmarks
-- Improve test infrastructure
-
-**Phase 3C (Week 5-6):**
-- Add comprehensive integration test scenarios
-- Implement proper test data management
-- Add CI/CD test reporting
-
-### Migration Strategy
-
-1. Deploy Phase 3 alongside existing Phase 2 infrastructure
-2. Update agents to use new IAM authentication
-3. Gradually phase out API key authentication
-4. Clean up legacy authentication code
-
-## Phase 4 - Production Hardening (Future)
-
-- Certificate authority integration
+- Certificate-based authentication (already implemented as fallback)
 - Advanced monitoring and alerting
-- Performance optimization
-- Load testing and scaling validation
+- Performance optimization and load testing
+- Production certificate issuance (CA integration)
+- Multi-region deployment
 
 ---
 
-## Comprehensive Testing Plan
-
-### Test Architecture Overview
-
-The Fluidity test suite follows a three-tier approach with comprehensive coverage across all system components:
-
-```
-┌─────────────┐    ┌──────────────┐    ┌────────────────┐
-│   Unit      │    │ Integration  │    │     E2E        │
-│   Tests     │    │   Tests      │    │    Tests       │
-│  (17+ tests)│    │  (30+ tests) │    │  (6 scenarios) │
-│ <1s runtime │    │ 3-10s each   │    │ 30-120s each   │
-└─────────────┘    └──────────────┘    └────────────────┘
-     ↑                   ↑                   ↑
-  Component         Component          Full System
- Validation     Interaction Testing   Deployment Validation
-```
-
-### Test Categories & Coverage
-
-#### 1. Unit Tests (`internal/shared/*/` & `internal/lambdas/*/`)
-
-**Coverage Areas:**
-- Circuit breaker state transitions and failure recovery
-- Retry logic with exponential backoff
-- Protocol message serialization/deserialization
-- Configuration loading and validation
-- Logging functionality and structured output
-- Lambda function business logic (Wake/Sleep/Kill)
-
-**Current Status:** ✅ Complete (17+ tests, 100% critical path coverage)
-
-**Test Quality:** Excellent - comprehensive edge case coverage, proper mocking
-
-#### 2. Integration Tests (`internal/tests/*/`)
-
-**Coverage Areas:**
-- Tunnel connection lifecycle (establish, maintain, reconnect)
-- HTTP/HTTPS proxy functionality through tunnel
-- WebSocket tunneling with concurrent connections
-- Circuit breaker integration with tunnel failures
-- Large payload handling (1MB+)
-- Concurrent request processing (10+ simultaneous)
-
-**Current Status:** ⚠️ Partial (30+ tests, basic functionality works, IAM gaps)
-
-**Issues Identified:**
-- IAM authentication timeouts in test environment
-- Missing comprehensive error scenario testing
-- Limited performance/load testing
-
-#### 3. End-to-End Tests (`scripts/test-*.sh`)
-
-**Test Scenarios:**
-- HTTP tunneling through firewall restrictions
-- HTTPS CONNECT proxy functionality
-- WebSocket bidirectional communication
-- Docker container deployment validation
-- Cross-platform binary compatibility
-
-**Current Status:** ⚠️ Build system works, runtime issues with IAM
-
-**Issues Identified:**
-- Agent startup failures due to IAM credential requirements
-- Port binding conflicts in test environment
-- Missing IAM-compatible test configurations
-
-#### 4. Lambda Integration Tests
-
-**Coverage Areas:**
-- ECS service lifecycle management (start/stop/scale)
-- CloudWatch metrics emission and tracking
-- EventBridge scheduler configuration
-- IAM policy validation for AWS service access
-
-**Current Status:** ✅ Complete (comprehensive AWS mocking)
-
-**Test Quality:** Excellent - proper AWS SDK mocking, realistic scenarios
-
-### Critical Testing Gaps & Remediation
-
-#### Priority 1: IAM Authentication Testing
-
-**Current Gaps:**
-- No comprehensive IAM authentication success/failure tests
-- Missing SigV4 signature validation tests
-- Integration tests fail due to IAM credential timeouts
-- Server-side IAM validation completely untested
-
-**Remediation Plan:**
-```go
-// New test additions needed
-func TestAgentIAMAuthenticationSuccess(t *testing.T)
-func TestAgentIAMAuthenticationFailure(t *testing.T)
-func TestAgentIAMAuthTimeout(t *testing.T)
-func TestServerIAMAuthValidation(t *testing.T)
-func TestServerIAMAuthRejection(t *testing.T)
-func TestTunnelWithIAMAuth(t *testing.T)
-```
-
-#### Priority 2: Enhanced Error Coverage
-
-**Current Gaps:**
-- Limited circuit breaker recovery testing
-- Missing concurrent load testing
-- Insufficient timeout and error handling tests
-- No performance regression testing
-
-**Remediation Plan:**
-```go
-func TestCircuitBreakerHalfOpenRecovery(t *testing.T)
-func TestCircuitBreakerConcurrentRequests(t *testing.T)
-func TestTunnelThroughput(t *testing.T)
-func TestWebSocketConcurrentLoad(t *testing.T)
-func TestMemoryUsageUnderLoad(t *testing.T)
-```
-
-#### Priority 3: Test Infrastructure Improvements
-
-**Current Gaps:**
-- Improper AWS credential mocking in some tests
-- Missing test mode configurations
-- Inconsistent test data management
-- No CI/CD integration testing
-
-**Remediation Plan:**
-- Implement proper AWS SDK v2 mocking across all tests
-- Add IAM/non-IAM test mode support
-- Create centralized test utilities for AWS mocking
-- Add GitHub Actions CI/CD test workflows
-
-### Test Quality Metrics & Targets
-
-#### Coverage Targets
-- **Unit Tests**: 100% coverage for critical paths (current: ✅)
-- **Integration Tests**: 80%+ coverage (current: ~60%)
-- **E2E Tests**: Full system validation (current: ~40%)
-- **IAM Authentication**: 100% of auth paths tested (current: ~20%)
-
-#### Performance Targets
-- **Unit Tests**: <30 seconds total runtime
-- **Integration Tests**: <5 minutes total runtime
-- **E2E Tests**: <10 minutes total runtime
-- **Test Reliability**: <5% flaky test rate
-
-#### Quality Standards
-- **Test Isolation**: Each test independent, no shared state
-- **Realistic Scenarios**: Tests reflect production usage patterns
-- **Error Coverage**: All major error paths tested
-- **Documentation**: Clear test intent and assertions
-
-### Implementation Roadmap
-
-#### Phase 3A Testing (Weeks 1-2)
-- [ ] Fix IAM authentication test gaps
-- [ ] Add proper AWS mocking to lifecycle tests
-- [ ] Implement server-side IAM validation tests
-- [ ] Update integration tests for IAM compatibility
-
-#### Phase 3B Testing (Weeks 3-4)
-- [ ] Enhance error scenario coverage
-- [ ] Add performance benchmarks
-- [ ] Improve test infrastructure and utilities
-- [ ] Implement comprehensive concurrent testing
-
-#### Phase 3C Testing (Weeks 5-6)
-- [ ] Add comprehensive integration test scenarios
-- [ ] Implement proper test data management
-- [ ] Add CI/CD test reporting and dashboards
-- [ ] Performance regression testing
-
-### Test Maintenance Strategy
-
-#### Regular Activities
-- **Weekly**: Run full test suite, monitor for flakes
-- **Bi-weekly**: Review test coverage reports, identify gaps
-- **Monthly**: Performance benchmark comparisons
-- **Quarterly**: Test architecture review and refactoring
-
-#### Test Evolution
-- **Add Tests**: For new features and bug fixes
-- **Update Tests**: When implementation changes affect behavior
-- **Remove Tests**: When functionality is deprecated or consolidated
-- **Refactor Tests**: Improve readability and maintainability
-
-#### Success Criteria
-- All tests pass reliably in CI/CD pipeline
-- Test coverage meets or exceeds targets
-- Test runtime stays within performance budgets
-- New features include comprehensive test coverage
-- Zero critical security paths untested
-
-This testing plan ensures the Fluidity system maintains high quality and reliability as IAM authentication and other advanced features are implemented.
+See [Deployment](deployment.md) for current operations

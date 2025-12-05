@@ -303,40 +303,66 @@ func (h *Handler) handleSleepRequest(ctx context.Context, request SleepRequest) 
 	idleThresholdSeconds := int64(idleThresholdMins * 60)
 	isIdle := avgActiveConnections <= 0 && idleDurationSeconds >= idleThresholdSeconds
 
-	// Step 6: If idle and running, scale down
+	// Step 6: If idle and running, scale down by 1 (supporting multiple instances)
 	if isIdle {
+		newDesiredCount := desiredCount - 1
+		if newDesiredCount < 0 {
+			newDesiredCount = 0
+		}
+
 		h.logger.Info("Service is idle, initiating scale down", map[string]interface{}{
 			"idleDurationSeconds":  idleDurationSeconds,
 			"idleThresholdSeconds": idleThresholdSeconds,
 			"avgActiveConnections": avgActiveConnections,
+			"currentDesiredCount":  desiredCount,
+			"newDesiredCount":      newDesiredCount,
 		})
-		updateInput := &ecs.UpdateServiceInput{
-			Cluster:      aws.String(clusterName),
-			Service:      aws.String(serviceName),
-			DesiredCount: aws.Int32(0),
-		}
 
-		_, err = h.ecsClient.UpdateService(ctx, updateInput)
-		if err != nil {
-			h.logger.Error("Failed to update ECS service", err, map[string]interface{}{
-				"clusterName": clusterName,
-				"serviceName": serviceName,
+		// Only scale down if there's actually a change
+		if newDesiredCount != desiredCount {
+			updateInput := &ecs.UpdateServiceInput{
+				Cluster:      aws.String(clusterName),
+				Service:      aws.String(serviceName),
+				DesiredCount: aws.Int32(newDesiredCount),
+			}
+
+			_, err = h.ecsClient.UpdateService(ctx, updateInput)
+			if err != nil {
+				h.logger.Error("Failed to update ECS service", err, map[string]interface{}{
+					"clusterName": clusterName,
+					"serviceName": serviceName,
+				})
+				return nil, fmt.Errorf("failed to update ECS service: %w", err)
+			}
+
+			h.logger.Info("Service scaled down successfully", map[string]interface{}{
+				"idleDurationSeconds": idleDurationSeconds,
+				"newDesiredCount":     newDesiredCount,
 			})
-			return nil, fmt.Errorf("failed to update ECS service: %w", err)
+
+			return &SleepResponse{
+				Action:               "scaled_down",
+				DesiredCount:         newDesiredCount,
+				RunningCount:         runningCount,
+				AvgActiveConnections: avgActiveConnections,
+				IdleDurationSeconds:  idleDurationSeconds,
+				Message:              fmt.Sprintf("Service scaled down from %d to %d instances due to inactivity (idle for %d seconds)", desiredCount, newDesiredCount, idleDurationSeconds),
+			}, nil
+		} else {
+			// Already at minimum scale
+			h.logger.Info("Service is idle but already at minimum scale", map[string]interface{}{
+				"desiredCount": desiredCount,
+			})
+
+			return &SleepResponse{
+				Action:               "no_change",
+				DesiredCount:         desiredCount,
+				RunningCount:         runningCount,
+				AvgActiveConnections: avgActiveConnections,
+				IdleDurationSeconds:  idleDurationSeconds,
+				Message:              fmt.Sprintf("Service is idle but already at minimum scale (desiredCount=%d)", desiredCount),
+			}, nil
 		}
-
-		h.logger.Info("Service scaled down successfully", map[string]interface{}{
-			"idleDurationSeconds": idleDurationSeconds,
-		})
-
-		return &SleepResponse{
-			Action:               "scaled_down",
-			DesiredCount:         0,
-			RunningCount:         runningCount,
-			AvgActiveConnections: avgActiveConnections,
-			IdleDurationSeconds:  idleDurationSeconds,
-			Message:              fmt.Sprintf("Service scaled down due to inactivity (idle for %d seconds)", idleDurationSeconds),
-		}, nil
 	}
 
 	// Step 7: Service is active, no action
@@ -371,8 +397,12 @@ func (h *Handler) getMetrics(ctx context.Context, startTime, endTime time.Time) 
 						MetricName: aws.String("ActiveConnections"),
 						Dimensions: []cloudwatchtypes.Dimension{
 							{
-								Name:  aws.String("Service"),
+								Name:  aws.String("ServiceName"),
 								Value: aws.String("fluidity-server"),
+							},
+							{
+								Name:  aws.String("ClusterName"),
+								Value: aws.String("fluidity"),
 							},
 						},
 					},
@@ -388,8 +418,12 @@ func (h *Handler) getMetrics(ctx context.Context, startTime, endTime time.Time) 
 						MetricName: aws.String("LastActivityEpochSeconds"),
 						Dimensions: []cloudwatchtypes.Dimension{
 							{
-								Name:  aws.String("Service"),
+								Name:  aws.String("ServiceName"),
 								Value: aws.String("fluidity-server"),
+							},
+							{
+								Name:  aws.String("ClusterName"),
+								Value: aws.String("fluidity"),
 							},
 						},
 					},

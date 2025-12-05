@@ -53,9 +53,10 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name: "enabled when endpoints set",
 			envVars: map[string]string{
-				"WAKE_ENDPOINT": "https://api.example.com/wake",
-				"KILL_ENDPOINT": "https://api.example.com/kill",
-				"API_KEY":       "test-key",
+				"WAKE_ENDPOINT":  "https://api.example.com/wake",
+				"QUERY_ENDPOINT": "https://api.example.com/query",
+				"KILL_ENDPOINT":  "https://api.example.com/kill",
+				"API_KEY":        "test-key",
 			},
 			wantEnabled: true,
 			wantErr:     false,
@@ -64,6 +65,7 @@ func TestLoadConfig(t *testing.T) {
 			name: "custom timeouts",
 			envVars: map[string]string{
 				"WAKE_ENDPOINT":             "https://api.example.com/wake",
+				"QUERY_ENDPOINT":            "https://api.example.com/query",
 				"KILL_ENDPOINT":             "https://api.example.com/kill",
 				"CONNECTION_TIMEOUT":        "120s",
 				"CONNECTION_RETRY_INTERVAL": "10s",
@@ -103,11 +105,12 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				WakeEndpoint: "https://api.example.com/wake",
-				KillEndpoint: "https://api.example.com/kill",
-				IAMRoleARN:   "arn:aws:iam::123456789012:role/fluidity-agent",
-				AWSRegion:    "us-east-1",
-				Enabled:      true,
+				WakeEndpoint:  "https://api.example.com/wake",
+				QueryEndpoint: "https://api.example.com/query",
+				KillEndpoint:  "https://api.example.com/kill",
+				IAMRoleARN:    "arn:aws:iam::123456789012:role/fluidity-agent",
+				AWSRegion:     "us-east-1",
+				Enabled:       true,
 			},
 			wantErr: false,
 		},
@@ -171,7 +174,11 @@ func TestWakeSuccess(t *testing.T) {
 
 		// Send response
 		response := WakeResponse{
-			StatusCode:         200,
+			Status:             "waking",
+			InstanceID:         "test-cluster-test-service-1234567890",
+			DesiredCount:       1,
+			RunningCount:       0,
+			PendingCount:       0,
 			Message:            "Service wake initiated",
 			EstimatedStartTime: "2025-10-29T17:00:00Z",
 		}
@@ -201,7 +208,7 @@ func TestWakeSuccess(t *testing.T) {
 
 	// Call Wake
 	ctx := context.Background()
-	err = client.Wake(ctx)
+	_, err = client.Wake(ctx)
 	if err != nil {
 		t.Errorf("Wake() error = %v", err)
 	}
@@ -220,7 +227,7 @@ func TestWakeDisabled(t *testing.T) {
 
 	// Call Wake - should not error when disabled
 	ctx := context.Background()
-	err = client.Wake(ctx)
+	_, err = client.Wake(ctx)
 	if err != nil {
 		t.Errorf("Wake() error = %v, expected nil when disabled", err)
 	}
@@ -253,7 +260,7 @@ func TestWakeAPIError(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err = client.Wake(ctx)
+	_, err = client.Wake(ctx)
 	if err == nil {
 		t.Error("Wake() expected error, got nil")
 	}
@@ -273,8 +280,8 @@ func TestKillSuccess(t *testing.T) {
 
 		// Send response
 		response := KillResponse{
-			StatusCode: 200,
-			Message:    "Service shutdown initiated",
+			Status:  "killed",
+			Message: "Service shutdown initiated",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)

@@ -1,59 +1,56 @@
-# Certificate Management
+# Certificates
 
-## Quick Start
+Generate mTLS certificates for local development or AWS deployment.
 
-**Local development:**
+## Generate
+
+Local files:
 ```bash
-./scripts/generate-certs.sh             # All platforms (use WSL on Windows)
+./scripts/generate-certs.sh
+# Output: ./certs/{ca,server,client}.{crt,key}
 ```
 
-**AWS deployment:**
+AWS Secrets Manager:
 ```bash
 ./scripts/generate-certs.sh --save-to-secrets
+# Output: fluidity/certificates secret with cert_pem, key_pem, ca_pem
 ```
 
-## Script Options
-
+Options:
 ```
---save-to-secrets      Save to AWS Secrets Manager
---secret-name NAME     Secret name (default: fluidity/certificates)
---certs-dir DIR        Certificate directory (default: ./certs)
+--save-to-secrets       Push to AWS Secrets Manager
+--secret-name NAME      Secret name (default: fluidity/certificates)
+--certs-dir DIR         Certificate directory (default: ./certs)
 ```
 
 ## Output
 
-**Local files (./certs/):**
-- `ca.crt`, `ca.key` - CA certificate and key
-- `server.crt`, `server.key` - Server certificate and key
-- `client.crt`, `client.key` - Client certificate and key
+**Local** (`./certs/`):
+- `ca.crt`, `ca.key` - Certificate Authority
+- `server.crt`, `server.key` - Server certificate
+- `client.crt`, `client.key` - Client certificate
 
-**AWS Secrets Manager:**
-- `cert_pem` - Base64 server certificate
-- `key_pem` - Base64 server key
-- `ca_pem` - Base64 CA certificate
+**AWS Secrets Manager**:
+```json
+{
+  "cert_pem": "base64-encoded server cert",
+  "key_pem": "base64-encoded server key",
+  "ca_pem": "base64-encoded CA cert"
+}
+```
 
 ## Configuration
 
-Enable Secrets Manager in config files:
+Enable Secrets Manager in configs:
 
 ```yaml
-# configs/server.yaml and configs/agent.yaml
 use_secrets_manager: true
 secrets_manager_name: "fluidity/certificates"
 ```
 
-## Prerequisites
-
-**Required:**
-- OpenSSL (included in most Linux/macOS distributions; Windows users install via WSL)
-
-**For AWS:**
-- AWS CLI
-- Configured AWS credentials
-
 ## IAM Permissions
 
-**For running Fluidity:**
+To read certificates:
 ```json
 {
   "Effect": "Allow",
@@ -62,7 +59,7 @@ secrets_manager_name: "fluidity/certificates"
 }
 ```
 
-**For certificate management:**
+To create/update certificates:
 ```json
 {
   "Effect": "Allow",
@@ -71,48 +68,29 @@ secrets_manager_name: "fluidity/certificates"
 }
 ```
 
-## Common Tasks
+## Rotation
 
-**Certificate rotation:**
+Regenerate and update:
 ```bash
 ./scripts/generate-certs.sh --save-to-secrets
 ```
 
-**Custom secret name:**
-```bash
-./scripts/generate-certs.sh --save-to-secrets --secret-name "my-org/fluidity/certs"
-```
+## Security
 
-**Custom directory:**
-```bash
-./scripts/generate-certs.sh --certs-dir /opt/fluidity/certs
-```
-
-**Verify certificates:**
-```bash
-ls -la ./certs/
-aws secretsmanager get-secret-value --secret-id fluidity/certificates
-```
+- Self-signed certificates (development only)
+- Never commit `*.key` files to version control
+- Use AWS KMS encryption for Secrets Manager in production
+- Rotate regularly (default: 2 year validity)
+- Production: Use certificates from trusted CA
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| OpenSSL not found | Linux/macOS: Install via package manager; Windows: Use WSL |
-| AWS CLI not found | Install from https://aws.amazon.com/cli/ |
-| Unable to locate credentials | Run `aws configure` |
-| Certs already exist | Delete with `rm ./certs/*` and re-run |
+| OpenSSL not found | Linux/macOS: package manager; Windows: use WSL |
+| AWS credentials missing | Run: `aws configure` |
+| Certs already exist | Delete: `rm ./certs/*` then re-run |
 
-## Security
+---
 
-- ⚠️ Self-signed certificates for **development only**
-- Never commit `*.key` files to version control
-- Use AWS KMS encryption for Secrets Manager in production
-- Rotate certificates regularly (default: 2 years)
-- For production, use certificates from trusted CA
-
-## Related Documentation
-
-- [Deployment Guide](deployment.md) - Using certificates in deployments
-- [Docker Guide](docker.md) - Baking certificates into images
-- [Infrastructure Guide](infrastructure.md) - AWS Secrets Manager integration
+See [Deployment](deployment.md) for using certificates

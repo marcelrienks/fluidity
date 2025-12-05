@@ -35,7 +35,6 @@
 #   --vpc-id <vpc>                 VPC ID (auto-detect default VPC)
 #   --public-subnets <subnets>     Comma-separated subnet IDs (auto-detect)
 #   --allowed-cidr <cidr>          Allowed ingress CIDR (auto-detect your IP)
-#   --server-ip <ip>               Server IP (for agent, defaults to Fargate task public IP)
 #   --local-proxy-port <port>      Agent listening port (default: 8080 on Windows, 8080 on Linux/macOS)
 #   --cert-path <path>             Path to client certificate (optional)
 #   --key-path <path>              Path to client key (optional)
@@ -44,6 +43,9 @@
 #   --log-level <level>            Agent log level (info|debug|warn|error)
 #   --wake-endpoint <url>          Override wake function endpoint
 #   --kill-endpoint <url>          Override kill function endpoint
+#   --iam-role-arn <arn>           IAM role ARN for agent authentication
+#   --access-key-id <id>           AWS access key ID for agent
+#   --secret-access-key <key>      AWS secret access key for agent
 #   --skip-build                   Skip building agent, use existing binary
 #   --debug                        Enable debug logging
 #   --force                        Delete and recreate resources (server only)
@@ -53,7 +55,7 @@
 #   ./deploy-fluidity.sh deploy
 #   ./deploy-fluidity.sh deploy --local-proxy-port 8080
 #   ./deploy-fluidity.sh deploy-server --region us-west-2
-#   ./deploy-fluidity.sh deploy-agent --server-ip 192.168.1.100
+#   ./deploy-fluidity.sh deploy-agent
 #   ./deploy-fluidity.sh status
 #   ./deploy-fluidity.sh delete
 #
@@ -93,6 +95,7 @@ SKIP_BUILD=false
 # Endpoints from server deployment
 WAKE_ENDPOINT=""
 KILL_ENDPOINT=""
+QUERY_ENDPOINT=""
 SERVER_REGION=""
 SERVER_PORT="8443"
 SERVER_IP_COMMAND=""
@@ -192,20 +195,7 @@ log_error_end() {
     echo ""
 }
 
-check_sudo_requirement() {
-    # Check if action requires sudo
-    if [[ "$ACTION" == "deploy" || "$ACTION" == "deploy-agent" ]]; then
-        if [[ "$EUID" -ne 0 ]]; then
-            log_error_start
-            echo "Sudo privileges required for agent deployment"
-            echo ""
-            echo "Please run this script with sudo:"
-            echo "  sudo -E $0 $@"
-            log_error_end
-            exit 1
-        fi
-    fi
-}
+
 
 check_aws_credentials() {
     # Check if action requires AWS credentials
@@ -217,14 +207,10 @@ check_aws_credentials() {
             echo ""
             echo "This can happen if:"
             echo "  1. AWS credentials are not configured"
-            echo "  2. Running with sudo without the -E flag (environment variables not preserved)"
             echo ""
             echo "Solutions:"
             echo "  Option 1: Configure AWS credentials first"
             echo "    aws configure"
-            echo ""
-            echo "  Option 2: Run script with sudo -E to preserve environment variables"
-            echo "    sudo -E $0 $@"
             echo ""
             log_error_end
             exit 1
@@ -279,10 +265,6 @@ parse_arguments() {
                 ALLOWED_CIDR="$2"
                 shift 2
                 ;;
-            --server-ip)
-                SERVER_IP="$2"
-                shift 2
-                ;;
             --local-proxy-port)
                 LOCAL_PROXY_PORT="$2"
                 shift 2
@@ -313,6 +295,30 @@ parse_arguments() {
                 ;;
             --kill-endpoint)
                 KILL_ENDPOINT="$2"
+                shift 2
+                ;;
+            --query-endpoint)
+                QUERY_ENDPOINT="$2"
+                shift 2
+                ;;
+            --iam-role-arn)
+                AGENT_IAM_ROLE_ARN="$2"
+                shift 2
+                ;;
+            --access-key-id)
+                AGENT_ACCESS_KEY_ID="$2"
+                shift 2
+                ;;
+            --secret-access-key)
+                AGENT_SECRET_ACCESS_KEY="$2"
+                shift 2
+                ;;
+            --install-path)
+                INSTALL_PATH="$2"
+                shift 2
+                ;;
+            --log-level)
+                LOG_LEVEL="$2"
                 shift 2
                 ;;
             --skip-build)
@@ -404,15 +410,33 @@ deploy_server() {
             SERVER_REGION=$(grep "^export SERVER_REGION=" "$temp_exports" | cut -d"'" -f2)
             WAKE_ENDPOINT=$(grep "^export WAKE_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             KILL_ENDPOINT=$(grep "^export KILL_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            QUERY_ENDPOINT=$(grep "^export QUERY_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
-            
+            AGENT_IAM_ROLE_ARN=$(grep "^export AGENT_IAM_ROLE_ARN=" "$temp_exports" | cut -d"'" -f2)
+            AGENT_ACCESS_KEY_ID=$(grep "^export AGENT_ACCESS_KEY_ID=" "$temp_exports" | cut -d"'" -f2)
+            AGENT_SECRET_ACCESS_KEY=$(grep "^export AGENT_SECRET_ACCESS_KEY=" "$temp_exports" | cut -d"'" -f2)
+
+            # Set certificate paths to local certs directory (generated during server deployment)
+            if [[ -f "./certs/client.crt" && -f "./certs/client.key" && -f "./certs/ca.crt" ]]; then
+                CERT_PATH="./certs/client.crt"
+                KEY_PATH="./certs/client.key"
+                CA_CERT_PATH="./certs/ca.crt"
+                log_debug "Certificate paths set to local certs directory"
+            else
+                log_warn "Certificate files not found in ./certs/ directory"
+            fi
+
             # For SERVER_IP_COMMAND, extract everything between the quotes (handling the complex command)
             SERVER_IP_COMMAND=$(sed -n 's/^export SERVER_IP_COMMAND="\(.*\)"$/\1/p' "$temp_exports")
-            
+
             log_debug "Extracted SERVER_REGION: $SERVER_REGION"
             log_debug "Extracted WAKE_ENDPOINT: $WAKE_ENDPOINT"
             log_debug "Extracted KILL_ENDPOINT: $KILL_ENDPOINT"
+            log_debug "Extracted QUERY_ENDPOINT: $QUERY_ENDPOINT"
             log_debug "Extracted SERVER_PORT: $SERVER_PORT"
+            log_debug "Extracted AGENT_IAM_ROLE_ARN: $AGENT_IAM_ROLE_ARN"
+            log_debug "Extracted AGENT_ACCESS_KEY_ID: [REDACTED]"
+            log_debug "Extracted AGENT_SECRET_ACCESS_KEY: [REDACTED]"
             log_debug "Extracted SERVER_IP_COMMAND length: ${#SERVER_IP_COMMAND}"
             
             rm -f "$temp_exports"
@@ -427,7 +451,7 @@ deploy_server() {
         echo "Server deployment failed"
         echo ""
         echo "If the error mentions AWS credentials, ensure you ran this command with:"
-        echo "  sudo -E $0 deploy"
+        echo "  $0 deploy"
         echo ""
         echo "The -E flag preserves environment variables including AWS credentials."
         log_error_end
@@ -447,19 +471,8 @@ deploy_agent() {
         exit 1
     fi
     
-    # If SERVER_IP not provided via command line, try to extract from running Fargate task
-    # (optional - agent will get it from wake function)
-    if [[ -z "$SERVER_IP" && -n "$SERVER_IP_COMMAND" ]]; then
-        log_debug "Fargate task detection skipped - IP will be obtained from wake function"
-    fi
-    
     local args=("deploy")
-    
-    # Pass server configuration
-    if [[ -n "$SERVER_IP" ]]; then
-        args+=(--server-ip "$SERVER_IP")
-    fi
-    
+
     args+=(--server-port "$SERVER_PORT")
     args+=(--local-proxy-port "$LOCAL_PROXY_PORT")
     
@@ -472,6 +485,10 @@ deploy_agent() {
         args+=(--kill-endpoint "$KILL_ENDPOINT")
     fi
 
+    if [[ -n "$QUERY_ENDPOINT" ]]; then
+        args+=(--query-endpoint "$QUERY_ENDPOINT")
+    fi
+
     # Pass log level if provided
     if [[ -n "$LOG_LEVEL" ]]; then
         args+=(--log-level "$LOG_LEVEL")
@@ -481,7 +498,12 @@ deploy_agent() {
     [[ -n "$CERT_PATH" ]] && args+=(--cert-path "$CERT_PATH")
     [[ -n "$KEY_PATH" ]] && args+=(--key-path "$KEY_PATH")
     [[ -n "$CA_CERT_PATH" ]] && args+=(--ca-cert-path "$CA_CERT_PATH")
-    
+
+    # Pass IAM credentials for Lambda authentication
+    [[ -n "$AGENT_IAM_ROLE_ARN" ]] && args+=(--iam-role-arn "$AGENT_IAM_ROLE_ARN")
+    [[ -n "$AGENT_ACCESS_KEY_ID" ]] && args+=(--access-key-id "$AGENT_ACCESS_KEY_ID")
+    [[ -n "$AGENT_SECRET_ACCESS_KEY" ]] && args+=(--secret-access-key "$AGENT_SECRET_ACCESS_KEY")
+
     # Pass installation path if specified
     [[ -n "$INSTALL_PATH" && "$INSTALL_PATH" != "$DEFAULT_INSTALL_PATH" ]] && args+=(--install-path "$INSTALL_PATH")
     
@@ -491,7 +513,7 @@ deploy_agent() {
     
     log_debug "Calling agent deployment script with: ${args[*]}"
     
-    # Run script and capture output (already running as sudo)
+    # Run script and capture output
     local agent_output
     local temp_agent_output="/tmp/fluidity-deploy-agent-$$.log"
     
@@ -500,8 +522,8 @@ deploy_agent() {
         rm -f "$temp_agent_output"
         
         # Extract agent installation details from output
-        AGENT_INSTALL_PATH=$(echo "$agent_output" | grep -oP 'Agent binary installed: \K[^\/\\]*(?:\/|\\).*' | head -1)
-        AGENT_CONFIG_PATH=$(echo "$agent_output" | grep -oP 'Configuration file (?:created|written): \K.*' | head -1)
+        AGENT_INSTALL_PATH=$(echo "$agent_output" | awk -F': ' '/Agent binary installed:/{print $2; exit}' | sed -E 's/\r$//')
+        AGENT_CONFIG_PATH=$(echo "$agent_output" | awk -F': ' '/Configuration file (created|written):/{print $2; exit}' | sed -E 's/\r$//')
         
         # Fallback to using INSTALL_PATH if extraction fails
         if [[ -z "$AGENT_INSTALL_PATH" ]]; then
@@ -592,10 +614,7 @@ show_status() {
 main() {
     validate_action
     parse_arguments "$@"
-    
-    # Check sudo requirement early
-    check_sudo_requirement
-    
+
     # Check AWS credentials availability
     check_aws_credentials
     
@@ -621,8 +640,9 @@ main() {
             log_info "Region: $SERVER_REGION"
             log_info "Wake Lambda: $WAKE_ENDPOINT"
             log_info "Kill Lambda: $KILL_ENDPOINT"
+            log_info "Query Lambda: $QUERY_ENDPOINT"
             log_info "Server Port: $SERVER_PORT"
-            log_info "Server IP: (Obtain from AWS console or use wake function)"
+            log_info "Server IP: (Agent obtains server IP from lifecycle wake/query at runtime)"
             
             log_substep "Local Agent Deployment"
             log_info "Installation Path: $AGENT_INSTALL_PATH"
@@ -657,7 +677,7 @@ main() {
             log_success "Server deployment finished successfully"
             log_info ""
             log_info "To deploy agent with server endpoints, run:"
-            log_info "  sudo ./deploy-fluidity.sh deploy-agent"
+            log_info "  ./deploy-fluidity.sh deploy-agent"
             log_info ""
             ;;
         

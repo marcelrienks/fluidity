@@ -83,7 +83,7 @@ func TestWakeWhenServiceStopped(t *testing.T) {
 	}
 }
 
-// TestWakeWhenServiceAlreadyRunning verifies idempotent behavior when service is running
+// TestWakeWhenServiceAlreadyRunning verifies scaling behavior when service is running
 func TestWakeWhenServiceAlreadyRunning(t *testing.T) {
 	mockECS := &MockECSClient{
 		DescribeServicesFunc: func(ctx context.Context, params *ecs.DescribeServicesInput, optFns ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error) {
@@ -99,7 +99,9 @@ func TestWakeWhenServiceAlreadyRunning(t *testing.T) {
 			}, nil
 		},
 		UpdateServiceFunc: func(ctx context.Context, params *ecs.UpdateServiceInput, optFns ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
-			t.Error("UpdateService should not be called when service is already running")
+			if *params.DesiredCount != 2 {
+				t.Errorf("Expected DesiredCount=2, got %d", *params.DesiredCount)
+			}
 			return &ecs.UpdateServiceOutput{}, nil
 		},
 	}
@@ -121,20 +123,16 @@ func TestWakeWhenServiceAlreadyRunning(t *testing.T) {
 		t.Fatalf("Failed to parse response body: %v", err)
 	}
 
-	if wakeResp.Status != "already_running" {
-		t.Errorf("Expected status 'already_running', got '%s'", wakeResp.Status)
+	if wakeResp.Status != "scaling" {
+		t.Errorf("Expected status 'scaling', got '%s'", wakeResp.Status)
 	}
 
-	if wakeResp.DesiredCount != 1 {
-		t.Errorf("Expected DesiredCount=1, got %d", wakeResp.DesiredCount)
-	}
-
-	if wakeResp.RunningCount != 1 {
-		t.Errorf("Expected RunningCount=1, got %d", wakeResp.RunningCount)
+	if wakeResp.DesiredCount != 2 {
+		t.Errorf("Expected DesiredCount=2, got %d", wakeResp.DesiredCount)
 	}
 }
 
-// TestWakeWhenServiceStarting verifies status when service is pending
+// TestWakeWhenServiceStarting verifies scaling behavior when service is pending
 func TestWakeWhenServiceStarting(t *testing.T) {
 	mockECS := &MockECSClient{
 		DescribeServicesFunc: func(ctx context.Context, params *ecs.DescribeServicesInput, optFns ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error) {
@@ -150,7 +148,9 @@ func TestWakeWhenServiceStarting(t *testing.T) {
 			}, nil
 		},
 		UpdateServiceFunc: func(ctx context.Context, params *ecs.UpdateServiceInput, optFns ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
-			t.Error("UpdateService should not be called when service is starting")
+			if *params.DesiredCount != 2 {
+				t.Errorf("Expected DesiredCount=2, got %d", *params.DesiredCount)
+			}
 			return &ecs.UpdateServiceOutput{}, nil
 		},
 	}
@@ -176,8 +176,8 @@ func TestWakeWhenServiceStarting(t *testing.T) {
 		t.Errorf("Expected status 'starting', got '%s'", wakeResp.Status)
 	}
 
-	if wakeResp.DesiredCount != 1 {
-		t.Errorf("Expected DesiredCount=1, got %d", wakeResp.DesiredCount)
+	if wakeResp.DesiredCount != 2 {
+		t.Errorf("Expected DesiredCount=2, got %d", wakeResp.DesiredCount)
 	}
 
 	if wakeResp.PendingCount != 1 {

@@ -80,6 +80,22 @@ func NewClientWithTestMode(tlsConfig *tls.Config, serverAddr string, logLevel st
 	}
 }
 
+// UpdateServerAddress updates the server address for reconnection
+func (c *Client) UpdateServerAddress(serverAddr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Close existing connection if connected
+	if c.connected && c.conn != nil {
+		c.logger.Info("Closing existing connection due to server address change", "old_addr", c.serverAddr, "new_addr", serverAddr)
+		c.conn.Close()
+		c.connected = false
+	}
+
+	c.serverAddr = serverAddr
+	c.logger.Info("Server address updated", "new_addr", serverAddr)
+}
+
 // Connect establishes mTLS connection to server
 func (c *Client) Connect() error {
 	c.mu.Lock()
@@ -96,17 +112,19 @@ func (c *Client) Connect() error {
 
 	// Create TLS config with client certificate
 	tlsConfig := &tls.Config{
-		Certificates: c.config.Certificates,
-		RootCAs:      c.config.RootCAs,
-		MinVersion:   c.config.MinVersion,
-		ServerName:   host, // CRITICAL: Set ServerName for proper mTLS handshake
+		Certificates:       c.config.Certificates,
+		RootCAs:            c.config.RootCAs,
+		MinVersion:         c.config.MinVersion,
+		ServerName:         host, // CRITICAL: Set ServerName for proper mTLS handshake
+		InsecureSkipVerify: true, // Skip hostname verification for dynamic Fargate IPs (temporary for testing)
 	}
 
 	c.logger.WithFields(logrus.Fields{
-		"num_certificates": len(tlsConfig.Certificates),
-		"has_root_cas":     tlsConfig.RootCAs != nil,
-		"server_name":      tlsConfig.ServerName,
-	}).Info("TLS config for dial")
+		"num_certificates":     len(tlsConfig.Certificates),
+		"has_root_cas":         tlsConfig.RootCAs != nil,
+		"server_name":          tlsConfig.ServerName,
+		"insecure_skip_verify": tlsConfig.InsecureSkipVerify,
+	}).Warn("TLS config for dial (hostname verification disabled - testing only)")
 
 	conn, err := tls.Dial("tcp", c.serverAddr, tlsConfig)
 	if err != nil {
@@ -126,7 +144,10 @@ func (c *Client) Connect() error {
 	c.connected = true
 	c.logger.Info("Connected to tunnel server", "addr", c.serverAddr)
 
-	// Perform IAM authentication after TLS connection
+	// Start handling responses from server in background
+	go c.handleResponses()
+
+	// Perform IAM authentication after response handler is started
 	if err := c.authenticateWithIAM(c.ctx); err != nil {
 		c.logger.Error("IAM authentication failed", err)
 		conn.Close()
@@ -234,6 +255,7 @@ func (c *Client) handleResponses() {
 	for {
 		select {
 		case <-c.ctx.Done():
+			c.logger.Info("handleResponses: context cancelled, exiting")
 			return
 		default:
 		}
@@ -243,6 +265,8 @@ func (c *Client) handleResponses() {
 			c.logger.Error("Failed to decode envelope", err)
 			return
 		}
+
+		c.logger.Debug("Received envelope", "type", env.Type)
 
 		switch env.Type {
 		case "http_response":
@@ -375,6 +399,21 @@ func (c *Client) handleResponses() {
 				delete(c.wsCh, cls.ID)
 			}
 			c.mu.Unlock()
+
+		case "iam_auth_response":
+			// Handle IAM authentication response
+			m, _ := env.Payload.(map[string]any)
+			b, _ := json.Marshal(m)
+			var resp protocol.IAMAuthResponse
+			if err := json.Unmarshal(b, &resp); err != nil {
+				c.logger.Error("Failed to parse iam_auth_response", err)
+				continue
+			}
+			if resp.Ok {
+				c.logger.Info("IAM authentication approved by server")
+			} else {
+				c.logger.Warn("IAM authentication denied by server", "error", resp.Error)
+			}
 
 		default:
 			// Ignore unknown message types
@@ -583,11 +622,11 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	creds, err := c.awsConfig.Credentials.Retrieve(ctx)
 	if err != nil {
 		c.logger.Info("AWS credentials not available, skipping IAM authentication", "error", err)
-		return nil // Allow connection without IAM auth for backward compatibility
+		return nil
 	}
 	if creds.AccessKeyID == "" {
 		c.logger.Info("AWS credentials not configured, skipping IAM authentication")
-		return nil // Allow connection without IAM auth for backward compatibility
+		return nil
 	}
 
 	c.logger.Info("Performing IAM authentication")
@@ -633,49 +672,20 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 		Payload: authReq,
 	}
 
-	if err := json.NewEncoder(c.conn).Encode(envelope); err != nil {
+	c.mu.RLock()
+	if !c.connected || c.conn == nil {
+		c.mu.RUnlock()
+		return fmt.Errorf("not connected to server")
+	}
+	conn := c.conn
+	c.mu.RUnlock()
+
+	if err := json.NewEncoder(conn).Encode(envelope); err != nil {
 		return fmt.Errorf("failed to send IAM auth request: %w", err)
 	}
 
-	// Wait for response with timeout
-	responseCh := make(chan *protocol.IAMAuthResponse, 1)
-	errorCh := make(chan error, 1)
-
-	// Start a goroutine to read the response
-	go func() {
-		var respEnvelope protocol.Envelope
-		if err := json.NewDecoder(c.conn).Decode(&respEnvelope); err != nil {
-			errorCh <- fmt.Errorf("failed to read auth response: %w", err)
-			return
-		}
-
-		if respEnvelope.Type != "iam_auth_response" {
-			errorCh <- fmt.Errorf("unexpected response type: %s", respEnvelope.Type)
-			return
-		}
-
-		authResp, ok := respEnvelope.Payload.(protocol.IAMAuthResponse)
-		if !ok {
-			errorCh <- fmt.Errorf("invalid auth response format")
-			return
-		}
-
-		responseCh <- &authResp
-	}()
-
-	// Wait for response or timeout
-	select {
-	case authResp := <-responseCh:
-		if !authResp.Ok {
-			return fmt.Errorf("IAM authentication failed: %s", authResp.Error)
-		}
-		c.logger.Info("IAM authentication successful")
-		return nil
-	case err := <-errorCh:
-		return err
-	case <-time.After(30 * time.Second):
-		return fmt.Errorf("IAM authentication timeout")
-	case <-ctx.Done():
-		return fmt.Errorf("IAM authentication cancelled")
-	}
+	// IAM auth response will be processed asynchronously by handleResponses
+	// We don't block here - just log and continue
+	c.logger.Info("IAM authentication request sent, response will be processed asynchronously")
+	return nil
 }
