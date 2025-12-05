@@ -42,12 +42,15 @@
 #   --secret-access-key <key>  AWS secret access key
 #   --install-path <path>      Custom installation path (optional)
 #   --log-level <level>        Log level (info/debug/error, default: info)
+#   --preserve-config          Do not overwrite existing config file (for redeploying binary updates)
+#                              When used, all other config arguments become optional
 #   --debug                    Enable debug logging
 #   -h, --help                 Show this help message
 #
 # EXAMPLES:
 #   ./deploy-agent.sh deploy --server-port 8443 --local-proxy-port 8080
 #   ./deploy-agent.sh deploy --wake-endpoint <url> --kill-endpoint <url>
+#   ./deploy-agent.sh deploy --preserve-config --skip-build  # Redeploy binary only (config preserved)
 #   ./deploy-agent.sh status
 #   ./deploy-agent.sh uninstall
 #
@@ -90,6 +93,7 @@ CONFIG_FILE=""
 # Feature Flags
 DEBUG=false
 SKIP_BUILD=false
+PRESERVE_CONFIG=false
 
 # Detect OS and set defaults
 # Check if running in WSL
@@ -310,6 +314,10 @@ parse_arguments() {
                 ;;
             --skip-build)
                 SKIP_BUILD=true
+                shift
+                ;;
+            --preserve-config)
+                PRESERVE_CONFIG=true
                 shift
                 ;;
             --debug)
@@ -933,6 +941,13 @@ copy_certificates_to_installation() {
 setup_configuration() {
     log_minor "Step 4: Configure Agent"
 
+    # Check if we should preserve existing config
+    if [[ "$PRESERVE_CONFIG" == "true" && -f "$CONFIG_FILE" ]]; then
+        log_info "Preserving existing configuration: $CONFIG_FILE"
+        load_config_file
+        return
+    fi
+
     # Load existing config if available (for potential merging)
     if [[ -f "$CONFIG_FILE" ]]; then
         load_config_file
@@ -1152,16 +1167,27 @@ main() {
     
     case "$ACTION" in
         deploy)
+            # When preserving config, all other arguments are optional
+            if [[ "$PRESERVE_CONFIG" == "true" ]]; then
+                log_info "Mode: Update binary with config preservation"
+                log_info "Existing configuration will not be overwritten"
+                log_info ""
+            fi
+            
             log_minor "Step 1: Check Prerequisites"
             check_prerequisites
             
             build_agent
             install_agent
             setup_configuration
-            setup_aws_credentials
+            
+            # Only validate/setup AWS credentials if not preserving config
+            if [[ "$PRESERVE_CONFIG" != "true" ]]; then
+                setup_aws_credentials
 
-            if ! validate_config; then
-                exit 1
+                if ! validate_config; then
+                    exit 1
+                fi
             fi
             
             if ! verify_installation; then
@@ -1170,6 +1196,9 @@ main() {
             
             log_success "Deployment completed successfully"
             log_info ""
+            if [[ "$PRESERVE_CONFIG" == "true" ]]; then
+                log_info "Binary updated. Configuration preserved."
+            fi
             log_info "Next steps:"
             log_info "1. Review configuration: $CONFIG_FILE"
             if grep -q "^\[fluidity\]" ~/.aws/credentials 2>/dev/null; then
