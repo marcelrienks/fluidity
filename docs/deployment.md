@@ -86,6 +86,41 @@ This:
 
 **Deployment time**: ~10 minutes
 
+### Running the Agent
+
+After deployment, start the agent using the symlink (recommended):
+
+```bash
+fluidity
+```
+
+The agent automatically:
+- Loads configuration from `agent.yaml` in its installation directory
+- Calls Wake Lambda to start the ECS Fargate server
+- Discovers the server IP via Query Lambda
+- Establishes mTLS tunnel connection
+- Listens on local proxy port 8080 for incoming HTTP requests
+
+**For advanced options:**
+```bash
+fluidity --help
+```
+
+**Configuration via command-line flags:**
+```bash
+fluidity --config /path/to/config.yaml        # Explicit config file path
+fluidity --proxy-port 9090                    # Override proxy port
+fluidity --log-level debug                    # Set log level
+fluidity --cert /path/to/cert.crt            # Override certificate paths
+```
+
+**Configuration via environment variables (optional):**
+```bash
+export FLUIDITY_LOG_LEVEL=debug
+export FLUIDITY_LOCAL_PROXY_PORT=9090
+fluidity
+```
+
 ### Manual Steps
 
 **1. Build and Push Server Image**
@@ -121,6 +156,31 @@ Update `configs/agent.yaml` with server IP, then deploy:
 ```bash
 ./build/fluidity-agent -config configs/agent.yaml
 ```
+
+## Agent Usage
+
+After deployment, run the agent using the symlink (recommended):
+
+```bash
+fluidity
+```
+
+The agent automatically loads configuration from `agent.yaml` and starts the tunnel. For options:
+
+```bash
+fluidity --help
+```
+
+Common overrides:
+```bash
+fluidity --proxy-port 9090              # Override listening port
+fluidity --log-level debug              # Enable debug logging
+fluidity -c /path/to/config.yaml        # Use custom config file
+```
+
+Environment variables (optional): `FLUIDITY_LOG_LEVEL`, `FLUIDITY_LOCAL_PROXY_PORT`, etc.
+
+**Configuration precedence:** CLI flags > Environment variables > Config file > Defaults
 
 ## Configuration
 

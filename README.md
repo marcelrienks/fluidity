@@ -136,6 +136,16 @@ This deploys:
 - CloudFormation stacks for infrastructure
 - Local agent configuration
 
+**Start the agent:**
+```bash
+fluidity
+```
+
+The agent automatically loads configuration and starts the tunnel. For additional options, use:
+```bash
+fluidity --help
+```
+
 **→ Full guide:** [Deployment](docs/deployment.md) | [Infrastructure](docs/infrastructure.md)
 
 ## Architecture & System Design

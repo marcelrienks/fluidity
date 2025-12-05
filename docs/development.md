@@ -18,6 +18,50 @@ Prerequisites:
 curl -x http://127.0.0.1:8080 http://example.com
 ```
 
+## Running the Agent
+
+The agent can be run with or without explicit configuration:
+
+**With explicit config file:**
+```bash
+./build/fluidity-agent -config configs/agent.local.yaml
+```
+
+**Auto-discovery (recommended for deployed installations):**
+```bash
+./build/fluidity-agent
+```
+
+The agent will automatically look for `agent.yaml` in its own directory (same location as the binary or symlink).
+
+**View all available options:**
+```bash
+./build/fluidity-agent --help
+```
+
+**Common command-line overrides:**
+```bash
+./build/fluidity-agent --proxy-port 9090              # Override proxy port
+./build/fluidity-agent --log-level debug              # Set log level
+./build/fluidity-agent --server-port 8444             # Override server port
+./build/fluidity-agent --cert /path/to/cert.crt       # Override certificate paths
+./build/fluidity-agent --key /path/to/key.key
+./build/fluidity-agent --ca /path/to/ca.crt
+```
+
+**Environment variable overrides (optional):**
+```bash
+export FLUIDITY_LOG_LEVEL=debug
+export FLUIDITY_LOCAL_PROXY_PORT=9090
+./build/fluidity-agent
+```
+
+**Configuration precedence (highest to lowest):**
+1. CLI flags (`--config`, `--proxy-port`, etc.)
+2. Environment variables (`FLUIDITY_*`)
+3. Config file (`agent.yaml`)
+4. Built-in defaults
+
 ## Project Structure
 
 ```
