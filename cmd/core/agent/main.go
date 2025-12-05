@@ -241,54 +241,25 @@ func runAgent(cmd *cobra.Command, args []string) error {
 
 	// Connection management goroutine
 	go func() {
-		// Wait for server connection after wake
-		if lifecycleClient != nil {
-			logger.Info("Waiting for server connection after wake")
-			waitCtx, waitCancel := context.WithTimeout(ctx, lifecycleConfig.ConnectionTimeout)
-			err := lifecycleClient.WaitForConnection(waitCtx, func() bool {
-				return tunnelClient.IsConnected()
-			})
-			waitCancel()
-
-			if err != nil {
-				logger.Warn("Server connection wait timeout, will continue with normal connection retry", "error", err.Error())
-			}
+		// Connect to tunnel server (single attempt, no retries)
+		logger.Info("Attempting to connect to tunnel server", "server_ip", cfg.ServerIP)
+		if err := tunnelClient.Connect(); err != nil {
+			logger.Error("Failed to connect to tunnel server, exiting", err)
+			cancel()
+			sigChan <- syscall.SIGTERM
+			return
 		}
 
-		// Simple logic: if connection fails, immediately wake a new server for this agent
-		// Each agent gets its own dedicated server instance
+		logger.Info("Successfully connected to tunnel server", "server_ip", cfg.ServerIP)
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			// Connect to tunnel server
-			if !tunnelClient.IsConnected() {
-				logger.Info("Attempting to connect to tunnel server", "server_ip", cfg.ServerIP)
-				if err := tunnelClient.Connect(); err != nil {
-					// Do not attempt to start a new server here — the server was started at agent startup.
-					logger.Error("Failed to connect to tunnel server, exiting", err)
-					// cancel context and notify main loop to perform shutdown and lifecycle kill
-					cancel()
-					// notify main waiter
-					sigChan <- syscall.SIGTERM
-					return
-				}
-				// Successful connection
-				logger.Info("Successfully connected to tunnel server", "server_ip", cfg.ServerIP)
-			}
-
-			// Wait for disconnection or shutdown
-			select {
-			case <-tunnelClient.ReconnectChannel():
-				logger.Warn("Connection lost, will attempt to reconnect")
-				time.Sleep(2 * time.Second)
-			case <-ctx.Done():
-				return
-			}
+		// Wait for disconnection or shutdown
+		select {
+		case <-tunnelClient.ReconnectChannel():
+			logger.Error("Tunnel connection lost, exiting", fmt.Errorf("connection disconnected"))
+			cancel()
+			sigChan <- syscall.SIGTERM
+		case <-ctx.Done():
+			return
 		}
 	}()
 
