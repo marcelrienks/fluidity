@@ -705,30 +705,30 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 
 	c.logger.Debug("Setting up IAM auth response channel")
 
-	// Create channel for IAM auth response
+	// Create channel for IAM auth response (outside of lock to avoid deadlock)
 	respChan := make(chan *protocol.IAMAuthResponse, 1)
-	c.mu.Lock()
-	// Store response channel temporarily (will be picked up by handleResponses)
-	c.iamAuthResponseCh = respChan
-	c.iamAuthRequestID = authReqID
-	c.mu.Unlock()
-
-	c.logger.Debug("IAM auth response channel configured, preparing envelope")
-
-	// Send auth request over tunnel
+	
+	// Prepare envelope before acquiring lock
 	envelope := protocol.Envelope{
 		Type:    "iam_auth_request",
 		Payload: authReq,
 	}
+	c.logger.Debug("IAM auth envelope prepared, storing response channel")
 
-	c.logger.Debug("Checking connection before sending envelope")
+	// Store response channel temporarily (will be picked up by handleResponses)
+	c.mu.Lock()
+	c.iamAuthResponseCh = respChan
+	c.iamAuthRequestID = authReqID
+	c.mu.Unlock()
+	c.logger.Debug("Response channel stored, checking connection state")
 
+	// Get connection details after storing channel
 	c.mu.RLock()
 	isConnected := c.connected
 	conn := c.conn
 	c.mu.RUnlock()
 	
-	c.logger.Debug("Connection check completed", "connected", isConnected, "conn_nil", conn == nil)
+	c.logger.Debug("Connection state check", "connected", isConnected, "conn_not_nil", conn != nil)
 	
 	if !isConnected || conn == nil {
 		c.logger.Error("Failed to send IAM auth request", fmt.Errorf("not connected to server"))
@@ -741,11 +741,12 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 		return fmt.Errorf("failed to send IAM auth request: %w", err)
 	}
 	
-	c.logger.Debug("IAM auth request sent, waiting for response", "id", authReqID)
+	c.logger.Debug("IAM auth request envelope sent successfully, waiting for response", "id", authReqID, "timeout_seconds", 30)
 
 	// Wait for IAM auth response with timeout
 	select {
 	case resp := <-respChan:
+		c.logger.Debug("Received IAM auth response", "id", authReqID, "ok", resp.Ok)
 		if resp.Ok {
 			c.logger.Info("IAM authentication approved by server")
 			return nil
@@ -753,10 +754,10 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 		c.logger.Error("IAM authentication denied by server", fmt.Errorf(resp.Error))
 		return fmt.Errorf("IAM authentication denied: %s", resp.Error)
 	case <-time.After(30 * time.Second):
-		c.logger.Error("IAM authentication timeout", fmt.Errorf("no response from server after 30s"))
+		c.logger.Error("IAM authentication timeout waiting for response", fmt.Errorf("no response from server after 30s"), "id", authReqID)
 		return fmt.Errorf("IAM authentication timeout: no response from server after 30 seconds")
 	case <-ctx.Done():
-		c.logger.Error("IAM authentication cancelled", fmt.Errorf("context cancelled"))
+		c.logger.Error("IAM authentication cancelled", fmt.Errorf("context cancelled"), "id", authReqID)
 		return fmt.Errorf("IAM authentication cancelled")
 	}
 }
