@@ -29,6 +29,7 @@
 #   --vpc-id <vpc>                 VPC ID (auto-detect default VPC)
 #   --public-subnets <subnets>     Comma-separated subnet IDs (auto-detect)
 #   --allowed-cidr <cidr>          Allowed ingress CIDR (auto-detect your IP)
+#   --log-level <level>            Server log level (debug|info|warn|error)
 #   --debug                        Enable debug logging
 #   --force                        Delete and recreate all resources (instead of update)
 #   -h, --help                     Show this help message
@@ -36,6 +37,7 @@
 # EXAMPLES:
 #   ./deploy-server.sh deploy
 #   ./deploy-server.sh deploy --debug
+#   ./deploy-server.sh deploy --log-level debug
 #   ./deploy-server.sh delete
 #   ./deploy-server.sh outputs
 #
@@ -58,6 +60,9 @@ REGION=""
 VPC_ID=""
 PUBLIC_SUBNETS=""
 ALLOWED_CIDR=""
+
+# Server Configuration
+LOG_LEVEL=""
 
 # Feature Flags
 DEBUG=false
@@ -165,6 +170,10 @@ parse_arguments() {
                 ;;
             --allowed-cidr)
                 ALLOWED_CIDR="$2"
+                shift 2
+                ;;
+            --log-level)
+                LOG_LEVEL="$2"
                 shift 2
                 ;;
             --debug)
@@ -1003,6 +1012,20 @@ cleanup() {
 
 action_deploy() {
     mkdir -p "$TEMP_PARAMS_DIR"
+
+    log_minor "Step 1.5: Apply Log Level Configuration"
+    if [[ -n "$LOG_LEVEL" ]]; then
+        log_info "Applying log level to server configuration: $LOG_LEVEL"
+        
+        if [[ -f "$PROJECT_ROOT/configs/server.yaml" ]]; then
+            sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.yaml"
+            log_success "Updated server.yaml with log_level: $LOG_LEVEL"
+        fi
+        if [[ -f "$PROJECT_ROOT/configs/server.docker.yaml" ]]; then
+            sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.docker.yaml"
+            log_success "Updated server.docker.yaml with log_level: $LOG_LEVEL"
+        fi
+    fi
 
     log_minor "Step 2: Build and Upload Lambda Functions to S3"
     log_substep "Building Lambda Functions"

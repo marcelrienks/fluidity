@@ -130,6 +130,7 @@ func (s *Server) Start() error {
 		default:
 		}
 
+		s.logger.Debug("Server listening, waiting for incoming connections", "addr", s.listener.Addr())
 		conn, err := s.listener.Accept()
 		if err != nil {
 			select {
@@ -141,11 +142,24 @@ func (s *Server) Start() error {
 			}
 		}
 
+		s.logger.Debug("New connection accepted", "remote_addr", conn.RemoteAddr(), "local_addr", conn.LocalAddr())
+		
+		// Log TLS connection details
+		if tlsConn, ok := conn.(*tls.Conn); ok {
+			state := tlsConn.ConnectionState()
+			s.logger.Debug("TLS connection accepted",
+				"remote_addr", conn.RemoteAddr(),
+				"version", state.Version,
+				"cipher_suite", state.CipherSuite,
+				"peer_certificates", len(state.PeerCertificates),
+				"negotiated_protocol", state.NegotiatedProtocol)
+		}
+
 		// Check connection limit
 		s.connMutex.RLock()
 		if int(s.activeConns) >= s.maxConns {
 			s.connMutex.RUnlock()
-			s.logger.Warn("Maximum connections reached, rejecting new connection")
+			s.logger.Warn("Maximum connections reached, rejecting new connection", "remote_addr", conn.RemoteAddr())
 			conn.Close()
 			continue
 		}
@@ -244,20 +258,25 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 
 	// Complete the TLS handshake before inspecting connection state
 	if err := conn.Handshake(); err != nil {
-		s.logger.Error("TLS handshake failed", err)
+		s.logger.Error("TLS handshake failed", err, "remote_addr", conn.RemoteAddr())
 		return
 	}
 
 	// Verify client certificate (after handshake)
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		s.logger.Warn("Client connected without certificate")
+		s.logger.Warn("Client connected without certificate", "remote_addr", conn.RemoteAddr())
 		return
 	}
 
 	clientCert := state.PeerCertificates[0]
 	clientInfo := tlsutil.GetCertificateInfo(clientCert)
-	s.logger.Info("Client connected", "client", clientCert.Subject.CommonName, "cert_info", clientInfo)
+	s.logger.Info("Agent connected",
+		"client", clientCert.Subject.CommonName,
+		"remote_addr", conn.RemoteAddr(),
+		"cipher_suite", state.CipherSuite,
+		"tls_version", state.Version)
+	s.logger.Debug("Agent TLS details", "cert_info", clientInfo, "negotiated_protocol", state.NegotiatedProtocol)
 
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
@@ -283,10 +302,12 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 		var env protocol.Envelope
 		if err := decoder.Decode(&env); err != nil {
 			if err != io.EOF {
-				s.logger.Error("Failed to decode envelope", err)
+				s.logger.Error("Failed to decode envelope from agent", err, "remote_addr", conn.RemoteAddr())
 			}
 			break
 		}
+
+		s.logger.Debug("Received envelope from agent", "type", env.Type, "remote_addr", conn.RemoteAddr())
 
 		// Validate message type
 		validTypes := map[string]bool{
@@ -299,7 +320,7 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 			"ws_close":      true,
 		}
 		if !validTypes[env.Type] {
-			s.logger.Warn("Received unknown message type from client, ignoring", "type", env.Type)
+			s.logger.Warn("Received unknown message type from agent, ignoring", "type", env.Type, "remote_addr", conn.RemoteAddr())
 			continue
 		}
 

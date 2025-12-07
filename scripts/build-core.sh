@@ -19,12 +19,14 @@ set -euo pipefail
 #   --linux              Build for Linux (static binary)
 #   --clean              Clean build directory before building
 #   --all                Build everything (server, agent, lambdas)
+#   --log-level <level>  Set log level for server and agent (debug|info|warn|error)
 #
 # Examples:
 #   ./build.sh                      # Build server and agent for current platform
 #   ./build.sh --linux              # Build server and agent for Linux
 #   ./build.sh --agent --linux      # Build only agent for Linux
 #   ./build.sh --clean --all        # Clean, then build everything
+#   ./build.sh --log-level debug    # Build with debug logging enabled
 #
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,6 +89,7 @@ BUILD_SERVER=false
 BUILD_LINUX=false
 CLEAN=false
 BUILD_ALL=false
+LOG_LEVEL=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -115,6 +118,10 @@ while [[ $# -gt 0 ]]; do
             BUILD_ALL=true
             shift
             ;;
+        --log-level)
+            LOG_LEVEL="$2"
+            shift 2
+            ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
             echo "Use --help for usage information"
@@ -133,6 +140,39 @@ fi
 if [[ "$BUILD_ALL" == true ]]; then
     BUILD_AGENT=true
     BUILD_SERVER=true
+fi
+
+# If log level specified, apply to config files
+if [[ -n "$LOG_LEVEL" ]]; then
+    log_info "Applying log level: $LOG_LEVEL"
+    
+    # Apply to server config
+    if [[ -f "$PROJECT_ROOT/configs/server.yaml" ]]; then
+        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.yaml"
+        log_info "Updated server.yaml with log_level: $LOG_LEVEL"
+    fi
+    if [[ -f "$PROJECT_ROOT/configs/server.local.yaml" ]]; then
+        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.local.yaml"
+        log_info "Updated server.local.yaml with log_level: $LOG_LEVEL"
+    fi
+    if [[ -f "$PROJECT_ROOT/configs/server.docker.yaml" ]]; then
+        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.docker.yaml"
+        log_info "Updated server.docker.yaml with log_level: $LOG_LEVEL"
+    fi
+    
+    # Apply to agent config
+    if [[ -f "$PROJECT_ROOT/configs/agent.yaml" ]]; then
+        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/agent.yaml"
+        log_info "Updated agent.yaml with log_level: $LOG_LEVEL"
+    fi
+    if [[ -f "$PROJECT_ROOT/configs/agent.local.yaml" ]]; then
+        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/agent.local.yaml"
+        log_info "Updated agent.local.yaml with log_level: $LOG_LEVEL"
+    fi
+    if [[ -f "$PROJECT_ROOT/configs/agent.docker.yaml" ]]; then
+        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/agent.docker.yaml"
+        log_info "Updated agent.docker.yaml with log_level: $LOG_LEVEL"
+    fi
 fi
 
 # Main execution
