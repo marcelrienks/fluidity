@@ -89,13 +89,13 @@ func (c *Client) UpdateServerAddress(serverAddr string) {
 
 	// Close existing connection if connected
 	if c.connected && c.conn != nil {
-		c.logger.Info("Closing existing connection due to server address change", "old_addr", c.serverAddr, "new_addr", serverAddr)
+		c.logger.Debug("Closing existing connection due to server address change", "old_addr", c.serverAddr, "new_addr", serverAddr)
 		c.conn.Close()
 		c.connected = false
 	}
 
 	c.serverAddr = serverAddr
-	c.logger.Info("Server address updated", "new_addr", serverAddr)
+	c.logger.Debug("Server address updated", "new_addr", serverAddr)
 }
 
 // Connect establishes mTLS connection to server
@@ -268,7 +268,7 @@ func (c *Client) handleResponses() {
 	for {
 		select {
 		case <-c.ctx.Done():
-			c.logger.Info("handleResponses: context cancelled, exiting")
+			c.logger.Debug("handleResponses: context cancelled, exiting")
 			return
 		default:
 		}
@@ -293,7 +293,7 @@ func (c *Client) handleResponses() {
 			"iam_auth_response": true,
 		}
 		if !validTypes[env.Type] {
-			c.logger.Warn("Received unknown message type from server, ignoring", "type", env.Type)
+			c.logger.Debug("Received unknown message type from server, ignoring", "type", env.Type)
 			continue
 		}
 
@@ -315,13 +315,13 @@ func (c *Client) handleResponses() {
 				select {
 				case respChan <- &resp:
 				case <-time.After(1 * time.Second):
-					c.logger.Warn("Response channel blocked", "id", resp.ID)
+					c.logger.Debug("Response channel blocked", "id", resp.ID)
 				}
 				c.mu.Lock()
 				delete(c.requests, resp.ID)
 				c.mu.Unlock()
 			} else {
-				c.logger.Warn("Received response for unknown request", "id", resp.ID)
+				c.logger.Debug("Received response for unknown request", "id", resp.ID)
 			}
 
 		case "connect_ack":
@@ -339,7 +339,7 @@ func (c *Client) handleResponses() {
 				select {
 				case ackCh <- &ack:
 				case <-time.After(1 * time.Second):
-					c.logger.Warn("Connect ack channel blocked", "id", ack.ID)
+					c.logger.Debug("Connect ack channel blocked", "id", ack.ID)
 				}
 			}
 
@@ -391,7 +391,7 @@ func (c *Client) handleResponses() {
 				select {
 				case ackCh <- &ack:
 				case <-time.After(1 * time.Second):
-					c.logger.Warn("WebSocket ack channel blocked", "id", ack.ID)
+					c.logger.Debug("WebSocket ack channel blocked", "id", ack.ID)
 				}
 			}
 
@@ -411,7 +411,7 @@ func (c *Client) handleResponses() {
 				case ch <- &msg:
 				default:
 					// Channel full, drop message (backpressure)
-					c.logger.Warn("WebSocket message channel full, dropping message", "id", msg.ID)
+					c.logger.Debug("WebSocket message channel full, dropping message", "id", msg.ID)
 				}
 			}
 
