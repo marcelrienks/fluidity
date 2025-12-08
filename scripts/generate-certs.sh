@@ -68,51 +68,8 @@ Examples:
 EOF
 }
 
-# Color definitions (light pastel palette)
-PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
-PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
-PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
-WHITE='\033[1;37m'               # Standard white (info logs)
-RED='\033[0;31m'                 # Standard red (errors)
-RESET='\033[0m'
-
-# ============================================================================
-# LOGGING FUNCTIONS
-# ============================================================================
-
-log_header() {
-    echo ""
-    echo ""
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-    echo -e "${PALE_BLUE}$*${RESET}"
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-}
-
-log_minor() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
-}
-
-log_substep() {
-    echo ""
-    echo ""
-    echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
-}
-
-log_info() {
-    echo "[INFO] $*"
-}
-
-log_success() {
-    echo "✓ $*"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR] $*${RESET}" >&2
-}
+# Source shared logging library
+source "$(dirname "${BASH_SOURCE[0]}")/lib-logging.sh"
 
 # ============================================================================
 # CERTIFICATE GENERATION FUNCTIONS
@@ -160,6 +117,8 @@ DNS.2 = localhost
 DNS.3 = host.docker.internal
 IP.1 = 127.0.0.1
 IP.2 = ::1
+IP.3 = 172.31.0.1
+IP.4 = 172.31.255.255
 EXTEOF
     
     # Generate server certificate signed by CA

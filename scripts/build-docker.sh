@@ -63,14 +63,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 
-# Color definitions (light pastel palette)
-PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
-PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
-PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
-WHITE='\033[1;37m'               # Standard white (info logs)
-RED='\033[0;31m'                 # Standard red (errors)
-RESET='\033[0m'
-NC='\033[0m' # No Color
+# Source shared logging library
+source "$(dirname "${BASH_SOURCE[0]}")/lib-logging.sh"
 
 # Default options
 BUILD_SERVER=false
@@ -85,54 +79,6 @@ DEBUG=false
 # Derived values
 GOOS=""
 GOARCH=""
-
-# ============================================================================
-# LOGGING FUNCTIONS
-# ============================================================================
-
-log_header() {
-    echo ""
-    echo ""
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-    echo -e "${PALE_BLUE}$*${RESET}"
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-}
-
-log_minor() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
-}
-
-log_substep() {
-    echo ""
-    echo ""
-    echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
-}
-
-log_info() {
-    echo "[INFO] $*"
-}
-
-log_success() {
-    echo "✓ $*"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR] $*${RESET}" >&2
-}
-
-log_debug() {
-    if [[ "$DEBUG" == "true" ]]; then
-        echo "[DEBUG] $*" >&2
-    fi
-}
-
-log_warn() {
-    echo -e "${PALE_YELLOW}[WARN] $*${RESET}" >&2
-}
 
 # ============================================================================
 # HELP & VALIDATION

@@ -41,42 +41,15 @@ SERVER_CONTAINER="fluidity-server"  # Must match agent.docker.yaml server_ip
 AGENT_CONTAINER="fluidity-agent"
 PROXY_PORT=8081
 
-# Color definitions (progressive light blue)
+# Source shared logging library
+source "$(dirname "${BASH_SOURCE[0]}")/lib-logging.sh"
+
+# Additional colors specific to this script
 LIGHT_BLUE_1='\033[1;38;5;117m'  # Very light blue/cyan (brightest)
 LIGHT_BLUE_2='\033[38;5;75m'     # Noticeably darker light blue
 LIGHT_BLUE_3='\033[38;5;33m'     # More pronounced darker light blue
-RESET='\033[0m'
 GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
 MAGENTA='\033[0;35m'
-NC='\033[0m' # No Color
-
-# ============================================================================
-# LOGGING FUNCTIONS
-# ============================================================================
-
-log_section() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
-}
-
-log_substep() {
-    echo ""
-    echo ""
-    echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
-}
-
-log_info() {
-    echo "[INFO] $*"
-}
-
-log_success() {
-    echo "✓ $*"
-}
 
 log_error() {
     echo "[ERROR] $*" >&2
