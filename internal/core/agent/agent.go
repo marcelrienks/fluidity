@@ -357,8 +357,8 @@ func (c *Client) handleResponses() {
 			if ch != nil {
 				select {
 				case ch <- &data:
-				default:
-					// Channel full, drop packet (backpressure)
+				case <-time.After(5 * time.Second):
+					c.logger.Error("CRITICAL: Connect data channel blocked for 5s, dropping packet", nil, "id", data.ID)
 				}
 			}
 
@@ -497,7 +497,9 @@ func (c *Client) ConnectOpen(id, address string) (*protocol.ConnectAck, error) {
 	c.mu.Lock()
 	c.connectAcks[id] = ackCh
 	if _, exists := c.connectCh[id]; !exists {
-		c.connectCh[id] = make(chan *protocol.ConnectData, 64)
+		// Use larger buffer (512 messages @ 32KB = 16MB max buffered per connection)
+		// This prevents packet drops during large responses
+		c.connectCh[id] = make(chan *protocol.ConnectData, 512)
 	}
 	c.mu.Unlock()
 
