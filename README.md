@@ -27,13 +27,13 @@ Fluidity operates as a **client-server tunnel system** with on-demand lifecycle 
 ┌─────────────────────────────────────────────────────────────────┐
 │ Deployment Model (One Server Per Agent)                         │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
+│                                                                 │
 │ Local:            Cloud:                                        │
-│ Browser           Lambda (Wake/Query) ─┐                       │
+│ Browser           Lambda (Wake/Query) ─┐                        │
 │    ↓              ├─→ ECS Fargate (Server)                      │
 │ Agent (8080) ──→  └─→ Target Services                           │
 │ (mTLS tunnel)                                                   │
-│                                                                  │
+│                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -122,11 +122,14 @@ docker run --rm \
 
 Deploy to production with ECS Fargate and Lambda control plane:
 
-```bash
-# 1. Generate certificates and push to AWS Secrets Manager
-./scripts/generate-certs.sh --save-to-secrets
+**Prerequisites:**
+- AWS CLI v2 installed and authenticated: `aws sts get-caller-identity`
+- AWS credentials configured with permissions for ECS, Lambda, CloudFormation, ECR, IAM
+- Default AWS region set: `aws configure` or `AWS_REGION` environment variable
 
-# 2. Deploy all infrastructure automatically
+**Deploy:**
+```bash
+# Deploy all infrastructure automatically
 ./scripts/deploy-fluidity.sh deploy
 ```
 

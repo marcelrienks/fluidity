@@ -1,8 +1,8 @@
 # Architecture
 
-Client-server tunnel using mTLS for HTTP/HTTPS/WebSocket tunneling through restrictive firewalls.
+Secure client-server tunnel using mTLS for HTTP/HTTPS/WebSocket tunneling through restrictive firewalls.
 
-## System
+## System Overview
 
 ```
 Local: Browser → Agent (8080) → Server (8443) → Target Website
@@ -14,20 +14,19 @@ Cloud: Lambda (Wake/Kill/Query) → ECS Fargate (Server)
 ### Agent (Local)
 - HTTP proxy on port 8080
 - mTLS client to server
-- Calls Wake Lambda on startup (get IP)
+- Calls Wake Lambda on startup to discover server IP
 - Calls Kill Lambda on shutdown
-- Exits on connection failure
 
-**Config** (`agent.yaml`):
+Config:
 ```yaml
-server_ip: "3.24.56.78"
+server_ip: ""                    # Auto-discovered
 server_port: 8443
 local_proxy_port: 8080
 cert_file: "./certs/client.crt"
 key_file: "./certs/client.key"
 ca_cert_file: "./certs/ca.crt"
-wake_endpoint: "https://lambda-url/wake"
-kill_endpoint: "https://lambda-url/kill"
+wake_endpoint: "https://..."     # Lambda endpoint
+kill_endpoint: "https://..."
 ```
 
 ### Server (Cloud)
@@ -36,7 +35,7 @@ kill_endpoint: "https://lambda-url/kill"
 - Emits CloudWatch metrics
 - Health check on port 8080
 
-**Config** (`server.yaml`):
+Config:
 ```yaml
 listen_addr: "0.0.0.0"
 listen_port: 8443
@@ -60,13 +59,12 @@ metrics_interval: "60s"
 2. Agent calls Query Lambda → gets server IP
 3. Agent connects via mTLS to server
 4. Agent proxies HTTP requests through tunnel
-5. On shutdown → agent calls Kill Lambda
-6. Server idles → Sleep Lambda scales down
+5. Server idles → Sleep Lambda scales down
+6. Agent shutdown → calls Kill Lambda
 
 ## Communication Protocol
 
 JSON envelopes over TLS 1.3:
-
 ```go
 type Envelope struct {
     Type    string      // "request", "response", etc.
@@ -79,18 +77,18 @@ Message types:
 - **HTTPS CONNECT**: ConnectRequest, ConnectAck, ConnectData  
 - **WebSocket**: WebSocketOpen, WebSocketMessage, WebSocketClose
 
-## Deployment
-
-**Local**: Binaries on machine
-**Docker**: ~44MB Alpine images
-**AWS**: ECS Fargate (0.25 vCPU, 512MB) + Lambda control plane
-
 ## Security
 
 - mTLS with private CA (TLS 1.3 minimum)
 - Mutual certificate validation
 - No plaintext transmission
 - CloudWatch Logs for audit
+
+## Deployment
+
+**Local**: Binaries on machine  
+**Docker**: ~44MB Alpine images  
+**AWS**: ECS Fargate (0.25 vCPU, 512MB) + Lambda control plane
 
 ## Project Structure
 
@@ -100,18 +98,15 @@ cmd/core/
 └── server/main.go
 
 internal/core/
-├── agent/ (proxy + tunnel client + lifecycle)
-└── server/ (mTLS + HTTP forward + metrics)
+├── agent/              # Proxy + tunnel client
+├── server/             # mTLS + HTTP forward
+└── lambdas/            # Lambda functions
 
 internal/shared/
-├── protocol/ (message types)
-├── tls/ (mTLS utilities)
-├── config/ (YAML loading)
-└── circuitbreaker/ (failure protection)
-
-deployments/cloudformation/
-├── fargate.yaml (ECS)
-└── lambda.yaml (Control plane)
+├── protocol/           # Message types
+├── tls/                # mTLS utilities
+├── config/             # YAML loading
+└── circuitbreaker/     # Failure protection
 ```
 
 ---

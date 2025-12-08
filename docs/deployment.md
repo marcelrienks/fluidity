@@ -9,7 +9,7 @@
 - AWS credentials configured
 
 **Platform Setup:**
-- Windows: Use WSL for all bash scripts
+- Windows: Use WSL for bash scripts
 - Linux (Ubuntu/Debian): `bash scripts/setup-prereq-ubuntu.sh`
 - macOS: `bash scripts/setup-prereq-mac.sh`
 
@@ -74,51 +74,23 @@ Test: `curl -x http://127.0.0.1:8080 http://example.com`
 Deploy server to ECS Fargate + Lambda control plane + agent locally:
 
 ```bash
-./scripts/generate-certs.sh
 ./scripts/deploy-fluidity.sh deploy
 ```
 
-This:
-1. Builds server/agent binaries
-2. Creates ECR repository and pushes server image
-3. Deploys CloudFormation stacks (Fargate + Lambda)
-4. Configures and deploys agent locally
+This deploys:
+1. Generates certificates (if not present)
+2. Builds server/agent binaries
+3. Creates ECR repository and pushes server image
+4. Deploys CloudFormation stacks (Fargate + Lambda)
+5. Configures and deploys agent locally
 
 **Deployment time**: ~10 minutes
 
-### Running the Agent
-
-After deployment, start the agent using the symlink (recommended):
+### Verify Deployment
 
 ```bash
-fluidity
-```
-
-The agent automatically:
-- Loads configuration from `agent.yaml` in its installation directory
-- Calls Wake Lambda to start the ECS Fargate server
-- Discovers the server IP via Query Lambda
-- Establishes mTLS tunnel connection
-- Listens on local proxy port 8080 for incoming HTTP requests
-
-**For advanced options:**
-```bash
-fluidity --help
-```
-
-**Configuration via command-line flags:**
-```bash
-fluidity --config /path/to/config.yaml        # Explicit config file path
-fluidity --proxy-port 9090                    # Override proxy port
-fluidity --log-level debug                    # Set log level
-fluidity --cert /path/to/cert.crt            # Override certificate paths
-```
-
-**Configuration via environment variables (optional):**
-```bash
-export FLUIDITY_LOG_LEVEL=debug
-export FLUIDITY_LOCAL_PROXY_PORT=9090
-fluidity
+aws cloudformation describe-stack-events --stack-name fluidity-fargate
+aws logs tail /ecs/fluidity/server --follow
 ```
 
 ### Manual Steps
@@ -159,32 +131,18 @@ Update `configs/agent.yaml` with server IP, then deploy:
 
 ## Agent Usage
 
-After deployment, run the agent using the symlink (recommended):
+Run the agent using: `fluidity` (or see [Launch Guide](launch.md) for detailed options)
 
-```bash
-fluidity
-```
-
-The agent automatically loads configuration from `agent.yaml` and starts the tunnel. For options:
-
-```bash
-fluidity --help
-```
-
-Common overrides:
+The agent automatically loads configuration from `agent.yaml` and starts the tunnel. For overrides:
 ```bash
 fluidity --proxy-port 9090              # Override listening port
 fluidity --log-level debug              # Enable debug logging
 fluidity -c /path/to/config.yaml        # Use custom config file
 ```
 
-Environment variables (optional): `FLUIDITY_LOG_LEVEL`, `FLUIDITY_LOCAL_PROXY_PORT`, etc.
-
-**Configuration precedence:** CLI flags > Environment variables > Config file > Defaults
-
 ## Configuration
 
-**Agent (`agent.yaml`):**
+**Agent** (`agent.yaml`):
 ```yaml
 server_ip: "FARGATE_PUBLIC_IP"
 server_port: 8443
@@ -196,7 +154,7 @@ wake_endpoint: "https://lambda-url/wake"
 kill_endpoint: "https://lambda-url/kill"
 ```
 
-**Server (`server.yaml`):**
+**Server** (`server.yaml`):
 ```yaml
 listen_addr: "0.0.0.0"
 listen_port: 8443

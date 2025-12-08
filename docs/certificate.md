@@ -13,7 +13,7 @@ Local files:
 AWS Secrets Manager:
 ```bash
 ./scripts/generate-certs.sh --save-to-secrets
-# Output: fluidity/certificates secret with cert_pem, key_pem, ca_pem
+# Output: fluidity/certificates secret
 ```
 
 Options:
@@ -25,24 +25,13 @@ Options:
 
 ## Output
 
-**Local** (`./certs/`):
-- `ca.crt`, `ca.key` - Certificate Authority
-- `server.crt`, `server.key` - Server certificate
-- `client.crt`, `client.key` - Client certificate
+Local files: `./certs/ca.{crt,key}`, `server.{crt,key}`, `client.{crt,key}`
 
-**AWS Secrets Manager**:
-```json
-{
-  "cert_pem": "base64-encoded server cert",
-  "key_pem": "base64-encoded server key",
-  "ca_pem": "base64-encoded CA cert"
-}
-```
+AWS Secrets Manager: Secret contains cert_pem, key_pem, ca_pem (base64-encoded)
 
 ## Configuration
 
-Enable Secrets Manager in configs:
-
+Enable Secrets Manager:
 ```yaml
 use_secrets_manager: true
 secrets_manager_name: "fluidity/certificates"
@@ -50,7 +39,7 @@ secrets_manager_name: "fluidity/certificates"
 
 ## IAM Permissions
 
-To read certificates:
+Read:
 ```json
 {
   "Effect": "Allow",
@@ -59,7 +48,7 @@ To read certificates:
 }
 ```
 
-To create/update certificates:
+Create/update:
 ```json
 {
   "Effect": "Allow",
@@ -77,19 +66,19 @@ Regenerate and update:
 
 ## Security
 
-- Self-signed certificates (development only)
-- Never commit `*.key` files to version control
-- Use AWS KMS encryption for Secrets Manager in production
+- Self-signed (development only)
+- Never commit `*.key` files
+- Use AWS KMS encryption in production
 - Rotate regularly (default: 2 year validity)
-- Production: Use certificates from trusted CA
+- Production: Use trusted CA
 
 ## Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| OpenSSL not found | Linux/macOS: package manager; Windows: use WSL |
-| AWS credentials missing | Run: `aws configure` |
-| Certs already exist | Delete: `rm ./certs/*` then re-run |
+| OpenSSL not found | Linux/macOS: package manager; Windows: WSL |
+| AWS credentials missing | Run `aws configure` |
+| Certs already exist | Delete with `rm ./certs/*` |
 
 ---
 
