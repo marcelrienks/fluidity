@@ -191,7 +191,6 @@ All tests passing with comprehensive coverage:
 ## Known Limitations & Future Work
 
 ### Phase 3 Enhancements (Not Required for Phase 2)
-- [ ] Multi-region deployment support
 - [ ] Advanced monitoring and alerting beyond CloudWatch
 - [ ] Performance optimization and load testing
 - [ ] Production CA certificate integration workflow
@@ -201,7 +200,6 @@ All tests passing with comprehensive coverage:
 ### Optional Improvements
 - [ ] Metrics dashboard (CloudWatch integration)
 - [ ] Advanced logging aggregation
-- [ ] Auto-scaling policies refinement
 - [ ] Health check improvements
 
 ---
