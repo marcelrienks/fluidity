@@ -117,6 +117,8 @@ DNS.2 = localhost
 DNS.3 = host.docker.internal
 IP.1 = 127.0.0.1
 IP.2 = ::1
+IP.3 = 172.31.0.1
+IP.4 = 172.31.255.255
 EXTEOF
     
     # Generate server certificate signed by CA
