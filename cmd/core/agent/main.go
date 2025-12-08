@@ -242,9 +242,10 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	// Connection management goroutine
 	go func() {
 		// Connect to tunnel server (single attempt, no retries)
-		logger.Info("Attempting to connect to tunnel server", "server_ip", cfg.ServerIP)
+		logger.Info("Connecting to tunnel server", "server_ip", cfg.ServerIP, "server_port", cfg.ServerPort, "server_address", cfg.GetServerAddress())
+		logger.Debug("Connection configuration", "tls_min_version", "1.3", "tls_cert_file", cfg.CertFile, "tls_key_file", cfg.KeyFile, "tls_ca_file", cfg.CACertFile)
 		if err := tunnelClient.Connect(); err != nil {
-			logger.Error("Failed to connect to tunnel server, exiting", err)
+			logger.Error("Failed to establish tunnel connection to server, exiting", err, "server_ip", cfg.ServerIP, "server_port", cfg.ServerPort)
 			cancel()
 			sigChan <- syscall.SIGTERM
 			return

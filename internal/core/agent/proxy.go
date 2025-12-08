@@ -152,10 +152,12 @@ func (p *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Check if tunnel is connected
 	if !p.tunnelConn.IsConnected() {
-		p.logger.Error("Tunnel not connected", nil, "id", reqID)
+		p.logger.Error("Failed to process HTTP request: tunnel not connected", nil, "id", reqID, "method", r.Method, "url", r.URL.String())
 		http.Error(w, "Tunnel connection unavailable. Please ensure the tunnel server is running and try again.", http.StatusServiceUnavailable)
 		return
 	}
+
+	p.logger.Debug("Processing HTTP request through tunnel", "id", reqID, "method", r.Method, "url", r.URL.String())
 
 	// Ensure URL is absolute
 	if !r.URL.IsAbs() {
@@ -171,7 +173,7 @@ func (p *Server) handleHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	const maxBodySize = 10 * 1024 * 1024 // 10MB limit
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
-		p.logger.Error("Failed to read request body", err, "id", reqID)
+		p.logger.Error("Failed to read request body", err, "id", reqID, "method", r.Method, "url", r.URL.String())
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}

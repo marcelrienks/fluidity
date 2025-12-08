@@ -148,6 +148,27 @@ fluidity --help
 
 **→ Full guide:** [Deployment](docs/deployment.md) | [Infrastructure](docs/infrastructure.md)
 
+### Running Agent & Browser (3 minutes)
+
+Launch Fluidity agent and Brave browser with proxy configured in one command:
+
+```bash
+# From WSL - automatically detects IP and launches Brave
+brave-fluidity
+
+# Or explicitly
+/home/marcelr/apps/fluidity/launch-brave
+```
+
+The agent is automatically available on port 8080 and all browser traffic routes through the secure tunnel.
+
+**Supported launch methods:**
+- WSL: `brave-fluidity` (alias) or `/home/marcelr/apps/fluidity/launch-brave` (script)
+- PowerShell: `$wslIp = wsl hostname -I | % {$_.Trim().Split()[0]}; brave.exe --proxy-server="http://$wslIp:8080"`
+- CMD: `wsl bash -c "brave-fluidity"`
+
+**→ Full guide:** [Launch Guide](docs/LAUNCH.md)
+
 ## Architecture & System Design
 
 ### Components

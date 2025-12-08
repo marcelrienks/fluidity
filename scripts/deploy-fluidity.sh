@@ -40,7 +40,7 @@
 #   --key-path <path>              Path to client key (optional)
 #   --ca-cert-path <path>          Path to CA certificate (optional)
 #   --install-path <path>          Custom agent installation path (optional)
-#   --log-level <level>            Agent log level (info|debug|warn|error)
+#   --log-level <level>            Log level for server and agent (debug|info|warn|error)
 #   --wake-endpoint <url>          Override wake function endpoint
 #   --kill-endpoint <url>          Override kill function endpoint
 #   --iam-role-arn <arn>           IAM role ARN for agent authentication
@@ -54,6 +54,7 @@
 # EXAMPLES:
 #   ./deploy-fluidity.sh deploy
 #   ./deploy-fluidity.sh deploy --local-proxy-port 8080
+#   ./deploy-fluidity.sh deploy --log-level debug
 #   ./deploy-fluidity.sh deploy-server --region us-west-2
 #   ./deploy-fluidity.sh deploy-agent
 #   ./deploy-fluidity.sh status
@@ -384,6 +385,7 @@ deploy_server() {
     [[ -n "$VPC_ID" ]] && args+=(--vpc-id "$VPC_ID")
     [[ -n "$PUBLIC_SUBNETS" ]] && args+=(--public-subnets "$PUBLIC_SUBNETS")
     [[ -n "$ALLOWED_CIDR" ]] && args+=(--allowed-cidr "$ALLOWED_CIDR")
+    [[ -n "$LOG_LEVEL" ]] && args+=(--log-level "$LOG_LEVEL")
     [[ "$FORCE" == "true" ]] && args+=(--force)
     [[ "$DEBUG" == "true" ]] && args+=(--debug)
     
@@ -619,18 +621,24 @@ main() {
     check_aws_credentials
     
     log_header "Fluidity Complete Deployment"
+    if [[ -n "$LOG_LEVEL" ]]; then
+        log_info "Debug logging enabled for all components: log_level=$LOG_LEVEL"
+    fi
     log_info "Operating System: $OS_TYPE"
     log_info "Default install path: $DEFAULT_INSTALL_PATH"
     log_info "Default proxy port: $DEFAULT_LOCAL_PROXY_PORT"
+    log_debug "Deployment action: $ACTION"
     
     case "$ACTION" in
         deploy)
+            log_minor "Starting Full Deployment (Server + Agent)"
             if ! deploy_server; then
                 exit 1
             fi
             
+            log_minor "Server deployment completed, now deploying agent"
             # Deploy agent with collected endpoints (IP can be provided manually or obtained from wake function later)
-        deploy_agent
+            deploy_agent
             
             log_success "Complete Fluidity deployment finished successfully"
             log_info ""
@@ -670,6 +678,7 @@ main() {
             ;;
         
         deploy-server)
+            log_minor "Starting Server Deployment (AWS ECS + Lambda)"
             if ! deploy_server; then
                 exit 1
             fi
@@ -682,6 +691,7 @@ main() {
             ;;
         
         deploy-agent)
+            log_minor "Starting Agent Deployment (Local System)"
             if [[ -z "$SERVER_IP" ]]; then
                 log_warn "Server IP not provided, agent configuration will require manual input or will be obtained from wake function"
             fi
