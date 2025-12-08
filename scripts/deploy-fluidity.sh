@@ -132,71 +132,12 @@ esac
 INSTALL_PATH="${INSTALL_PATH:-$DEFAULT_INSTALL_PATH}"
 LOCAL_PROXY_PORT="${LOCAL_PROXY_PORT:-$DEFAULT_LOCAL_PROXY_PORT}"
 
-# Color definitions (light pastel palette)
-PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
-PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
-PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
-WHITE='\033[1;37m'               # Standard white (info logs)
-RED='\033[0;31m'                 # Standard red (errors)
-RESET='\033[0m'
+# Source shared logging library
+source "$(dirname "${BASH_SOURCE[0]}")/lib-logging.sh"
 
 # ============================================================================
-# LOGGING FUNCTIONS
+# HELP & VALIDATION
 # ============================================================================
-
-log_header() {
-    echo ""
-    echo ""
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-    echo -e "${PALE_BLUE}$*${RESET}"
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-}
-
-log_minor() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
-}
-
-log_substep() {
-    echo ""
-    echo ""
-    echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
-}
-
-log_info() {
-    echo "[INFO] $*"
-}
-
-log_debug() {
-    if [[ "$DEBUG" == "true" ]]; then
-        echo "[DEBUG] $*" >&2
-    fi
-}
-
-log_warn() {
-    echo "[WARN] $*" >&2
-}
-
-log_success() {
-    echo "✓ $*"
-}
-
-log_error_start() {
-    echo ""
-    echo -e "${RED}================================================================================${RESET}"
-    echo -e "${RED}ERROR${RESET}"
-    echo -e "${RED}================================================================================${RESET}"
-}
-
-log_error_end() {
-    echo -e "${RED}================================================================================${RESET}"
-    echo ""
-}
-
-
 
 check_aws_credentials() {
     # Check if action requires AWS credentials
@@ -217,24 +158,6 @@ check_aws_credentials() {
             exit 1
         fi
     fi
-}
-
-log_section() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
-}
-
-log_substep() {
-    echo ""
-    echo ""
-    echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
-}
-
-log_success() {
-    echo "✓ $*"
 }
 
 # ============================================================================
