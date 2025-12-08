@@ -101,9 +101,9 @@ func (c *Client) UpdateServerAddress(serverAddr string) {
 // Connect establishes mTLS connection to server
 func (c *Client) Connect() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.connected {
+		c.mu.Unlock()
 		return nil
 	}
 
@@ -132,6 +132,7 @@ func (c *Client) Connect() error {
 	conn, err := tls.Dial("tcp", c.serverAddr, tlsConfig)
 	if err != nil {
 		c.logger.Error("TLS dial failed", err, "addr", c.serverAddr, "host", host)
+		c.mu.Unlock()
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}
 	c.logger.Debug("TCP connection established, performing TLS handshake")
@@ -153,12 +154,17 @@ func (c *Client) Connect() error {
 	// Start handling responses from server in background
 	go c.handleResponses()
 
+	// Release lock before authentication to avoid deadlock (authenticateWithIAM acquires its own lock)
+	c.mu.Unlock()
+
 	// Perform IAM authentication after response handler is started
 	if err := c.authenticateWithIAM(c.ctx); err != nil {
 		c.logger.Error("IAM authentication failed", err)
+		c.mu.Lock()
 		conn.Close()
 		c.conn = nil
 		c.connected = false
+		c.mu.Unlock()
 		return fmt.Errorf("IAM authentication failed: %w", err)
 	}
 
