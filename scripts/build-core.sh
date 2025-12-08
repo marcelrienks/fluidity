@@ -1,87 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+###############################################################################
+# Fluidity Core Build Script
 #
-# build.sh - Build Fluidity server and agent binaries
-#
-# This script compiles the Fluidity server and agent with support for:
+# Compiles Fluidity server and agent binaries with support for:
 # - Native builds (current platform)
 # - Linux builds (for Docker/deployment)
 # - Individual or combined builds
 #
-# Usage:
-#   ./build.sh [OPTIONS]
+# USAGE:
+#   ./build-core.sh [OPTIONS]
 #
-# Options:
-#   --help, -h           Show this help message
+# OPTIONS:
 #   --agent              Build only the agent
 #   --server             Build only the server
 #   --linux              Build for Linux (static binary)
 #   --clean              Clean build directory before building
 #   --all                Build everything (server, agent, lambdas)
-#   --log-level <level>  Set log level for server and agent (debug|info|warn|error)
+#   --debug              Enable debug logging
+#   -h, --help           Show this help message
 #
-# Examples:
-#   ./build.sh                      # Build server and agent for current platform
-#   ./build.sh --linux              # Build server and agent for Linux
-#   ./build.sh --agent --linux      # Build only agent for Linux
-#   ./build.sh --clean --all        # Clean, then build everything
-#   ./build.sh --log-level debug    # Build with debug logging enabled
+# EXAMPLES:
+#   ./build-core.sh                      # Build server and agent for current platform
+#   ./build-core.sh --linux              # Build server and agent for Linux
+#   ./build-core.sh --agent --linux      # Build only agent for Linux
+#   ./build-core.sh --clean --all        # Clean, then build everything
 #
+###############################################################################
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 CMD_DIR="$PROJECT_ROOT/cmd/core"
+
+# Source shared logging library
+source "$SCRIPT_DIR/lib-logging.sh"
+
+# Build version
 BUILD_VERSION="${BUILD_VERSION:-$(date +%Y%m%d%H%M%S)}"
+mkdir -p "$BUILD_DIR"
 echo "$BUILD_VERSION" > "$BUILD_DIR/.build_version"
-
-# Color definitions (light pastel palette)
-PALE_BLUE='\033[38;5;153m'       # Light pastel blue (major headers)
-PALE_YELLOW='\033[38;5;229m'     # Light pastel yellow (minor headers)
-PALE_GREEN='\033[38;5;193m'      # Light pastel green (sub-headers)
-WHITE='\033[1;37m'               # Standard white (info logs)
-RED='\033[0;31m'                 # Standard red (errors)
-RESET='\033[0m'
-
-# Logging functions (consistent with deploy-fluidity.sh)
-log_header() {
-    echo ""
-    echo ""
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-    echo -e "${PALE_BLUE}$*${RESET}"
-    echo -e "${PALE_BLUE}================================================================================${RESET}"
-}
-
-log_minor() {
-    echo ""
-    echo ""
-    echo -e "${PALE_YELLOW}$*${RESET}"
-    echo -e "${PALE_YELLOW}================================================================================${RESET}"
-}
-
-log_substep() {
-    echo ""
-    echo ""
-    echo -e "${PALE_GREEN}$*${RESET}"
-    echo -e "${PALE_GREEN}--------------------------------------------------------------------------------${RESET}"
-}
-
-log_info() {
-    echo "[INFO] $*"
-}
-
-log_success() {
-    echo "✓ $*"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR] $*${RESET}" >&2
-}
-
-log_debug() {
-    echo "[DEBUG] $*" >&2
-}
 
 # Default options
 BUILD_AGENT=false
@@ -89,13 +48,12 @@ BUILD_SERVER=false
 BUILD_LINUX=false
 CLEAN=false
 BUILD_ALL=false
-LOG_LEVEL=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --help|-h)
-            grep '^#' "$0" | grep -v '#!/usr/bin/env' | sed 's/^# //; s/^#//'
+            sed -n '3,/^###############################################################################$/p' "$0" | sed '$d' | sed 's/^# *//'
             exit 0
             ;;
         --agent)
@@ -118,12 +76,12 @@ while [[ $# -gt 0 ]]; do
             BUILD_ALL=true
             shift
             ;;
-        --log-level)
-            LOG_LEVEL="$2"
-            shift 2
+        --debug)
+            DEBUG=true
+            shift
             ;;
         *)
-            echo -e "${RED}Unknown option: $1${NC}"
+            log_error "Unknown option: $1"
             echo "Use --help for usage information"
             exit 1
             ;;
@@ -142,45 +100,13 @@ if [[ "$BUILD_ALL" == true ]]; then
     BUILD_SERVER=true
 fi
 
-# If log level specified, apply to config files
-if [[ -n "$LOG_LEVEL" ]]; then
-    log_info "Applying log level: $LOG_LEVEL"
-    
-    # Apply to server config
-    if [[ -f "$PROJECT_ROOT/configs/server.yaml" ]]; then
-        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.yaml"
-        log_info "Updated server.yaml with log_level: $LOG_LEVEL"
-    fi
-    if [[ -f "$PROJECT_ROOT/configs/server.local.yaml" ]]; then
-        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.local.yaml"
-        log_info "Updated server.local.yaml with log_level: $LOG_LEVEL"
-    fi
-    if [[ -f "$PROJECT_ROOT/configs/server.docker.yaml" ]]; then
-        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/server.docker.yaml"
-        log_info "Updated server.docker.yaml with log_level: $LOG_LEVEL"
-    fi
-    
-    # Apply to agent config
-    if [[ -f "$PROJECT_ROOT/configs/agent.yaml" ]]; then
-        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/agent.yaml"
-        log_info "Updated agent.yaml with log_level: $LOG_LEVEL"
-    fi
-    if [[ -f "$PROJECT_ROOT/configs/agent.local.yaml" ]]; then
-        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/agent.local.yaml"
-        log_info "Updated agent.local.yaml with log_level: $LOG_LEVEL"
-    fi
-    if [[ -f "$PROJECT_ROOT/configs/agent.docker.yaml" ]]; then
-        sed -i '' "s/log_level: .*/log_level: $LOG_LEVEL/" "$PROJECT_ROOT/configs/agent.docker.yaml"
-        log_info "Updated agent.docker.yaml with log_level: $LOG_LEVEL"
-    fi
-fi
-
-# Main execution
-log_header "Fluidity Core Build"
+# ============================================================================
+# BUILD FUNCTIONS
+# ============================================================================
 
 # Clean if requested
 if [[ "$CLEAN" == true ]]; then
-    log_section "Cleaning Build Directory"
+    log_minor "Cleaning Build Directory"
     rm -rf "$BUILD_DIR"
     log_success "Build directory cleaned"
 fi
