@@ -1,416 +1,491 @@
-# Fluidity Implementation Status
+# Fluidity Implementation Plan
 
-Project phase tracking and completed work summary.
-
-## Current Phase: Phase 2 - Complete ✅
-
-All core functionality has been successfully implemented, tested, and verified through manual testing.
+**Last Updated:** December 9, 2025  
+**Current Status:** Dynamic certificates implemented. Outstanding work: unique CN with ARN-based identity.
 
 ---
 
-## Completed Work Summary
+## Objective: Server ARN-Based Certificate Identity with Public IP Validation
 
-Phase 2 is complete. All work items have been successfully implemented and documented in version control. Refer to git history for implementation details.
+Implement AWS ARN (Amazon Resource Name) as the certificate CommonName with public IP validation via SAN for comprehensive mutual authentication:
+
+- **Shared identity** - Both agent and server use the server ARN in certificate CN for mutual recognition
+- **IP validation** - Agent cert includes agent public IP in SAN; server cert includes both server and agent public IPs in SAN
+- **Works with local agents** - Agent (local/on-prem) receives server ARN and agent public IP from Wake Lambda
+- **Full mutual TLS** - Both certificates signed by same CA, validated by CN (identity) and SAN (IP authorization)
+- **Secure IP passing** - Agent IP passed via Wake Lambda → DynamoDB → Server reads at startup
+- **Scalable** - One agent can connect to multiple servers (each has unique ARN and knows its expected agent IP)
 
 ---
 
-## Known Limitations & Future Work
+## Foundation: Current Implementation ✅
 
-### Phase 3: Dynamic Certificate Management with Unique CN (ARN-Based)
+Dynamic certificates already implemented with:
 
-**Status**: In Progress ⚙️ (Core Implementation Complete ✅, Architecture Refined)
+- **CA Lambda**: AWS Lambda function that signs CSRs and issues certificates
+- **Agent certificates**: Generated with CN=`fluidity-client`, SAN=agent IP (to be enhanced)
+- **Server certificates**: Generated with CN=`fluidity-server`, no SAN (to be enhanced)
+- **Caching**: Certificates cached locally with auto-renewal 30 days before expiration
+- **Infrastructure**: CloudFormation template for CA Lambda deployment
+- **Build status**: All components compile successfully
 
-**Objective**: Implement dynamic, per-instance certificate generation at runtime using unique identifiers (AWS ARNs) instead of fixed generic names. Each agent and server gets a certificate with their specific AWS resource ARN as the CommonName.
-
-**Problem Being Solved**:
-
-- Current approach requires pre-generating certificates with hardcoded IP ranges
-- IP addresses may change (CloudFront, Elastic IP reassignment, failover)
-- Multiple servers require unique certificates with their specific IPs/identities
-- Generic certificate names ("fluidity-server") don't provide per-instance identity
-- No per-instance audit trail in certificates
-
-**Solution: Dynamic Certificates with Unique ARN-Based Identity**
-
-#### Overview
-
+Current architecture (to be enhanced):
 ```
-Agent Startup:
-├─ Detect local IP (eth0/en0 preferred)
-├─ Query Lambda returns: server_ip + server_arn
-├─ Detect/query own ARN
-├─ Generate CSR with CN=<agent_arn>, SAN=<local_ip>
-├─ Request CA signing from Lambda
-└─ Cache signed certificate
-
-Server Startup:
-├─ Discover own ARN from:
-│  ├─ ECS_TASK_ARN (ECS Fargate, automatic)
-│  ├─ SERVER_ARN env var (CloudFormation)
-│  └─ EC2 metadata (fallback)
-├─ Generate CSR with CN=<server_arn>, SAN=(empty)
-├─ Request CA signing from Lambda
-└─ Cache signed certificate
-
-Connection:
-├─ Agent validates: server CN == expected ARN from Query Lambda ✓
-├─ Server validates: agent CN == ARN, IP SAN matches source ✓
-├─ Mutual TLS established with per-instance identity ✓
-└─ Unique certificates, can't be interchanged
+Agent (local) → detect local IP → generate CSR (CN=fluidity-client) → CA Lambda
+Server (AWS) → generate CSR (CN=fluidity-server) → CA Lambda
+Problem: Generic fixed CNs - no per-instance identity
 ```
 
-#### Architecture Components
+Target architecture (after implementation):
+```
+AGENT STARTUP:
+  1. Call Wake Lambda → get server_arn, server_public_ip, agent_public_ip_as_seen
+  2. Detect local IP
+  3. Generate CSR: CN=<server_arn>, SAN=agent_public_ip_as_seen
+  4. Submit to CA Lambda → cache cert
 
-1. **Static CA Certificate** (One-time setup)
-   - Generate once during project setup
-   - Store securely in AWS Secrets Manager
-   - Distribute to all agents and servers at deployment
-   - Never changes (provides trust anchor)
+WAKE LAMBDA:
+  1. Receives call from agent (extracts agent_public_ip from HTTP source IP)
+  2. Stores agent_public_ip in DynamoDB: { server_arn, agent_ip: 203.45.67.89 }
+  3. Sets ECS desired count = 1 (triggers server startup)
+  4. Returns to agent: { server_arn, server_public_ip, agent_public_ip_as_seen }
 
-2. **Lambda CA Service**
-   - Receives Certificate Signing Requests (CSR)
-   - Validates CSR format and CN/ARN structure
-   - Validates CN matches expected pattern (arn:aws:...)
-   - Signs with stored CA private key
-   - Returns signed certificate with 1-year validity
+SERVER STARTUP:
+  1. Discover own ARN from $ECS_TASK_ARN or $SERVER_ARN or EC2 metadata
+  2. Discover own public IP from ECS/EC2 metadata
+  3. Query DynamoDB: get agent_public_ip for this server_arn
+  4. Generate CSR: CN=<server_arn>, SAN=[server_public_ip, agent_public_ip]
+  5. Submit to CA Lambda → cache cert
 
-3. **Query Lambda Enhancement**
-   - Returns both server IP AND server ARN in single response
-   - Agent receives authenticated server identity
-   - No separate ARN lookup needed
-   - Single API call provides all identity information
+MUTUAL VALIDATION AT CONNECTION:
+  Agent → Server:
+    • Server presents cert: CN=server_arn ✓, SAN=[server_public_ip, agent_public_ip] ✓
+    • Agent validates: connection target IP matches server_public_ip in SAN ✓
+  
+  Server → Agent:
+    • Agent presents cert: CN=server_arn ✓, SAN=agent_public_ip ✓
+    • Server validates: connection source IP matches agent_public_ip in SAN ✓
 
-4. **Agent Initialization** (Unique CN)
-   - Detect local IP via network interfaces (eth0/en0 preferred)
-   - Query Lambda returns: server_ip + server_arn
-   - Discover own ARN (from environment/IAM if available)
-   - Generate RSA 2048-bit key pair
-   - Create CSR with:
-     - CommonName: <agent_arn> (unique per instance)
-     - SAN: detected local IP
-   - Call CA Lambda to sign CSR
-   - Cache certificate and key locally (permissions: 0600)
-   - Validate cached certificate on subsequent startups
-   - Auto-renew 30 days before expiration
-
-5. **Server Initialization** (Unique CN)
-   - Discover own ARN from (priority order):
-     - **ECS Fargate:** $ECS_TASK_ARN (automatic, preferred)
-     - **CloudFormation:** $SERVER_ARN parameter (explicit)
-     - **EC2:** EC2 metadata service (fallback)
-   - Generate RSA 2048-bit key pair
-   - Create CSR with:
-     - CommonName: <server_arn> (unique per instance)
-     - SAN: (empty - Agent uses ARN from Query Lambda)
-   - Call CA Lambda to sign CSR
-   - Cache certificate and key locally (permissions: 0600)
-   - Validate cached certificate on subsequent startups
-   - Auto-renew 30 days before expiration
-
-#### Implementation Details
-
-**Files to Create**:
-
-- `internal/shared/certs/csr_generator.go` - CSR generation with unique ARN-based CN
-- `internal/shared/certs/ca_client.go` - CA Lambda service client
-- `internal/shared/certs/arn_discovery.go` - ARN discovery utilities
-- `internal/shared/certs/ip_detection.go` - IP detection from interfaces
-- `internal/core/agent/cert_manager.go` - Agent certificate manager
-- `internal/core/server/cert_manager.go` - Server certificate manager
-- `cmd/lambdas/ca/main.go` - CA signing Lambda function
-- `deployments/cloudformation/ca-lambda.yaml` - CloudFormation template
-
-**Configuration Changes**:
-
-- `agent.yaml`: Add `ca_service_url` and `cert_cache_dir` parameters
-- `server.yaml`: Add `ca_service_url` and `cert_cache_dir` parameters
-
-**Code Changes**:
-
-- Agent: Add certificate initialization with ARN discovery in `main.go`
-- Server: Add certificate initialization with ARN discovery in `main.go`
-- Both: Add ARN discovery (environment, IAM, EC2 metadata)
-- Both: Add IP/ARN-based CSR generation
-- CA Lambda: Add CSR validation and certificate signing
-
-#### Design Decision: Unique ARN-Based CN (Consolidated Phase 3)
-
-**Why Unique CN Instead of Fixed CN:**
-
-No value in implementing fixed CN ("fluidity-server") first, then upgrading to unique CN later. Consolidate into single Phase 3 that goes directly to per-instance identity:
-
-1. **Per-Instance Identity**
-   - Each certificate is unique per AWS resource (ARN)
-   - Can't accidentally use server cert for another instance
-   - Better security and audit trail
-
-2. **Enhanced Security**
-   - Attacker with CA key needs correct ARN (two factors)
-   - Prevents certificate reuse across instances
-   - Defense-in-depth validation
-
-3. **Audit & Compliance**
-   - Certificate CN directly maps to resource
-   - Auditors can verify per-instance certificates
-   - CloudWatch logs show which instance used which cert
-
-4. **Single Implementation**
-   - No need for intermediate fixed CN step
-   - No need for later migration
-   - One consolidated, complete solution
-
-5. **Query Lambda Integration**
-   - Agent receives server ARN from Query Lambda
-   - Single authenticated source for both IP and identity
-   - No separate lookups needed
-
-#### ARN Discovery Strategy
-
-**Agent ARN** (Optional, if available):
-- Environment variable: `AGENT_ARN`
-- From IAM metadata (if available)
-- Fallback: Generate cert without agent ARN if not available
-
-**Server ARN** (Three-Tier Priority - Always Required):
-
-1. **ECS Fargate (Recommended - ~99% of deployments)**
-   - $ECS_TASK_ARN (automatically set by ECS)
-   - Zero latency, no API calls
-   - Works offline
-   - **Example:** `arn:aws:ecs:us-east-1:123456789:task/service/abc123`
-
-2. **CloudFormation Parameter (Flexible)**
-   - $SERVER_ARN (explicit environment variable)
-   - Works with any deployment tool
-   - Works with EC2, Lambda, on-prem
-   - **Example:** Set in task definition or launch template
-
-3. **EC2 Metadata (Fallback)**
-   - Query EC2 metadata service
-   - Works on EC2 instances
-   - ~500-1000ms latency
-   - **Example:** `arn:aws:ec2:us-east-1:123456789:instance/i-abc123`
-
-#### Advantages
-
-✅ **Per-Instance Identity**
-- Each certificate is unique per AWS resource (ARN)
-- Perfect audit trail (CN maps to infrastructure)
-- Can't accidentally use cert for wrong instance
-
-✅ **Enhanced Security**
-- Attacker needs CA key + correct ARN (two factors)
-- Prevents certificate reuse across instances
-- Defense-in-depth (ARN + CA signature + IP validation)
-
-✅ **Dynamic IP Support**
-- No hardcoded IP ranges
-- Works with CloudFront, Elastic IPs, dynamic IPs
-- Works behind load balancers
-
-✅ **Flexible Deployment**
-- Works with ECS Fargate (automatic)
-- Works with CloudFormation (explicit)
-- Works with EC2, Lambda, on-prem (any deployment)
-
-✅ **Zero Pre-Generation**
-- No manual certificate generation script
-- Deployment step: just run binary
-- Certs generated automatically at startup
-
-✅ **Secure**
-- CA-signed certificates (chain of trust)
-- Mutual TLS authentication
-- ARN in certificate provides identity proof
-- Audit trail in CloudWatch logs
-
-✅ **Scalable**
-- Add new servers/agents without manual steps
-- Works with auto-scaling groups
-- Works with infrastructure as code
-
-✅ **Low Operational Overhead**
-- Automatic certificate generation
-- 1-year validity (minimal renewal)
-- No certificate distribution needed
-
-#### Disadvantages
-
-❌ **ARN Discovery Required**
-- Server must discover its own ARN
-- Requires environment variable or API calls
-- Three-tier fallback handles most cases
-
-❌ **Additional Lambda Function**
-- Requires CA Lambda deployment
-- Lambda cold start ~100-200ms (first time only)
-- Small monthly Lambda cost (~$0.20 typical)
-
-❌ **Startup Time**
-- IP detection: ~50ms
-- ARN discovery: 0-1000ms (depending on method)
-- Key generation: ~50ms
-- CSR generation: ~50ms
-- Lambda signing: ~200ms (cold start)
-- Total: ~300-1300ms additional (first startup only)
-- Subsequent startups: negligible (~10ms, cached)
-
-❌ **CA Key Management**
-- CA private key must be stored securely
-- AWS Secrets Manager required (best practice)
-- Must rotate annually
-
-- IP detection: ~50ms
-- CSR generation: ~50ms
-- Lambda signing: ~200ms (includes cold start)
-- Total: ~300-400ms additional startup time
-
-❌ **CA Key Management**
-- CA private key must be stored securely
-- AWS Secrets Manager required (best practice)
-- Must rotate annually
-
-#### Phase 3 Complete Implementation (Consolidated)
-
-**Sub-Tasks - Core Implementation:**
-
-- [x] Design dynamic certificate system with unique ARN-based CN
-- [x] Design CA Lambda function (CSR validation, signing)
-- [x] Implement ARN discovery (ECS Fargate, CloudFormation, EC2 metadata)
-- [x] Implement IP detection (network interfaces)
-- [x] Implement CSR generation with unique CN
-- [x] Implement Agent certificate manager
-- [x] Implement Server certificate manager
-- [x] Create CA Lambda CloudFormation template
-- [x] Add CA service client (retry logic, error handling)
-- [x] Integrate with Query Lambda (return IP + ARN)
-- [x] Documentation: Architecture and design decisions
-- [x] Documentation: ARN discovery guide
-- [ ] Testing: Local certificate generation with ARN
-- [ ] Testing: CA Lambda signing with ARN
-- [ ] Testing: Multi-server scenarios with unique CN
-- [ ] Testing: Agent ARN validation from Query Lambda
-- [ ] Testing: Server ARN discovery (ECS, CloudFormation, EC2)
-- [ ] Testing: Fallback mechanisms
-- [ ] Integration tests: Agent + Server with unique CN
-- [ ] Documentation: Configuration examples
-- [ ] Documentation: Certificate operations guide
-- [ ] Documentation: Migration from static certs
-- [ ] Remove old `generate-certs.sh` dependencies
-- [ ] Update deployment guides
-- [ ] Testing: Multi-server scenarios
-- [ ] Documentation: Certificate management guide
-- [ ] Documentation: CA Lambda operations
-- [ ] Remove old `generate-certs.sh` script
-- [ ] Update deployment guides to reference new approach
-
-#### Timeline Estimate
-
-- Design & API: 2 days
-- CA Lambda implementation: 3 days
-- Agent/Server integration: 4 days
-- Testing (unit, integration, E2E): 5 days
-- Documentation: 2 days
-- **Total: ~16 days** (2-3 weeks)
-
-#### Rollout Plan
-
-**Phase 3.1**: CA Lambda infrastructure
-
-- Implement and deploy CA Lambda
-- Test with manual CSR requests
-- Document CA operations
-
-**Phase 3.2**: Agent certificate management
-
-- Implement IP detection
-- Implement CSR generation
-- Implement CA client
-- Test with local agent startup
-
-**Phase 3.3**: Server certificate management
-
-- Implement server-side certificate manager
-- Test with local server startup
-- Integration tests (agent + server with dynamic certs)
-
-**Phase 3.4**: Deprecation
-
-- Remove old `generate-certs.sh` dependencies
-- Update all documentation
-- Update deployment scripts
-
-### Optional Improvements (Post Phase 3)
-
-- [ ] Metrics dashboard (CloudWatch integration)
-- [ ] Advanced logging aggregation
-- [ ] Health check improvements
-- [ ] Certificate auto-renewal before expiration
-- [ ] CA key rotation automation
-
----
-
-## Deployment Guide
-
-### Quick Start (Production)
-
-```bash
-./scripts/deploy-fluidity.sh deploy
-fluidity
-curl -x http://127.0.0.1:8080 http://example.com
+Benefit: Full IP validation + ARN-based identity + mutual recognition
 ```
 
-### Local Development
+---
 
-```bash
-./scripts/generate-certs.sh
-./scripts/build-core.sh
-./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
-./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
-curl -x http://127.0.0.1:8080 http://example.com
+## Outstanding Work: Implement Unique CN with ARN
+
+### 1. Query Lambda Enhancement (1-2 days)
+
+**What:** Enhance Query Lambda to return server ARN and agent public IP alongside server IP
+
+**Current behavior:**
+```json
+{ "server_ip": "10.0.1.5" }
 ```
 
-### Docker Testing
-
-```bash
-./scripts/build-docker.sh --server --agent
-docker-compose -f deployments/docker-compose.test.yml up
+**Target behavior:**
+```json
+{
+  "server_ip": "10.0.1.5",
+  "server_arn": "arn:aws:ecs:us-east-1:123456789:task/service/abc123def456",
+  "agent_public_ip": "203.45.67.89"
+}
 ```
 
-See [Deployment Guide](deployment.md) for detailed instructions.
+**Tasks:**
+- [ ] Query Lambda: Add ARN discovery from its own execution context
+- [ ] Query Lambda: Query DynamoDB to get agent_public_ip for this server_arn
+- [ ] Query Lambda: Include ARN and agent_public_ip in response JSON
+- [ ] Test Query Lambda returns all three: server_ip, server_arn, agent_public_ip
+- [ ] Update API documentation
 
 ---
 
-## Documentation
+### 2. Wake Lambda Enhancement: Store Agent IP (1 day)
 
-- **[Architecture](architecture.md)**: System design and component details
-- **[Deployment](deployment.md)**: Setup for all environments (local, Docker, AWS)
-- **[Development](development.md)**: Development environment and coding practices
-- **[Infrastructure](infrastructure.md)**: AWS CloudFormation templates
-- **[Certificate](certificate.md)**: mTLS certificate generation and management
-- **[Launch](LAUNCH.md)**: Quick reference for running agent and browser
-- **[Product](product.md)**: Features and capabilities overview
+**What:** Wake Lambda extracts agent public IP from HTTP source IP and stores in DynamoDB for server to retrieve at startup
 
----
+**How it works:**
+```
+Wake Lambda receives call from agent
+  ├─ Extract HTTP source IP: 203.45.67.89
+  ├─ Determine server_arn: arn:aws:ecs:.../task/server-xyz
+  ├─ Store in DynamoDB table: fluidity_agent_ips
+  │  └─ Key: server_arn
+  │  └─ Value: { agent_public_ip: 203.45.67.89, timestamp: now }
+  ├─ Set ECS desired count = 1 (trigger server startup)
+  └─ Return to agent: { server_arn, server_public_ip, agent_public_ip_as_seen }
+```
 
-## Version Information
-
-- **Status**: Phase 2 Complete
-- **Build Version**: b7cde93 (Logging standardization)
-- **Go Version**: 1.23+
-- **Docker Image Size**: ~44MB (Alpine)
-- **Last Updated**: December 8, 2025
-
----
-
-## Notes for Future Development
-
-1. **Code Quality**: All code follows Go conventions with gofmt and proper error handling
-2. **Testing Strategy**: Comprehensive unit and integration tests, plus manual verification
-3. **Logging**: Structured JSON logging with configurable levels (debug, info, warn, error)
-4. **Security**: mTLS only, no unencrypted communications, SigV4 signature validation
-5. **Performance**: Efficient WebSocket tunneling, connection pooling, circuit breaker pattern
+**Implementation:**
+- [ ] Create DynamoDB table: `fluidity_agent_ips`
+  - Primary key: `server_arn` (partition key)
+  - Attributes: `agent_public_ip`, `timestamp`
+  - TTL: 1 hour (auto-cleanup of stale entries)
+- [ ] Wake Lambda: Extract HTTP source IP
+- [ ] Wake Lambda: Store to DynamoDB with server_arn as key
+- [ ] Wake Lambda: Return agent_public_ip_as_seen to agent in response
+- [ ] Add IAM permissions: DynamoDB write access for Wake Lambda
+- [ ] Test DynamoDB write from Wake Lambda
 
 ---
 
-See [Deployment](deployment.md) for current operations and [Development](development.md) for contributing
+### 3. Server ARN Discovery and Public IP Discovery (1 day)
+
+**What:** Server discovers its own AWS ARN and public IP at startup, then retrieves agent IP from DynamoDB
+
+**ARN Discovery - Three-tier fallback (in order):**
+
+1. **ECS Fargate** - `os.Getenv("ECS_TASK_ARN")` (automatic, <1ms, 99.99%)
+2. **CloudFormation Parameter** - `os.Getenv("SERVER_ARN")` (explicit, 0ms, 100%)
+3. **EC2 Metadata** - Query metadata service (fallback, 500-1000ms, 99.9%)
+
+**Public IP Discovery - Two-tier:**
+
+1. **ECS Task Metadata** - Get public IP from ECS task metadata (if assigned)
+2. **EC2 Metadata** - Query EC2 metadata service for public IP
+   - Falls back if ECS metadata not available
+
+**Agent IP Retrieval from DynamoDB:**
+
+```
+Server startup:
+  1. Discover server_arn (above)
+  2. Discover server_public_ip (above)
+  3. Query DynamoDB table `fluidity_agent_ips`:
+     └─ Key: server_arn
+     └─ Get: agent_public_ip
+     └─ If not found: error (agent must call Wake Lambda first)
+  4. Now have: [server_arn, server_public_ip, agent_public_ip]
+  5. Generate certificate with all three
+```
+
+**Implementation file:** `internal/shared/certs/arn_discovery.go` and `internal/core/server/ip_discovery.go`
+
+**Tasks:**
+- [ ] Implement ECS Fargate ARN detection
+- [ ] Implement CloudFormation parameter ARN detection
+- [ ] Implement EC2 metadata ARN fallback
+- [ ] Implement ECS task metadata public IP detection
+- [ ] Implement EC2 metadata public IP fallback
+- [ ] Implement DynamoDB query for agent_public_ip
+- [ ] Add fallback chain logic for both ARN and public IP
+- [ ] Add error handling: fail gracefully if agent IP not in DynamoDB
+- [ ] Add logging for all discoveries
+- [ ] Add IAM permissions: DynamoDB read access for server
+
+---
+
+### 4. Agent: Receive Server Details from Wake Lambda and Generate Cert (1 day)
+
+**What:** Agent receives server ARN, server IP, and its own public IP from Wake Lambda; generates certificate with both ARN identity and public IP validation
+
+**Agent startup flow:**
+```
+1. Call Wake Lambda
+2. Wake Lambda sees source IP: 203.45.67.89 (agent's public IP)
+3. Wake Lambda returns:
+   {
+     "server_arn": "arn:aws:ecs:us-east-1:123456789:task/server-xyz",
+     "server_public_ip": "54.123.45.67",
+     "agent_public_ip_as_seen": "203.45.67.89"
+   }
+4. Detect local IP (for informational logging only)
+5. Generate CSR with:
+   CN = <server_arn>
+   SAN = agent_public_ip_as_seen (203.45.67.89)
+6. Call CA Lambda → get signed agent cert
+7. Cache cert
+
+Later, when connecting to server:
+8. Call Query Lambda → get server_ip, server_arn, agent_public_ip
+9. Connect to server_public_ip: 54.123.45.67
+10. Server presents cert:
+    CN = <server_arn> ✓
+    SAN = [54.123.45.67, 203.45.67.89] ✓
+11. Agent validates:
+    • CN == <server_arn> from Wake Lambda ✓
+    • Connection target IP matches server SAN ✓
+12. Agent presents cert:
+    CN = <server_arn> ✓
+    SAN = 203.45.67.89 ✓
+13. Mutual TLS established with full validation
+```
+
+**Why this works:**
+- Agent doesn't need its own ARN (runs locally, not in AWS)
+- Agent gets server_arn and agent_public_ip from Wake Lambda (authenticated call)
+- Agent cert SAN contains agent's public IP for server to validate
+- Server cert SAN contains both server and agent IPs for full authorization
+
+**Implementation file:** `internal/core/agent/` files
+
+**Tasks:**
+- [ ] Extract server_arn from Wake Lambda response
+- [ ] Extract server_public_ip from Wake Lambda response
+- [ ] Extract agent_public_ip_as_seen from Wake Lambda response
+- [ ] Pass all three to certificate manager
+- [ ] Generate CSR with CN=<server_arn>, SAN=agent_public_ip_as_seen
+- [ ] Submit to CA Lambda and cache
+- [ ] Query Lambda call: extract server_arn and agent_public_ip from response
+- [ ] Validate server certificate CN matches server ARN from Wake Lambda
+- [ ] Validate server certificate SAN contains expected server IP
+- [ ] Add logging for all IP and ARN details
+
+---
+
+### 5. Server: Discover Details and Generate Cert with Full SAN Validation (1 day)
+
+**What:** Server discovers its ARN, public IP, and agent IP from DynamoDB; generates certificate with both server and agent IPs in SAN
+
+**Server startup flow:**
+```
+1. Discover own ARN from:
+   - $ECS_TASK_ARN (ECS Fargate, automatic)
+   - $SERVER_ARN (CloudFormation param, explicit)
+   - EC2 metadata (fallback)
+   Example: arn:aws:ecs:us-east-1:123456789:task/server-xyz
+
+2. Discover own public IP from:
+   - ECS task metadata (if assigned)
+   - EC2 metadata service (fallback)
+   Example: 54.123.45.67
+
+3. Query DynamoDB table `fluidity_agent_ips`:
+   - Key: server_arn
+   - Retrieve: agent_public_ip (set by Wake Lambda)
+   - Example: 203.45.67.89
+   - If not found: wait/retry (agent must call Wake Lambda first)
+
+4. Generate RSA key
+
+5. Generate CSR with:
+   CN = <server_arn>
+   SAN = [server_public_ip, agent_public_ip]
+   Example SAN: [54.123.45.67, 203.45.67.89]
+
+6. Call CA Lambda → get signed server cert
+
+7. Cache cert
+
+8. Store agent_public_ip in memory for runtime validation:
+   - Future connections: validate source IP == agent_public_ip
+
+Later, when agent connects:
+9. Agent presents cert:
+   CN = <server_arn> ✓
+   SAN = 203.45.67.89 ✓
+
+10. Server validates:
+    • CN == self_arn ✓
+    • Connection source IP matches agent_public_ip in SAN ✓
+    • Full mutual TLS established ✓
+```
+
+**Implementation file:** `internal/core/server/` files
+
+**Tasks:**
+- [ ] Call ARN discovery on server startup
+- [ ] Call public IP discovery on server startup
+- [ ] Query DynamoDB for agent_public_ip (with retries if not yet available)
+- [ ] Generate CSR with CN=<server_arn>, SAN=[server_public_ip, agent_public_ip]
+- [ ] Update CA Lambda to accept multiple IPs in SAN
+- [ ] Submit to CA Lambda and cache
+- [ ] Store agent_public_ip in memory for runtime validation
+- [ ] Validate incoming agent certificate CN matches self ARN
+- [ ] Validate connection source IP matches agent_public_ip from SAN
+- [ ] Add logging for ARN, IPs, and validation details
+- [ ] Handle case where agent IP not in DynamoDB: retry with backoff
+
+---
+
+### 6. CSR Generator and CA Lambda: Support ARN as CN with Multiple IPs in SAN (1 day)
+
+**What:** Enhance CSR generator and CA Lambda to create certificates with server ARN as CN and support multiple IPs in SAN
+
+**Agent CSR:**
+```
+GenerateCSRWithServerARN(privateKey, serverARN, agentPublicIP)
+  CN = <serverARN>
+  SAN = agentPublicIP
+  Example: CN=arn:aws:ecs:.../task/server-xyz, SAN=203.45.67.89
+```
+
+**Server CSR:**
+```
+GenerateCSRWithServerARN(privateKey, serverARN, [serverPublicIP, agentPublicIP])
+  CN = <serverARN>
+  SAN = [serverPublicIP, agentPublicIP]
+  Example: CN=arn:aws:ecs:.../task/server-xyz, SAN=[54.123.45.67, 203.45.67.89]
+```
+
+**Implementation files:** `internal/shared/certs/csr_generator.go` and CA Lambda
+
+**Tasks:**
+- [ ] Add `GenerateCSRWithARNAndSAN(privateKey, serverARN, sanIPs)` function
+  - [ ] Accept single IP or list of IPs for SAN
+  - [ ] Support both agent (single IP) and server (multiple IPs) modes
+- [ ] Validate ARN format (arn:aws:...)
+- [ ] Validate IP format (both IPv4)
+- [ ] Create CSR with CN=<server_arn> and proper SAN entries
+- [ ] Update CA Lambda: accept ARN-based CN patterns
+- [ ] Update CA Lambda: accept multiple IPs in SAN
+- [ ] Add CN validation in CA Lambda (must be valid AWS ARN format)
+- [ ] Add SAN validation in CA Lambda (must be valid IP addresses)
+
+---
+
+### 7. Configuration (1 day)
+
+**What:** Ensure server ARN discovery, IP discovery, and DynamoDB access are configured
+
+**DynamoDB Setup:**
+```
+Table Name: fluidity_agent_ips
+Primary Key: server_arn (string, partition key)
+Attributes:
+  - server_arn (PK)
+  - agent_public_ip (string)
+  - timestamp (number, for TTL)
+TTL: 1 hour (auto-cleanup)
+```
+
+**Agent config:**
+```yaml
+ca_service_url: https://...
+cert_cache_dir: /var/lib/fluidity/certs
+# Server ARN, server IP, and agent public IP received from Wake Lambda
+```
+
+**Server config:**
+```yaml
+ca_service_url: https://...
+cert_cache_dir: /var/lib/fluidity/certs
+dynamodb_table: fluidity_agent_ips
+dynamodb_region: us-east-1
+# ARN auto-discovered from ECS_TASK_ARN / SERVER_ARN / EC2 metadata
+# Public IP auto-discovered from ECS/EC2 metadata
+# Agent IP retrieved from DynamoDB at startup
+```
+
+**IAM Permissions:**
+```
+Wake Lambda:
+  - dynamodb:PutItem (fluidity_agent_ips table)
+  - ec2:DescribeInstances (if needed for IP discovery)
+
+Server:
+  - dynamodb:GetItem (fluidity_agent_ips table)
+  - ec2:DescribeNetworkInterfaces (for public IP discovery)
+```
+
+**Tasks:**
+- [ ] Create DynamoDB table: fluidity_agent_ips with TTL
+- [ ] Update Agent config: ca_service_url, cert_cache_dir
+- [ ] Update Server config: add dynamodb_table, dynamodb_region
+- [ ] Update Wake Lambda IAM: add DynamoDB write permissions
+- [ ] Update Server IAM: add DynamoDB read permissions, EC2 describe permissions
+- [ ] Document DynamoDB table structure and TTL setup
+- [ ] Update deployment CloudFormation templates
+
+---
+
+### 8. Testing (3 days)
+
+**Unit Tests:**
+- [ ] Server ARN discovery: ECS Fargate, CloudFormation, EC2 metadata
+- [ ] Server public IP discovery: ECS metadata, EC2 metadata
+- [ ] ARN and IP discovery: fallback chain logic
+- [ ] CSR generation: ARN as CN with single IP SAN (agent)
+- [ ] CSR generation: ARN as CN with multiple IPs in SAN (server)
+- [ ] Wake Lambda: extracts HTTP source IP correctly
+- [ ] Wake Lambda: stores to DynamoDB correctly
+- [ ] Agent config: parses server_arn, server_ip, agent_public_ip
+- [ ] Server config: parses dynamodb_table, dynamodb_region
+
+**Integration Tests:**
+- [ ] Wake Lambda extracts agent IP from HTTP source
+- [ ] Wake Lambda stores agent IP in DynamoDB
+- [ ] Agent receives server_arn, server_ip, agent_public_ip from Wake Lambda
+- [ ] Agent generates cert with CN=<server_arn>, SAN=agent_public_ip
+- [ ] Server discovers its ARN, public IP
+- [ ] Server queries DynamoDB and gets agent_public_ip
+- [ ] Server generates cert with CN=<server_arn>, SAN=[server_ip, agent_ip]
+- [ ] Query Lambda returns server_arn and agent_public_ip
+- [ ] CA Lambda accepts ARN as CN
+- [ ] CA Lambda accepts multiple IPs in SAN
+
+**End-to-End Tests:**
+- [ ] Full deployment: agent calls Wake Lambda → server startup → both have proper certs
+- [ ] Agent connects to server: validates server SAN contains expected server IP ✓
+- [ ] Server accepts agent: validates agent SAN contains expected agent IP ✓
+- [ ] Server validates connection source IP matches agent SAN ✓
+- [ ] Agent validates connection target IP matches server SAN ✓
+- [ ] Multi-server scenario: each server has unique agent IP from DynamoDB
+- [ ] Agent IP change: DynamoDB updated on next Wake Lambda call
+- [ ] Error handling: DynamoDB write fails gracefully
+- [ ] Error handling: Server startup waits for agent IP in DynamoDB
+- [ ] Error handling: Query Lambda missing server_arn or agent_public_ip
+
+---
+
+## Implementation Sequence
+
+1. **Query Lambda Enhancement** - return server_arn and agent_public_ip
+2. **Wake Lambda Enhancement** - extract agent IP, store in DynamoDB, return to agent
+3. **DynamoDB Setup** - create fluidity_agent_ips table with TTL
+4. **Server ARN and Public IP Discovery** - implement both discovery methods
+5. **Server DynamoDB Query** - read agent IP at startup
+6. **CSR Generator and CA Lambda Enhancement** - support ARN as CN, multiple IPs in SAN
+7. **Agent Certificate Generation** - use server_arn in CN, agent_public_ip in SAN
+8. **Server Certificate Generation** - use server_arn in CN, [server_ip, agent_ip] in SAN
+9. **Configuration and IAM** - setup DynamoDB table, permissions, configs
+10. **Testing** - comprehensive validation of full flow
+11. **Documentation** - deployment, troubleshooting, architecture
+
+---
+
+## Security Benefits
+
+| Scenario | With ARN Identity + IP Validation |
+|----------|---|
+| Identity validation | CN contains server ARN (per-instance) |
+| IP validation | Agent SAN validated by server against connection source IP |
+| IP validation | Server SAN validated by agent against connection target IP |
+| Comprehensive validation | Both CN (who) and SAN (where) validated |
+| Attacker forges cert | Must use valid server ARN + valid IPs (checked by CA Lambda) |
+| Agent cert stolen | Rejected if presented from wrong IP |
+| Server IP spoofing | Agent validates server IP in SAN matches target |
+| Agent IP spoofing | Server validates agent IP in SAN matches source |
+| Audit trail | Both sides know exact server ARN, server IP, and agent IP |
+| Mutual recognition | Full 3-way validation: ARN + both IPs |
+
+---
+
+## Success Criteria
+
+- [ ] Wake Lambda returns: server_arn, server_public_ip, agent_public_ip_as_seen
+- [ ] Wake Lambda stores agent IP in DynamoDB with server_arn key
+- [ ] Query Lambda returns: server_ip, server_arn, agent_public_ip
+- [ ] DynamoDB table created with TTL for auto-cleanup
+- [ ] Server discovers its own ARN correctly (ECS/CloudFormation/EC2)
+- [ ] Server discovers its own public IP correctly (ECS/EC2 metadata)
+- [ ] Server queries DynamoDB and retrieves agent_public_ip
+- [ ] Agent receives server_arn, server_public_ip, agent_public_ip from Wake Lambda
+- [ ] Agent generates CSR with CN=<server_arn>, SAN=agent_public_ip
+- [ ] Server generates CSR with CN=<server_arn>, SAN=[server_public_ip, agent_public_ip]
+- [ ] CA Lambda accepts ARN as CN format
+- [ ] CA Lambda accepts multiple IPs in SAN
+- [ ] Agent cert SAN has single IP (agent's public IP)
+- [ ] Server cert SAN has both IPs (server and agent)
+- [ ] Agent validates server cert: CN == server_arn ✓
+- [ ] Agent validates server cert: connection target IP in SAN ✓
+- [ ] Server validates agent cert: CN == self_arn ✓
+- [ ] Server validates agent cert: connection source IP in SAN ✓
+- [ ] Mutual TLS succeeds with full validation
+- [ ] Agent cert rejected by different server (different CN/different expected agent IP)
+- [ ] Error handling: graceful if ARN discovery fails
+- [ ] Error handling: graceful if public IP discovery fails
+- [ ] Error handling: graceful if DynamoDB read fails (retry with backoff)
+- [ ] Logging: clear debug output for all discoveries and validations
+- [ ] All tests passing
+
