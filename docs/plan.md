@@ -266,6 +266,172 @@ The implementation uses **Option A** design pattern:
 - Update all documentation
 - Update deployment scripts
 
+### Phase 3.4+: Enhanced Unique CN with ARN Discovery (Future Enhancement)
+
+**Status**: Planned for Phase 3.4+ ⏳
+
+**Objective**: Add optional per-instance identity (ARN-based CN) to certificates for enhanced security and audit capabilities.
+
+**Current State (Phase 3.3)**: Fixed CN validation
+- Agent cert: CN=fluidity-client (with IP SAN)
+- Server cert: CN=fluidity-server (no SAN)
+- Simple, secure, works everywhere
+
+**Enhanced State (Phase 3.4+)**: Unique CN per instance
+- Agent cert: CN=<agent_arn> (with IP SAN)
+- Server cert: CN=<server_arn> (no SAN)
+- Per-instance identity, better audit trail
+
+#### Architecture: Integrated ARN Discovery
+
+**Query Lambda Enhancement (Extended Response)**
+
+```json
+{
+  "server_ip": "10.0.1.5",
+  "server_arn": "arn:aws:ecs:us-east-1:123456789:task/service/abc123def456",
+  "timestamp": "2025-12-09T10:34:28Z"
+}
+```
+
+Agent receives both IP and ARN from Query Lambda in single call:
+- Agent uses IP to connect to server
+- Agent uses ARN to validate server's certificate CN
+- Single authenticated source for both values
+
+**Server ARN Discovery (From ECS/CloudFormation)**
+
+Server can retrieve its own ARN from multiple sources:
+1. **ECS Fargate (Best)**: `$ECS_TASK_ARN` environment variable
+   - Automatically provided by ECS
+   - Always available in Fargate
+   - No additional API calls needed
+
+2. **CloudFormation (Fallback)**: Via stack parameters
+   - Pass task ARN via environment variable
+   - Set during deployment
+
+3. **EC2 (Fallback)**: Via IAM role
+   - Use boto3/aws-cli to describe self
+   - Requires IAM permissions
+
+#### Implementation Plan (Phase 3.4+)
+
+**Step 1: Update Query Lambda Response**
+```go
+type QueryResponse struct {
+    ServerIP  string `json:"server_ip"`
+    ServerARN string `json:"server_arn"`
+}
+```
+
+**Step 2: Server ARN Discovery**
+```go
+// Server startup
+arn := os.Getenv("ECS_TASK_ARN")  // Fargate provides this
+if arn == "" {
+    arn = os.Getenv("SERVER_ARN")  // CloudFormation parameter
+}
+if arn == "" {
+    arn = discoverARNFromEC2Metadata()  // Fallback
+}
+```
+
+**Step 3: Agent Configuration Enhancement**
+```yaml
+# Optional: Enable unique CN validation
+use_unique_cn: false  # Phase 3.3 (default, fixed CN)
+use_unique_cn: true   # Phase 3.4+ (unique CN per instance)
+```
+
+**Step 4: Certificate Generation with Unique CN**
+```go
+// Agent uses server ARN from Query Lambda response
+csrBytes, err := certs.GenerateCSRWithUniqueID("fluidity-agent", agentARN, privKey)
+
+// Server uses its own discovered ARN
+csrBytes, err := certs.GenerateCSRWithUniqueID("fluidity-server", serverARN, privKey)
+```
+
+#### Security Benefits
+
+**Threat Mitigation:**
+
+1. **CA Key Compromise** (With Unique CN)
+   ```
+   Attacker: "I have CA key, I'll forge fluidity-server cert"
+   Defense: "Wrong ARN, cert invalid for this instance"
+   Result: Attacker needs correct ARN + CA key (much harder)
+   ```
+
+2. **Certificate Reuse**
+   ```
+   Attacker: "I'll use leaked server cert from instance A for instance B"
+   Defense: "CN=arn:instance-A, but server is instance-B"
+   Result: Cert won't validate
+   ```
+
+3. **Audit Trail**
+   ```
+   Certificate CN directly maps to AWS resource
+   → CloudWatch logs show which instance used which cert
+   → Compliance auditors can verify per-instance certificates
+   ```
+
+#### Configuration Example (Phase 3.4+)
+
+```yaml
+# agent.yaml
+use_unique_cn: true
+ca_service_url: https://xxx.execute-api.region.amazonaws.com/prod/sign
+cert_cache_dir: /var/lib/fluidity/certs
+
+# server.yaml
+use_unique_cn: true
+ca_service_url: https://xxx.execute-api.region.amazonaws.com/prod/sign
+cert_cache_dir: /var/lib/fluidity/certs
+```
+
+#### Compatibility & Rollout
+
+✅ **Backward Compatible**
+- Phase 3.3: Works with fixed CN
+- Phase 3.4+: Optional feature flag (default off)
+- Can enable per-deployment
+- No breaking changes
+
+**Migration Path:**
+```
+Phase 3.3 (Current):  use_unique_cn: false  ← Works now
+     ↓
+Phase 3.4+:          use_unique_cn: true   ← Opt-in enhancement
+     ↓
+Future:              use_unique_cn: true   ← Can default to true
+```
+
+#### Implementation Effort
+
+- Update Query Lambda: 1-2 days
+- Update Agent cert manager: 1 day
+- Update Server cert manager: 1 day
+- Testing: 2 days
+- Documentation: 1 day
+- **Total: ~6-7 days** (1-1.5 weeks)
+
+#### Phase 3.4+ Sub-Tasks
+
+- [ ] Update Query Lambda to return ARN
+- [ ] Implement server ARN discovery (ECS/CloudFormation)
+- [ ] Add GenerateCSRWithUniqueID function
+- [ ] Update agent cert manager for unique CN
+- [ ] Update server cert manager for unique CN
+- [ ] Add use_unique_cn configuration flag
+- [ ] Test with ECS task ARN discovery
+- [ ] Test with CloudFormation parameter
+- [ ] Test agent ARN validation from Query Lambda
+- [ ] Documentation: Unique CN operations guide
+- [ ] Migration guide: Fixed CN → Unique CN
+
 ### Optional Improvements (Post Phase 3)
 
 - [ ] Metrics dashboard (CloudWatch integration)
