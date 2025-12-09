@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"fluidity/internal/shared/certs"
 	"fluidity/internal/shared/logger"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -24,6 +25,8 @@ type QueryResponse struct {
 	Status   string `json:"status"` // "negative", "pending", "ready"
 	PublicIP string `json:"public_ip,omitempty"`
 	Message  string `json:"message"`
+	// New field for ARN-based certificate generation
+	ServerARN string `json:"server_arn,omitempty"`
 }
 
 // FunctionURLResponse wraps the response for Lambda Function URL format
@@ -164,6 +167,18 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 		return nil, fmt.Errorf("instance_id is required")
 	}
 
+	// Discover server ARN
+	serverARN, err := certs.DiscoverServerARN()
+	if err != nil {
+		h.logger.Warn("Failed to discover server ARN, will continue without it", map[string]interface{}{
+			"error": err.Error(),
+		})
+	} else {
+		h.logger.Info("Discovered server ARN", map[string]interface{}{
+			"serverARN": serverARN,
+		})
+	}
+
 	// Parse instance ID to get cluster and service names
 	// Format: {clusterName}-{serviceName}-{timestamp}
 	parts := strings.Split(request.InstanceID, "-")
@@ -217,8 +232,9 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 			"serviceName": serviceName,
 		})
 		return &QueryResponse{
-			Status:  "negative",
-			Message: "ECS service not found",
+			Status:    "negative",
+			Message:   "ECS service not found",
+			ServerARN: serverARN,
 		}, nil
 	}
 
@@ -236,22 +252,25 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 	// Step 2: Check service status
 	if desiredCount == 0 {
 		return &QueryResponse{
-			Status:  "negative",
-			Message: "Service is stopped (desiredCount=0)",
+			Status:    "negative",
+			Message:   "Service is stopped (desiredCount=0)",
+			ServerARN: serverARN,
 		}, nil
 	}
 
 	if runningCount == 0 && pendingCount > 0 {
 		return &QueryResponse{
-			Status:  "pending",
-			Message: fmt.Sprintf("Service is starting (pendingCount=%d)", pendingCount),
+			Status:    "pending",
+			Message:   fmt.Sprintf("Service is starting (pendingCount=%d)", pendingCount),
+			ServerARN: serverARN,
 		}, nil
 	}
 
 	if runningCount == 0 {
 		return &QueryResponse{
-			Status:  "negative",
-			Message: "Service failed to start (runningCount=0)",
+			Status:    "negative",
+			Message:   "Service failed to start (runningCount=0)",
+			ServerARN: serverARN,
 		}, nil
 	}
 
@@ -271,8 +290,9 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 
 	if publicIP == "" {
 		return &QueryResponse{
-			Status:  "pending",
-			Message: "Service is running but public IP not yet available",
+			Status:    "pending",
+			Message:   "Service is running but public IP not yet available",
+			ServerARN: serverARN,
 		}, nil
 	}
 
@@ -281,9 +301,10 @@ func (h *Handler) handleQueryRequest(ctx context.Context, request QueryRequest) 
 	})
 
 	return &QueryResponse{
-		Status:   "ready",
-		PublicIP: publicIP,
-		Message:  "Service is running and ready",
+		Status:    "ready",
+		PublicIP:  publicIP,
+		Message:   "Service is running and ready",
+		ServerARN: serverARN,
 	}, nil
 }
 
