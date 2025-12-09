@@ -22,18 +22,43 @@ type CertManager struct {
 	log            *logging.Logger
 	certCachePath  string
 	keyCachePath   string
+	// New fields for ARN-based certificates
+	serverARN           string
+	agentPublicIP       string
+	useARNBasedCerts    bool
 }
 
-// NewCertManager creates a new certificate manager for the agent
+// NewCertManager creates a new certificate manager for the agent (legacy mode)
 func NewCertManager(cacheDir string, caServiceURL string, log *logging.Logger) *CertManager {
 	return &CertManager{
-		cacheDir:      cacheDir,
-		caServiceURL:  caServiceURL,
-		caClient:      certs.NewCAServiceClient(caServiceURL, 10*time.Second, 3),
-		log:           log,
-		certCachePath: filepath.Join(cacheDir, "agent.crt"),
-		keyCachePath:  filepath.Join(cacheDir, "agent.key"),
+		cacheDir:         cacheDir,
+		caServiceURL:     caServiceURL,
+		caClient:         certs.NewCAServiceClient(caServiceURL, 10*time.Second, 3),
+		log:              log,
+		certCachePath:    filepath.Join(cacheDir, "agent.crt"),
+		keyCachePath:     filepath.Join(cacheDir, "agent.key"),
+		useARNBasedCerts: false,
 	}
+}
+
+// NewCertManagerWithARN creates a new certificate manager with ARN-based certificates
+func NewCertManagerWithARN(cacheDir string, caServiceURL string, serverARN string, agentPublicIP string, log *logging.Logger) *CertManager {
+	return &CertManager{
+		cacheDir:         cacheDir,
+		caServiceURL:     caServiceURL,
+		caClient:         certs.NewCAServiceClient(caServiceURL, 10*time.Second, 3),
+		log:              log,
+		certCachePath:    filepath.Join(cacheDir, "agent.crt"),
+		keyCachePath:     filepath.Join(cacheDir, "agent.key"),
+		serverARN:        serverARN,
+		agentPublicIP:    agentPublicIP,
+		useARNBasedCerts: true,
+	}
+}
+
+// GetServerARN returns the stored server ARN (for validation during connection)
+func (cm *CertManager) GetServerARN() string {
+	return cm.serverARN
 }
 
 // EnsureCertificate ensures that the agent has a valid certificate
@@ -47,23 +72,36 @@ func (cm *CertManager) EnsureCertificate(ctx context.Context) (string, string, e
 
 	cm.log.Info("Generating new certificate for agent")
 
-	// Detect local IP
-	localIP, err := certs.DetectLocalIP()
-	if err != nil {
-		return "", "", fmt.Errorf("failed to detect local IP: %w", err)
-	}
-	cm.log.Info("Detected local IP", "ip", localIP)
-
 	// Generate private key
 	privKey, err := certs.GeneratePrivateKey()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate private key: %w", err)
 	}
 
-	// Generate CSR
-	csrBytes, err := certs.GenerateCSR("fluidity-client", localIP, privKey)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to generate CSR: %w", err)
+	var csrBytes []byte
+	
+	if cm.useARNBasedCerts {
+		// ARN-based certificate generation
+		cm.log.Info("Generating ARN-based certificate", 
+			"server_arn", cm.serverARN, 
+			"agent_public_ip", cm.agentPublicIP)
+		
+		csrBytes, err = certs.GenerateCSRWithARNAndMultipleSANs(privKey, cm.serverARN, []string{cm.agentPublicIP})
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate ARN-based CSR: %w", err)
+		}
+	} else {
+		// Legacy certificate generation
+		localIP, err := certs.DetectLocalIP()
+		if err != nil {
+			return "", "", fmt.Errorf("failed to detect local IP: %w", err)
+		}
+		cm.log.Info("Detected local IP", "ip", localIP)
+		
+		csrBytes, err = certs.GenerateCSR("fluidity-client", localIP, privKey)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate CSR: %w", err)
+		}
 	}
 
 	csrPEM := certs.EncodeCSRToPEM(csrBytes)
