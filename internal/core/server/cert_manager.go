@@ -22,9 +22,15 @@ type CertManager struct {
 	log            *logging.Logger
 	certCachePath  string
 	keyCachePath   string
+	// New fields for lazy ARN-based certificate generation
+	serverARN      string
+	serverPublicIP string
+	privateKey     *rsa.PrivateKey
+	agentIPs       []string // List of agent IPs in current certificate
+	useLazyGen     bool
 }
 
-// NewCertManager creates a new certificate manager for the server
+// NewCertManager creates a new certificate manager for the server (legacy mode)
 func NewCertManager(cacheDir string, caServiceURL string, log *logging.Logger) *CertManager {
 	return &CertManager{
 		cacheDir:      cacheDir,
@@ -33,10 +39,168 @@ func NewCertManager(cacheDir string, caServiceURL string, log *logging.Logger) *
 		log:           log,
 		certCachePath: filepath.Join(cacheDir, "server.crt"),
 		keyCachePath:  filepath.Join(cacheDir, "server.key"),
+		useLazyGen:    false,
 	}
 }
 
-// EnsureCertificate ensures that the server has a valid certificate
+// NewCertManagerWithLazyGen creates a new certificate manager with lazy generation
+// serverARN and serverPublicIP are discovered at startup, but cert generation is deferred
+func NewCertManagerWithLazyGen(cacheDir string, caServiceURL string, serverARN string, serverPublicIP string, log *logging.Logger) *CertManager {
+	return &CertManager{
+		cacheDir:       cacheDir,
+		caServiceURL:   caServiceURL,
+		caClient:       certs.NewCAServiceClient(caServiceURL, 10*time.Second, 3),
+		log:            log,
+		certCachePath:  filepath.Join(cacheDir, "server.crt"),
+		keyCachePath:   filepath.Join(cacheDir, "server.key"),
+		serverARN:      serverARN,
+		serverPublicIP: serverPublicIP,
+		useLazyGen:     true,
+		agentIPs:       []string{},
+	}
+}
+
+// InitializeKey generates and caches the RSA private key (called at startup for lazy gen)
+func (cm *CertManager) InitializeKey() error {
+	// Check if key already exists
+	if _, err := os.Stat(cm.keyCachePath); err == nil {
+		// Load existing key
+		keyPEM, err := os.ReadFile(cm.keyCachePath)
+		if err != nil {
+			return fmt.Errorf("failed to read cached private key: %w", err)
+		}
+		
+		privKey, err := certs.DecodePrivateKeyFromPEM(keyPEM)
+		if err != nil {
+			cm.log.Warn("Failed to decode cached private key, generating new one", "error", err.Error())
+		} else {
+			cm.privateKey = privKey
+			cm.log.Info("Loaded existing private key from cache")
+			return nil
+		}
+	}
+
+	// Generate new private key
+	privKey, err := certs.GeneratePrivateKey()
+	if err != nil {
+		return fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	cm.privateKey = privKey
+
+	// Cache the private key
+	keyPEM := certs.EncodePrivateKeyToPEM(privKey)
+	if err := os.MkdirAll(cm.cacheDir, 0700); err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	if err := os.WriteFile(cm.keyCachePath, keyPEM, 0600); err != nil {
+		return fmt.Errorf("failed to write private key: %w", err)
+	}
+
+	cm.log.Info("Generated and cached new private key")
+	return nil
+}
+
+// GetServerARN returns the stored server ARN
+func (cm *CertManager) GetServerARN() string {
+	return cm.serverARN
+}
+
+// EnsureCertificateForConnection ensures certificate is valid for the connecting agent IP
+// This is called on each connection attempt and handles lazy generation
+func (cm *CertManager) EnsureCertificateForConnection(ctx context.Context, agentIP string) (string, string, error) {
+	if !cm.useLazyGen {
+		// Legacy mode: use standard EnsureCertificate
+		return cm.EnsureCertificate(ctx)
+	}
+
+	// Check if we need to regenerate the certificate
+	needsRegeneration := false
+
+	// Check if certificate exists
+	if !cm.isCertificateValid() {
+		cm.log.Info("No valid certificate found, generating new one", "agent_ip", agentIP)
+		needsRegeneration = true
+	} else {
+		// Check if agent IP is already in the certificate
+		if !cm.containsAgentIP(agentIP) {
+			cm.log.Info("Agent IP not in certificate SAN, regenerating", "agent_ip", agentIP)
+			needsRegeneration = true
+		}
+	}
+
+	if needsRegeneration {
+		// Add agent IP to the list
+		cm.agentIPs = certs.AppendIPsToSAN(cm.agentIPs, agentIP)
+
+		// Generate certificate with server IP and all agent IPs
+		ipList := append([]string{cm.serverPublicIP}, cm.agentIPs...)
+
+		cm.log.Info("Generating certificate with ARN and IPs", 
+			"server_arn", cm.serverARN,
+			"server_ip", cm.serverPublicIP,
+			"agent_ips", cm.agentIPs,
+			"total_ips", len(ipList))
+
+		csrBytes, err := certs.GenerateCSRWithARNAndMultipleSANs(cm.privateKey, cm.serverARN, ipList)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to generate CSR: %w", err)
+		}
+
+		csrPEM := certs.EncodeCSRToPEM(csrBytes)
+		cm.log.Debug("Generated CSR", "size", len(csrPEM), "ip_count", len(ipList))
+
+		// Request CA to sign the CSR
+		cm.log.Info("Requesting CA to sign CSR", "ca_url", cm.caServiceURL)
+		certPEM, err := cm.caClient.SignCSR(ctx, csrPEM)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to sign CSR with CA: %w", err)
+		}
+
+		// Cache the certificate
+		if err := os.MkdirAll(cm.cacheDir, 0700); err != nil {
+			return "", "", fmt.Errorf("failed to create cache directory: %w", err)
+		}
+
+		if err := os.WriteFile(cm.certCachePath, certPEM, 0600); err != nil {
+			return "", "", fmt.Errorf("failed to write certificate: %w", err)
+		}
+
+		cm.log.Info("Successfully generated and cached certificate", 
+			"cert_path", cm.certCachePath, 
+			"agent_count", len(cm.agentIPs))
+	} else {
+		cm.log.Debug("Using cached certificate", "agent_ip", agentIP)
+	}
+
+	return cm.certCachePath, cm.keyCachePath, nil
+}
+
+// containsAgentIP checks if the given agent IP is in the current certificate
+func (cm *CertManager) containsAgentIP(agentIP string) bool {
+	// Parse the current certificate
+	certPEM, err := os.ReadFile(cm.certCachePath)
+	if err != nil {
+		return false
+	}
+
+	cert, err := certs.ParseCertificatePEM(certPEM)
+	if err != nil {
+		return false
+	}
+
+	// Check if agent IP is in the SAN list
+	for _, ip := range cert.IPAddresses {
+		if ip.String() == agentIP {
+			return true
+		}
+	}
+
+	return false
+}
+
+// EnsureCertificate ensures that the server has a valid certificate (legacy mode)
 // It will generate and cache a certificate if one doesn't exist
 func (cm *CertManager) EnsureCertificate(ctx context.Context) (string, string, error) {
 	// Check if cached certificate exists and is valid
@@ -45,7 +209,7 @@ func (cm *CertManager) EnsureCertificate(ctx context.Context) (string, string, e
 		return cm.certCachePath, cm.keyCachePath, nil
 	}
 
-	cm.log.Info("Generating new certificate for server")
+	cm.log.Info("Generating new certificate for server (legacy mode)")
 
 	// Generate private key
 	privKey, err := certs.GeneratePrivateKey()
@@ -53,16 +217,21 @@ func (cm *CertManager) EnsureCertificate(ctx context.Context) (string, string, e
 		return "", "", fmt.Errorf("failed to generate private key: %w", err)
 	}
 
-	// Generate CSR without IP SAN (Option A design)
-	// Server's public IP is discovered by agents via Query Lambda
-	// Certificate uses CN-based validation instead of IP SAN
-	csrBytes, err := certs.GenerateCSRWithoutSAN("fluidity-server", privKey)
+	// Detect server IP for legacy mode
+	serverIP, err := certs.DetectLocalIP()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to detect server IP: %w", err)
+	}
+	cm.log.Info("Detected server IP", "ip", serverIP)
+
+	// Generate CSR with legacy format
+	csrBytes, err := certs.GenerateCSR("fluidity-server", serverIP, privKey)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate CSR: %w", err)
 	}
 
 	csrPEM := certs.EncodeCSRToPEM(csrBytes)
-	cm.log.Debug("Generated CSR (no IP SAN)", "size", len(csrPEM))
+	cm.log.Debug("Generated CSR", "size", len(csrPEM))
 
 	// Request CA to sign the CSR
 	cm.log.Info("Requesting CA to sign CSR", "ca_url", cm.caServiceURL)
