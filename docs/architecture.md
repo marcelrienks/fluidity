@@ -1,66 +1,88 @@
 # Architecture
 
-Secure client-server tunnel using mTLS for HTTP/HTTPS/WebSocket tunneling through restrictive firewalls.
+Secure client-server tunnel using ARN-based mTLS for HTTP/HTTPS/WebSocket tunneling through restrictive firewalls.
 
 ## System Overview
 
 ```
 Local: Browser → Agent (8080) → Server (8443) → Target Website
-Cloud: Lambda (Wake/Kill/Query) → ECS Fargate (Server)
+Cloud: Lambda (Wake/Query/CA) → ECS Fargate (Server)
+```
+
+## ARN-Based mTLS Flow
+
+```
+1. AGENT STARTUP
+   Agent ──> Wake Lambda ──> Returns: server_arn, server_ip, agent_ip
+         └──> Generate cert: CN=server_arn, SAN=[agent_ip]
+              └──> CA Lambda signs ✓
+
+2. SERVER STARTUP (Lazy)
+   Server ──> Discover ARN & IP ──> Generate RSA key (NO CERT YET)
+
+3. FIRST CONNECTION
+   Agent ──> Server
+             └──> Extract agent IP
+             └──> Generate cert: CN=server_arn, SAN=[server_ip, agent_ip]
+             └──> CA Lambda signs ✓
+
+   Mutual Validation:
+   • Agent: Server CN == ARN ✓, IP in SAN ✓
+   • Server: Client CN == ARN ✓, IP in SAN ✓
+
+4. SUBSEQUENT CONNECTIONS
+   Known agent: Cached cert (fast)
+   New agent: Regenerate cert + updated SAN
 ```
 
 ## Components
 
 ### Agent (Local)
 - HTTP proxy on port 8080
-- mTLS client to server
-- Calls Wake Lambda on startup to discover server IP
-- Calls Kill Lambda on shutdown
+- ARN-based mTLS client
+- Calls Wake Lambda on startup
+- Validates server ARN + IP
 
 Config:
 ```yaml
-server_ip: ""                    # Auto-discovered
-server_port: 8443
+wake_lambda_url: "https://..."
+ca_lambda_url: "https://..."
+cache_dir: "/tmp/fluidity"
 local_proxy_port: 8080
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_cert_file: "./certs/ca.crt"
-wake_endpoint: "https://..."     # Lambda endpoint
-kill_endpoint: "https://..."
 ```
 
-### Server (Cloud)
-- mTLS server on port 8443
-- Forwards requests to target websites
-- Emits CloudWatch metrics
-- Health check on port 8080
+### Server (Cloud - ECS Fargate)
+- ARN-based mTLS server on port 8443
+- Lazy certificate generation
+- Discovers own ARN from ECS metadata
+- Validates client ARN + IP
 
 Config:
 ```yaml
-listen_addr: "0.0.0.0"
 listen_port: 8443
-cert_file: "/root/certs/server.crt"
-key_file: "/root/certs/server.key"
-ca_cert_file: "/root/certs/ca.crt"
+ca_lambda_url: "https://..."
+cache_dir: "/tmp/fluidity"
 max_connections: 100
-emit_metrics: true
-metrics_interval: "60s"
 ```
 
 ### Lambda Functions
-- **Wake**: Start server (ECS DesiredCount=1)
-- **Query**: Get server IP
-- **Sleep**: Auto-scale down if idle >15min (EventBridge, 5min check)
+- **Wake**: Start server, return `server_arn`, `server_ip`, `agent_ip`
+- **Query**: Return server status + `server_arn`
+- **CA**: Sign CSRs (accepts ARN CN + multi-IP SAN)
+- **Sleep**: Auto-scale down if idle >15min
 - **Kill**: Stop server (ECS DesiredCount=0)
 
 ## Runtime Flow
 
-1. Agent starts → calls Wake Lambda
-2. Agent calls Query Lambda → gets server IP
-3. Agent connects via mTLS to server
-4. Agent proxies HTTP requests through tunnel
-5. Server idles → Sleep Lambda scales down
-6. Agent shutdown → calls Kill Lambda
+1. Agent starts → Wake Lambda → get server ARN/IP
+2. Agent generates cert (CN=server_arn)
+3. Agent polls Query Lambda → wait for server ready
+4. Agent connects via mTLS (validates ARN + IP)
+5. Server generates cert on first connection (lazy)
+6. Server validates client cert (ARN + IP)
+7. Agent proxies HTTP/HTTPS/WebSocket requests
+8. Server idles → Sleep Lambda scales down
+9. Agent shutdown → Kill Lambda
 
 ## Communication Protocol
 
