@@ -16,44 +16,47 @@ Phase 2 is complete. All work items have been successfully implemented and docum
 
 ## Known Limitations & Future Work
 
-### Phase 3: Dynamic Certificate Management (Option 6, Variant B)
+### Phase 3: Dynamic Certificate Management with Unique CN (ARN-Based)
 
-**Status**: In Progress ⚙️ (Phase 3.1-3.2 Complete ✅)
+**Status**: In Progress ⚙️ (Core Implementation Complete ✅, Architecture Refined)
 
-**Objective**: Eliminate static certificate pre-generation and IP address hardcoding by implementing dynamic, locally-generated certificates at runtime.
+**Objective**: Implement dynamic, per-instance certificate generation at runtime using unique identifiers (AWS ARNs) instead of fixed generic names. Each agent and server gets a certificate with their specific AWS resource ARN as the CommonName.
 
 **Problem Being Solved**:
 
 - Current approach requires pre-generating certificates with hardcoded IP ranges
 - IP addresses may change (CloudFront, Elastic IP reassignment, failover)
-- Multiple servers require unique certificates with their specific IPs
-- Current design with 1:1 agent/server relationships means each pair needs custom certificates
+- Multiple servers require unique certificates with their specific IPs/identities
+- Generic certificate names ("fluidity-server") don't provide per-instance identity
+- No per-instance audit trail in certificates
 
-**Solution: Local Certificate Generation with CA Signing (Option 6, Variant B)**
+**Solution: Dynamic Certificates with Unique ARN-Based Identity**
 
 #### Overview
 
 ```
-Both Agent and Server generate their own certificates at startup:
-
 Agent Startup:
 ├─ Detect local IP (eth0/en0 preferred)
-├─ Generate CSR with IP as SAN
-├─ Request CA signing from Lambda service
-├─ Receive signed client.crt
-└─ Connect to server with own certificate
+├─ Query Lambda returns: server_ip + server_arn
+├─ Detect/query own ARN
+├─ Generate CSR with CN=<agent_arn>, SAN=<local_ip>
+├─ Request CA signing from Lambda
+└─ Cache signed certificate
 
 Server Startup:
-├─ Generate CSR with CommonName only (NO IP SAN)
-├─ Request CA signing from Lambda service
-├─ Receive signed server.crt
-└─ Listen for agent connections
-(Note: Server public IP known to agent via Query Lambda)
+├─ Discover own ARN from:
+│  ├─ ECS_TASK_ARN (ECS Fargate, automatic)
+│  ├─ SERVER_ARN env var (CloudFormation)
+│  └─ EC2 metadata (fallback)
+├─ Generate CSR with CN=<server_arn>, SAN=(empty)
+├─ Request CA signing from Lambda
+└─ Cache signed certificate
 
 Connection:
-├─ Agent validates server certificate (signed by CA, CN=fluidity-server) ✓
-├─ Server validates agent certificate (signed by CA, IP SAN matches source) ✓
-└─ Both trust CA (chain of trust)
+├─ Agent validates: server CN == expected ARN from Query Lambda ✓
+├─ Server validates: agent CN == ARN, IP SAN matches source ✓
+├─ Mutual TLS established with per-instance identity ✓
+└─ Unique certificates, can't be interchanged
 ```
 
 #### Architecture Components
@@ -66,135 +69,196 @@ Connection:
 
 2. **Lambda CA Service**
    - Receives Certificate Signing Requests (CSR)
-   - Validates CSR format and CN/SAN structure
+   - Validates CSR format and CN/ARN structure
+   - Validates CN matches expected pattern (arn:aws:...)
    - Signs with stored CA private key
    - Returns signed certificate with 1-year validity
-   - **Note:** Validates CN is either "fluidity-client" or "fluidity-server"
 
-3. **Agent Initialization** (Option A: IP-based SAN)
+3. **Query Lambda Enhancement**
+   - Returns both server IP AND server ARN in single response
+   - Agent receives authenticated server identity
+   - No separate ARN lookup needed
+   - Single API call provides all identity information
+
+4. **Agent Initialization** (Unique CN)
    - Detect local IP via network interfaces (eth0/en0 preferred)
-   - Generate 2048-bit RSA key pair
-   - Create CSR with CommonName=fluidity-client, SAN=detected local IP
-   - Call CA Lambda function with CSR
-   - Cache signed certificate locally
-   - Use certificate for all server connections
-   - **Server-side validation:** Verifies agent cert IP SAN matches connection source IP
+   - Query Lambda returns: server_ip + server_arn
+   - Discover own ARN (from environment/IAM if available)
+   - Generate RSA 2048-bit key pair
+   - Create CSR with:
+     - CommonName: <agent_arn> (unique per instance)
+     - SAN: detected local IP
+   - Call CA Lambda to sign CSR
+   - Cache certificate and key locally (permissions: 0600)
+   - Validate cached certificate on subsequent startups
+   - Auto-renew 30 days before expiration
 
-4. **Server Initialization** (Option A: CN-only, no SAN IP)
-   - Generate 2048-bit RSA key pair
-   - Create CSR with CommonName=fluidity-server, SAN=(empty/not set)
-   - Call CA Lambda function with CSR
-   - Cache signed certificate locally
-   - Use certificate for TLS listener
-   - **Design Rationale:** Server doesn't know its public IP at generation time (may be behind load balancer, CloudFront, or have dynamic IP)
-   - **Agent-side validation:** Verifies server cert CN=fluidity-server and is signed by CA; trusts IP from Query Lambda (separate, authenticated source)
+5. **Server Initialization** (Unique CN)
+   - Discover own ARN from (priority order):
+     - **ECS Fargate:** $ECS_TASK_ARN (automatic, preferred)
+     - **CloudFormation:** $SERVER_ARN parameter (explicit)
+     - **EC2:** EC2 metadata service (fallback)
+   - Generate RSA 2048-bit key pair
+   - Create CSR with:
+     - CommonName: <server_arn> (unique per instance)
+     - SAN: (empty - Agent uses ARN from Query Lambda)
+   - Call CA Lambda to sign CSR
+   - Cache certificate and key locally (permissions: 0600)
+   - Validate cached certificate on subsequent startups
+   - Auto-renew 30 days before expiration
 
 #### Implementation Details
 
 **Files to Create**:
 
-- `internal/shared/certs/ca_client.go` - CA service client for Lambda calls
-- `internal/shared/certs/csr_generator.go` - CSR generation and validation
-- `internal/core/agent/cert_manager.go` - Agent certificate initialization
-- `internal/core/server/cert_manager.go` - Server certificate initialization
+- `internal/shared/certs/csr_generator.go` - CSR generation with unique ARN-based CN
+- `internal/shared/certs/ca_client.go` - CA Lambda service client
+- `internal/shared/certs/arn_discovery.go` - ARN discovery utilities
+- `internal/shared/certs/ip_detection.go` - IP detection from interfaces
+- `internal/core/agent/cert_manager.go` - Agent certificate manager
+- `internal/core/server/cert_manager.go` - Server certificate manager
 - `cmd/lambdas/ca/main.go` - CA signing Lambda function
-- `deployments/cloudformation/ca-lambda.yaml` - CloudFormation template for CA Lambda
+- `deployments/cloudformation/ca-lambda.yaml` - CloudFormation template
 
 **Configuration Changes**:
 
 - `agent.yaml`: Add `ca_service_url` and `cert_cache_dir` parameters
 - `server.yaml`: Add `ca_service_url` and `cert_cache_dir` parameters
-- CloudFormation: Add CA Lambda function and environment variables
 
 **Code Changes**:
 
-- Agent: Add certificate initialization in `main.go` startup
-- Server: Add certificate initialization in `main.go` startup
-- Agent: Add IP detection for local IP (network interfaces)
-- Server: No IP detection needed (uses CN-based validation)
-- Both: Add CSR generation with crypto/x509
-- CA Lambda: Add CSR parsing and certificate signing with crypto/x509
+- Agent: Add certificate initialization with ARN discovery in `main.go`
+- Server: Add certificate initialization with ARN discovery in `main.go`
+- Both: Add ARN discovery (environment, IAM, EC2 metadata)
+- Both: Add IP/ARN-based CSR generation
+- CA Lambda: Add CSR validation and certificate signing
 
-#### Design Decision: Option A (CN-based Server Validation)
+#### Design Decision: Unique ARN-Based CN (Consolidated Phase 3)
 
-**Why server certificate has no IP SAN:**
+**Why Unique CN Instead of Fixed CN:**
 
-The implementation uses **Option A** design pattern:
-- **Agent certificate:** Includes IP SAN (agent's detected local IP)
-- **Server certificate:** No IP SAN (only CN=fluidity-server)
+No value in implementing fixed CN ("fluidity-server") first, then upgrading to unique CN later. Consolidate into single Phase 3 that goes directly to per-instance identity:
 
-**Rationale:**
+1. **Per-Instance Identity**
+   - Each certificate is unique per AWS resource (ARN)
+   - Can't accidentally use server cert for another instance
+   - Better security and audit trail
 
-1. **Server doesn't know its public IP at startup**
-   - Server may be behind load balancer (Elastic Load Balancer)
-   - Server may be behind CloudFront or other CDN
-   - Server may have dynamically assigned IP
-   - EC2 metadata only returns private IP for containers
+2. **Enhanced Security**
+   - Attacker with CA key needs correct ARN (two factors)
+   - Prevents certificate reuse across instances
+   - Defense-in-depth validation
 
-2. **Agent has authenticated IP source already**
-   - Agent gets server IP from Query Lambda (AWS API call)
-   - Query Lambda result is authenticated separately
-   - No need for redundant IP validation in certificate
+3. **Audit & Compliance**
+   - Certificate CN directly maps to resource
+   - Auditors can verify per-instance certificates
+   - CloudWatch logs show which instance used which cert
 
-3. **Security not compromised**
-   - Agent validates server cert CN=fluidity-server
-   - Agent validates cert is signed by trusted CA
-   - TLS 1.3 encryption prevents MITM
-   - Agent validates agent's own IP SAN (bidirectional validation)
-   - This matches HTTPS pattern: domain in cert, not IP
+4. **Single Implementation**
+   - No need for intermediate fixed CN step
+   - No need for later migration
+   - One consolidated, complete solution
 
-4. **Eliminates overlap with Query Lambda**
-   - Server doesn't try to detect its own IP
-   - Single source of truth for IP (Query Lambda)
-   - Simpler deployment, fewer failure modes
+5. **Query Lambda Integration**
+   - Agent receives server ARN from Query Lambda
+   - Single authenticated source for both IP and identity
+   - No separate lookups needed
+
+#### ARN Discovery Strategy
+
+**Agent ARN** (Optional, if available):
+- Environment variable: `AGENT_ARN`
+- From IAM metadata (if available)
+- Fallback: Generate cert without agent ARN if not available
+
+**Server ARN** (Three-Tier Priority - Always Required):
+
+1. **ECS Fargate (Recommended - ~99% of deployments)**
+   - $ECS_TASK_ARN (automatically set by ECS)
+   - Zero latency, no API calls
+   - Works offline
+   - **Example:** `arn:aws:ecs:us-east-1:123456789:task/service/abc123`
+
+2. **CloudFormation Parameter (Flexible)**
+   - $SERVER_ARN (explicit environment variable)
+   - Works with any deployment tool
+   - Works with EC2, Lambda, on-prem
+   - **Example:** Set in task definition or launch template
+
+3. **EC2 Metadata (Fallback)**
+   - Query EC2 metadata service
+   - Works on EC2 instances
+   - ~500-1000ms latency
+   - **Example:** `arn:aws:ec2:us-east-1:123456789:instance/i-abc123`
 
 #### Advantages
 
+✅ **Per-Instance Identity**
+- Each certificate is unique per AWS resource (ARN)
+- Perfect audit trail (CN maps to infrastructure)
+- Can't accidentally use cert for wrong instance
+
+✅ **Enhanced Security**
+- Attacker needs CA key + correct ARN (two factors)
+- Prevents certificate reuse across instances
+- Defense-in-depth (ARN + CA signature + IP validation)
+
 ✅ **Dynamic IP Support**
-
 - No hardcoded IP ranges
-- Works with CloudFront, Elastic IPs, any IP
-- Multiple servers on same infrastructure
+- Works with CloudFront, Elastic IPs, dynamic IPs
+- Works behind load balancers
 
-✅ **Multi-Server Compatibility**
-
-- Each server generates its own certificate
-- Each agent gets certificate for its local IP
-- Perfect for 1:1 agent/server architecture
+✅ **Flexible Deployment**
+- Works with ECS Fargate (automatic)
+- Works with CloudFormation (explicit)
+- Works with EC2, Lambda, on-prem (any deployment)
 
 ✅ **Zero Pre-Generation**
-
 - No manual certificate generation script
 - Deployment step: just run binary
-- Certs generated at startup automatically
+- Certs generated automatically at startup
 
 ✅ **Secure**
-
 - CA-signed certificates (chain of trust)
-- Proper mutual authentication
-- Audit trail: can log each CA request
+- Mutual TLS authentication
+- ARN in certificate provides identity proof
+- Audit trail in CloudWatch logs
 
 ✅ **Scalable**
-
-- Add new servers/agents without manual cert steps
+- Add new servers/agents without manual steps
 - Works with auto-scaling groups
-- Works with infrastructure as code (Terraform, CloudFormation)
+- Works with infrastructure as code
 
 ✅ **Low Operational Overhead**
-
 - Automatic certificate generation
-- 1-year validity (minimal renewal concerns)
+- 1-year validity (minimal renewal)
 - No certificate distribution needed
 
 #### Disadvantages
 
-❌ **Additional Lambda Function**
+❌ **ARN Discovery Required**
+- Server must discover its own ARN
+- Requires environment variable or API calls
+- Three-tier fallback handles most cases
 
+❌ **Additional Lambda Function**
 - Requires CA Lambda deployment
-- Lambda cold start adds ~100-200ms to startup
-- Small monthly Lambda cost (~$0.20/month for typical usage)
+- Lambda cold start ~100-200ms (first time only)
+- Small monthly Lambda cost (~$0.20 typical)
 
 ❌ **Startup Time**
+- IP detection: ~50ms
+- ARN discovery: 0-1000ms (depending on method)
+- Key generation: ~50ms
+- CSR generation: ~50ms
+- Lambda signing: ~200ms (cold start)
+- Total: ~300-1300ms additional (first startup only)
+- Subsequent startups: negligible (~10ms, cached)
+
+❌ **CA Key Management**
+- CA private key must be stored securely
+- AWS Secrets Manager required (best practice)
+- Must rotate annually
 
 - IP detection: ~50ms
 - CSR generation: ~50ms
@@ -202,28 +266,38 @@ The implementation uses **Option A** design pattern:
 - Total: ~300-400ms additional startup time
 
 ❌ **CA Key Management**
-
 - CA private key must be stored securely
 - AWS Secrets Manager required (best practice)
-- Must rotate CA key periodically (annual)
+- Must rotate annually
 
-❌ **Dependency on Lambda**
+#### Phase 3 Complete Implementation (Consolidated)
 
-- Agent/server can't start if CA Lambda is unreachable
-- Requires network access to Lambda at startup
-- Caching helps, but first boot requires connectivity
+**Sub-Tasks - Core Implementation:**
 
-#### Phase 3 Sub-Tasks
-
+- [x] Design dynamic certificate system with unique ARN-based CN
 - [x] Design CA Lambda function (CSR validation, signing)
-- [x] Implement IP detection (EC2 metadata, network interfaces)
-- [x] Implement CSR generation in shared package
+- [x] Implement ARN discovery (ECS Fargate, CloudFormation, EC2 metadata)
+- [x] Implement IP detection (network interfaces)
+- [x] Implement CSR generation with unique CN
 - [x] Implement Agent certificate manager
 - [x] Implement Server certificate manager
 - [x] Create CA Lambda CloudFormation template
 - [x] Add CA service client (retry logic, error handling)
-- [ ] Testing: Local certificate generation
-- [ ] Testing: CA Lambda signing
+- [x] Integrate with Query Lambda (return IP + ARN)
+- [x] Documentation: Architecture and design decisions
+- [x] Documentation: ARN discovery guide
+- [ ] Testing: Local certificate generation with ARN
+- [ ] Testing: CA Lambda signing with ARN
+- [ ] Testing: Multi-server scenarios with unique CN
+- [ ] Testing: Agent ARN validation from Query Lambda
+- [ ] Testing: Server ARN discovery (ECS, CloudFormation, EC2)
+- [ ] Testing: Fallback mechanisms
+- [ ] Integration tests: Agent + Server with unique CN
+- [ ] Documentation: Configuration examples
+- [ ] Documentation: Certificate operations guide
+- [ ] Documentation: Migration from static certs
+- [ ] Remove old `generate-certs.sh` dependencies
+- [ ] Update deployment guides
 - [ ] Testing: Multi-server scenarios
 - [ ] Documentation: Certificate management guide
 - [ ] Documentation: CA Lambda operations
@@ -265,172 +339,6 @@ The implementation uses **Option A** design pattern:
 - Remove old `generate-certs.sh` dependencies
 - Update all documentation
 - Update deployment scripts
-
-### Phase 3.4+: Enhanced Unique CN with ARN Discovery (Future Enhancement)
-
-**Status**: Planned for Phase 3.4+ ⏳
-
-**Objective**: Add optional per-instance identity (ARN-based CN) to certificates for enhanced security and audit capabilities.
-
-**Current State (Phase 3.3)**: Fixed CN validation
-- Agent cert: CN=fluidity-client (with IP SAN)
-- Server cert: CN=fluidity-server (no SAN)
-- Simple, secure, works everywhere
-
-**Enhanced State (Phase 3.4+)**: Unique CN per instance
-- Agent cert: CN=<agent_arn> (with IP SAN)
-- Server cert: CN=<server_arn> (no SAN)
-- Per-instance identity, better audit trail
-
-#### Architecture: Integrated ARN Discovery
-
-**Query Lambda Enhancement (Extended Response)**
-
-```json
-{
-  "server_ip": "10.0.1.5",
-  "server_arn": "arn:aws:ecs:us-east-1:123456789:task/service/abc123def456",
-  "timestamp": "2025-12-09T10:34:28Z"
-}
-```
-
-Agent receives both IP and ARN from Query Lambda in single call:
-- Agent uses IP to connect to server
-- Agent uses ARN to validate server's certificate CN
-- Single authenticated source for both values
-
-**Server ARN Discovery (From ECS/CloudFormation)**
-
-Server can retrieve its own ARN from multiple sources:
-1. **ECS Fargate (Best)**: `$ECS_TASK_ARN` environment variable
-   - Automatically provided by ECS
-   - Always available in Fargate
-   - No additional API calls needed
-
-2. **CloudFormation (Fallback)**: Via stack parameters
-   - Pass task ARN via environment variable
-   - Set during deployment
-
-3. **EC2 (Fallback)**: Via IAM role
-   - Use boto3/aws-cli to describe self
-   - Requires IAM permissions
-
-#### Implementation Plan (Phase 3.4+)
-
-**Step 1: Update Query Lambda Response**
-```go
-type QueryResponse struct {
-    ServerIP  string `json:"server_ip"`
-    ServerARN string `json:"server_arn"`
-}
-```
-
-**Step 2: Server ARN Discovery**
-```go
-// Server startup
-arn := os.Getenv("ECS_TASK_ARN")  // Fargate provides this
-if arn == "" {
-    arn = os.Getenv("SERVER_ARN")  // CloudFormation parameter
-}
-if arn == "" {
-    arn = discoverARNFromEC2Metadata()  // Fallback
-}
-```
-
-**Step 3: Agent Configuration Enhancement**
-```yaml
-# Optional: Enable unique CN validation
-use_unique_cn: false  # Phase 3.3 (default, fixed CN)
-use_unique_cn: true   # Phase 3.4+ (unique CN per instance)
-```
-
-**Step 4: Certificate Generation with Unique CN**
-```go
-// Agent uses server ARN from Query Lambda response
-csrBytes, err := certs.GenerateCSRWithUniqueID("fluidity-agent", agentARN, privKey)
-
-// Server uses its own discovered ARN
-csrBytes, err := certs.GenerateCSRWithUniqueID("fluidity-server", serverARN, privKey)
-```
-
-#### Security Benefits
-
-**Threat Mitigation:**
-
-1. **CA Key Compromise** (With Unique CN)
-   ```
-   Attacker: "I have CA key, I'll forge fluidity-server cert"
-   Defense: "Wrong ARN, cert invalid for this instance"
-   Result: Attacker needs correct ARN + CA key (much harder)
-   ```
-
-2. **Certificate Reuse**
-   ```
-   Attacker: "I'll use leaked server cert from instance A for instance B"
-   Defense: "CN=arn:instance-A, but server is instance-B"
-   Result: Cert won't validate
-   ```
-
-3. **Audit Trail**
-   ```
-   Certificate CN directly maps to AWS resource
-   → CloudWatch logs show which instance used which cert
-   → Compliance auditors can verify per-instance certificates
-   ```
-
-#### Configuration Example (Phase 3.4+)
-
-```yaml
-# agent.yaml
-use_unique_cn: true
-ca_service_url: https://xxx.execute-api.region.amazonaws.com/prod/sign
-cert_cache_dir: /var/lib/fluidity/certs
-
-# server.yaml
-use_unique_cn: true
-ca_service_url: https://xxx.execute-api.region.amazonaws.com/prod/sign
-cert_cache_dir: /var/lib/fluidity/certs
-```
-
-#### Compatibility & Rollout
-
-✅ **Backward Compatible**
-- Phase 3.3: Works with fixed CN
-- Phase 3.4+: Optional feature flag (default off)
-- Can enable per-deployment
-- No breaking changes
-
-**Migration Path:**
-```
-Phase 3.3 (Current):  use_unique_cn: false  ← Works now
-     ↓
-Phase 3.4+:          use_unique_cn: true   ← Opt-in enhancement
-     ↓
-Future:              use_unique_cn: true   ← Can default to true
-```
-
-#### Implementation Effort
-
-- Update Query Lambda: 1-2 days
-- Update Agent cert manager: 1 day
-- Update Server cert manager: 1 day
-- Testing: 2 days
-- Documentation: 1 day
-- **Total: ~6-7 days** (1-1.5 weeks)
-
-#### Phase 3.4+ Sub-Tasks
-
-- [ ] Update Query Lambda to return ARN
-- [ ] Implement server ARN discovery (ECS/CloudFormation)
-- [ ] Add GenerateCSRWithUniqueID function
-- [ ] Update agent cert manager for unique CN
-- [ ] Update server cert manager for unique CN
-- [ ] Add use_unique_cn configuration flag
-- [ ] Test with ECS task ARN discovery
-- [ ] Test with CloudFormation parameter
-- [ ] Test agent ARN validation from Query Lambda
-- [ ] Documentation: Unique CN operations guide
-- [ ] Migration guide: Fixed CN → Unique CN
 
 ### Optional Improvements (Post Phase 3)
 
