@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"fluidity/internal/shared/certs"
 	"fluidity/internal/shared/logger"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,6 +29,10 @@ type WakeResponse struct {
 	PendingCount       int32  `json:"pendingCount"`
 	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
 	Message            string `json:"message"`
+	// New fields for ARN-based certificate generation
+	ServerARN           string `json:"server_arn,omitempty"`
+	ServerPublicIP      string `json:"server_public_ip,omitempty"`
+	AgentPublicIPAsSeen string `json:"agent_public_ip_as_seen,omitempty"`
 }
 
 // FunctionURLResponse wraps the response for Lambda Function URL format
@@ -100,10 +105,23 @@ func NewHandlerWithClient(ecsClient ECSClient, clusterName, serviceName string) 
 // Receives direct JSON from Lambda Function URL or direct invocation
 func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interface{}, error) {
 	var request WakeRequest
+	var agentIP string
 
 	// Parse the event - could be direct JSON or wrapped in Function URL event
 	switch e := event.(type) {
 	case map[string]interface{}:
+		// Extract source IP from requestContext if available (API Gateway/Function URL)
+		if requestContext, ok := e["requestContext"].(map[string]interface{}); ok {
+			if http, ok := requestContext["http"].(map[string]interface{}); ok {
+				if sourceIP, ok := http["sourceIp"].(string); ok {
+					agentIP = sourceIP
+					h.logger.Info("Extracted agent IP from request context", map[string]interface{}{
+						"agentIP": agentIP,
+					})
+				}
+			}
+		}
+
 		// Try to unmarshal as request body first
 		if body, ok := e["body"]; ok {
 			// Lambda Function URL passes raw JSON body
@@ -139,7 +157,7 @@ func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interfa
 		}
 	}
 
-	response, err := h.handleWakeRequest(ctx, request)
+	response, err := h.handleWakeRequest(ctx, request, agentIP)
 	if err != nil {
 		h.logger.Error("Wake request failed", err)
 		return h.errorResponse(500, err.Error()), nil
@@ -150,7 +168,7 @@ func (h *Handler) HandleRequest(ctx context.Context, event interface{}) (interfa
 }
 
 // handleWakeRequest contains the core wake logic
-func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*WakeResponse, error) {
+func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest, agentIP string) (*WakeResponse, error) {
 	// Allow request to override cluster/service names (for testing)
 	clusterName := h.clusterName
 	if request.ClusterName != "" {
@@ -165,7 +183,31 @@ func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*
 	h.logger.Info("Processing wake request", map[string]interface{}{
 		"clusterName": clusterName,
 		"serviceName": serviceName,
+		"agentIP":     agentIP,
 	})
+
+	// Discover server ARN and public IP
+	serverARN, err := certs.DiscoverServerARN()
+	if err != nil {
+		h.logger.Warn("Failed to discover server ARN, will continue without it", map[string]interface{}{
+			"error": err.Error(),
+		})
+	} else {
+		h.logger.Info("Discovered server ARN", map[string]interface{}{
+			"serverARN": serverARN,
+		})
+	}
+
+	serverPublicIP, err := certs.DiscoverPublicIP()
+	if err != nil {
+		h.logger.Warn("Failed to discover server public IP, will continue without it", map[string]interface{}{
+			"error": err.Error(),
+		})
+	} else {
+		h.logger.Info("Discovered server public IP", map[string]interface{}{
+			"serverPublicIP": serverPublicIP,
+		})
+	}
 
 	// Step 1: Describe the current service state
 	describeInput := &ecs.DescribeServicesInput{
@@ -262,13 +304,16 @@ func (h *Handler) handleWakeRequest(ctx context.Context, request WakeRequest) (*
 	}
 
 	return &WakeResponse{
-		Status:             status,
-		InstanceID:         instanceID,
-		DesiredCount:       newDesiredCount,
-		RunningCount:       runningCount,
-		PendingCount:       pendingCount,
-		EstimatedStartTime: estimatedStartTime,
-		Message:            message,
+		Status:              status,
+		InstanceID:          instanceID,
+		DesiredCount:        newDesiredCount,
+		RunningCount:        runningCount,
+		PendingCount:        pendingCount,
+		EstimatedStartTime:  estimatedStartTime,
+		Message:             message,
+		ServerARN:           serverARN,
+		ServerPublicIP:      serverPublicIP,
+		AgentPublicIPAsSeen: agentIP,
 	}, nil
 }
 
