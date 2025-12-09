@@ -102,7 +102,7 @@ func TestProxyCONNECTRequest(t *testing.T) {
 	AssertEqual(t, 200, connectResp.StatusCode, "CONNECT status code")
 
 	// Upgrade to TLS
-	tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+	tlsConn := tls.Client(conn, &tls.Config{})
 	err = tlsConn.Handshake()
 	AssertNoError(t, err, "TLS handshake should not fail")
 	defer tlsConn.Close()

@@ -171,10 +171,31 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		"proxy_port", cfg.LocalProxyPort,
 		"log_level", cfg.LogLevel)
 
-	// Load TLS configuration (with Secrets Manager support if enabled)
+	// Load TLS configuration (with dynamic certificate support)
 	var tlsConfig *tls.Config
+	var certFile, keyFile string
 
-	if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
+	// Check if dynamic certificates are enabled
+	if cfg.UseDynamicCerts && cfg.CAServiceURL != "" {
+		logger.Info("Using dynamic certificate generation",
+			"ca_url", cfg.CAServiceURL,
+			"cache_dir", cfg.CertCacheDir)
+
+		certMgr := agent.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
+		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var certErr error
+		certFile, keyFile, certErr = certMgr.EnsureCertificate(certCtx)
+		certCancel()
+		if certErr != nil {
+			return fmt.Errorf("failed to ensure certificate: %w", certErr)
+		}
+
+		var tlsErr error
+		tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
+		if tlsErr != nil {
+			return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
+		}
+	} else if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
 		logger.Info("Using AWS Secrets Manager for TLS certificates",
 			"secret_name", cfg.SecretsManagerName)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -194,6 +215,8 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		if tlsErr != nil {
 			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
 		}
+		certFile = cfg.CertFile
+		keyFile = cfg.KeyFile
 	} else {
 		logger.Info("Using local files for TLS certificates")
 		var tlsErr error
@@ -201,11 +224,13 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		if tlsErr != nil {
 			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
 		}
+		certFile = cfg.CertFile
+		keyFile = cfg.KeyFile
 	}
 
 	logger.Info("Loaded TLS configuration",
-		"cert_file", cfg.CertFile,
-		"key_file", cfg.KeyFile,
+		"cert_file", certFile,
+		"key_file", keyFile,
 		"ca_file", cfg.CACertFile)
 
 	// If auto-discovery didn't start service, call Wake before connecting
@@ -243,7 +268,7 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	go func() {
 		// Connect to tunnel server (single attempt, no retries)
 		logger.Info("Connecting to tunnel server", "server_ip", cfg.ServerIP, "server_port", cfg.ServerPort, "server_address", cfg.GetServerAddress())
-		logger.Debug("Connection configuration", "tls_min_version", "1.3", "tls_cert_file", cfg.CertFile, "tls_key_file", cfg.KeyFile, "tls_ca_file", cfg.CACertFile)
+		logger.Debug("Connection configuration", "tls_min_version", "1.3", "tls_cert_file", certFile, "tls_key_file", keyFile, "tls_ca_file", cfg.CACertFile)
 		if err := tunnelClient.Connect(); err != nil {
 			logger.Error("Failed to establish tunnel connection to server, exiting", err, "server_ip", cfg.ServerIP, "server_port", cfg.ServerPort)
 			cancel()

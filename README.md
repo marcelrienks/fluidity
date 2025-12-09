@@ -2,7 +2,7 @@
 
 **Secure HTTP/HTTPS/WebSocket tunneling for restrictive firewall environments**
 
-![Status](https://img.shields.io/badge/status-Phase_2-blue)
+![Status](https://img.shields.io/badge/status-Work_In_Progress-yellow)
 ![License](https://img.shields.io/badge/license-custom-lightgrey)
 
 Fluidity is a secure tunneling solution using mTLS authentication to enable applications behind restrictive firewalls to access external services. Agent runs locally, server runs on-demand in AWS.
@@ -90,19 +90,30 @@ Cloud:  Lambda (Wake/Query/Sleep/Kill) ↔ ECS Fargate (Server)
 
 Fluidity uses **mutual TLS (mTLS)** with a private CA for all communications.
 
-**Generate Certificates:**
+**Certificate Generation (Static):**
 ```bash
 ./scripts/generate-certs.sh              # Local files
 ./scripts/generate-certs.sh --save-to-secrets  # AWS Secrets Manager
 ```
 
-**Practices:**
+**Dynamic Certificates (Recommended for Production):**
+Fluidity now supports automatic certificate generation at runtime with no pre-generation needed. Each agent/server detects its IP and generates a unique certificate signed by the CA Lambda service.
+
+```yaml
+# agent.yaml or server.yaml
+use_dynamic_certs: true
+ca_service_url: https://api-endpoint/prod/sign
+cert_cache_dir: /var/lib/fluidity/certs
+```
+
+**Security Practices:**
 - Self-signed certs for development (2-year validity)
-- Production: Use trusted CA certificates
+- Production: Use dynamic certificates (1-year validity, auto-renewal)
 - Keys never committed (`.gitignore`)
+- AWS Secrets Manager for CA key storage
 - AWS KMS encryption for Secrets Manager in production
 
-→ **[Certificate Guide](docs/certificate.md)**
+→ **[Certificate Guide](docs/certificate.md) | [Dynamic Certificate Management](docs/certificate-management.md)**
 
 ## Development
 

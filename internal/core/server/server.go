@@ -702,9 +702,6 @@ func (s *Server) handleWebSocketOpen(open *protocol.WebSocketOpen, encoder *json
 	// Create WebSocket dialer
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false, // We should verify in production
-		},
 	}
 
 	// Convert headers

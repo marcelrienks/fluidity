@@ -99,8 +99,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 		"max_connections", cfg.MaxConnections,
 		"log_level", cfg.LogLevel)
 
-	// Load TLS configuration (with Secrets Manager support if enabled)
+	// Load TLS configuration (with dynamic certificate support)
 	var tlsConfig *tls.Config
+	var certFileUsed, keyFileUsed string
 
 	// First, check if certificates are provided via environment variables (from ECS Secrets)
 	certPEM := os.Getenv("CERT_PEM")
@@ -117,6 +118,27 @@ func runServer(cmd *cobra.Command, args []string) error {
 		)
 		if tlsErr != nil {
 			return fmt.Errorf("failed to load TLS configuration from environment variables: %w", tlsErr)
+		}
+		certFileUsed = "environment variable (CERT_PEM)"
+		keyFileUsed = "environment variable (KEY_PEM)"
+	} else if cfg.UseDynamicCerts && cfg.CAServiceURL != "" {
+		logger.Info("Using dynamic certificate generation",
+			"ca_url", cfg.CAServiceURL,
+			"cache_dir", cfg.CertCacheDir)
+
+		certMgr := server.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
+		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var certErr error
+		certFileUsed, keyFileUsed, certErr = certMgr.EnsureCertificate(certCtx)
+		certCancel()
+		if certErr != nil {
+			return fmt.Errorf("failed to ensure certificate: %w", certErr)
+		}
+
+		var tlsErr error
+		tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
+		if tlsErr != nil {
+			return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
 		}
 	} else if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
 		logger.Info("Using AWS Secrets Manager for TLS certificates",
@@ -138,6 +160,8 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if tlsErr != nil {
 			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
 		}
+		certFileUsed = cfg.CertFile
+		keyFileUsed = cfg.KeyFile
 	} else {
 		logger.Info("Using local files for TLS certificates")
 		var tlsErr error
@@ -145,11 +169,13 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if tlsErr != nil {
 			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
 		}
+		certFileUsed = cfg.CertFile
+		keyFileUsed = cfg.KeyFile
 	}
 
 	logger.Info("Loaded TLS configuration",
-		"cert_file", cfg.CertFile,
-		"key_file", cfg.KeyFile,
+		"cert_file", certFileUsed,
+		"key_file", keyFileUsed,
 		"ca_file", cfg.CACertFile)
 
 	// Create tunnel server
