@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"net"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -38,11 +40,21 @@ type CAConfig struct {
 
 var caConfig *CAConfig
 
+var (
+	// arnRegex validates AWS ARN format
+	arnRegex = regexp.MustCompile(`^arn:aws:[a-z0-9\-]+:[a-z0-9\-]*:[0-9]{12}:.+`)
+	// ipv4Regex validates IPv4 address format
+	ipv4Regex = regexp.MustCompile(`^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$`)
+)
+
 func init() {
-	var err error
-	caConfig, err = initializeCA()
-	if err != nil {
-		log.Fatalf("Failed to initialize CA: %v", err)
+	// Only initialize CA if not in test mode
+	if os.Getenv("SKIP_CA_INIT") == "" {
+		var err error
+		caConfig, err = initializeCA()
+		if err != nil {
+			log.Fatalf("Failed to initialize CA: %v", err)
+		}
 	}
 }
 
@@ -160,15 +172,38 @@ func parseAndValidateCSR(csrPEM string) (*x509.CertificateRequest, error) {
 		return nil, fmt.Errorf("CSR signature verification failed: %w", err)
 	}
 
-	// Validate Common Name
-	if csr.Subject.CommonName != "fluidity-client" && csr.Subject.CommonName != "fluidity-server" {
-		return nil, fmt.Errorf("invalid Common Name: %s", csr.Subject.CommonName)
+	// Validate Common Name - accept either legacy format or ARN format
+	cn := csr.Subject.CommonName
+	isLegacyCN := cn == "fluidity-client" || cn == "fluidity-server"
+	isARN := arnRegex.MatchString(cn)
+
+	if !isLegacyCN && !isARN {
+		return nil, fmt.Errorf("invalid Common Name: %s (must be 'fluidity-client', 'fluidity-server', or valid AWS ARN)", cn)
+	}
+
+	if isARN {
+		log.Printf("Validating ARN-based certificate: CN=%s", cn)
 	}
 
 	// Validate IP addresses are present
 	if len(csr.IPAddresses) == 0 {
 		return nil, fmt.Errorf("CSR must contain at least one IP address")
 	}
+
+	// Validate all IP addresses
+	for _, ip := range csr.IPAddresses {
+		ipStr := ip.String()
+		// Check if it's a valid IPv4 address
+		if !ipv4Regex.MatchString(ipStr) {
+			return nil, fmt.Errorf("invalid IPv4 address in SAN: %s", ipStr)
+		}
+		// Double-check with net.ParseIP
+		if parsedIP := net.ParseIP(ipStr); parsedIP == nil {
+			return nil, fmt.Errorf("failed to parse IP address in SAN: %s", ipStr)
+		}
+	}
+
+	log.Printf("CSR validated: CN=%s, IPAddresses=%d", cn, len(csr.IPAddresses))
 
 	return csr, nil
 }
@@ -209,8 +244,8 @@ func signCSR(csr *x509.CertificateRequest, caConfig *CAConfig) ([]byte, error) {
 		Bytes: certBytes,
 	})
 
-	log.Printf("Signed certificate: CN=%s, SerialNumber=%s, NotAfter=%s",
-		csr.Subject.CommonName, serialNumber, certTemplate.NotAfter)
+	log.Printf("Signed certificate: CN=%s, SerialNumber=%s, NotAfter=%s, IPAddresses=%d",
+		csr.Subject.CommonName, serialNumber, certTemplate.NotAfter, len(csr.IPAddresses))
 
 	return certPEM, nil
 }
