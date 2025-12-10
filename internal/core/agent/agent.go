@@ -37,6 +37,8 @@ type Client struct {
 	reconnectCh         chan bool
 	awsConfig           aws.Config
 	signer              *v4.Signer
+	serverARN           string // Expected server ARN for certificate validation
+	serverPublicIP      string // Expected server public IP for validation
 }
 
 // NewClient creates a new tunnel client
@@ -98,6 +100,17 @@ func (c *Client) UpdateServerAddress(serverAddr string) {
 	c.logger.Debug("Server address updated", "new_addr", serverAddr)
 }
 
+// SetServerARN sets the expected server ARN for certificate validation
+func (c *Client) SetServerARN(serverARN string, serverPublicIP string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.serverARN = serverARN
+	c.serverPublicIP = serverPublicIP
+	c.logger.Info("Server ARN and public IP configured for validation",
+		"server_arn", serverARN,
+		"server_public_ip", serverPublicIP)
+}
+
 // Connect establishes mTLS connection to server
 func (c *Client) Connect() error {
 	c.mu.Lock()
@@ -146,6 +159,52 @@ func (c *Client) Connect() error {
 		"local_certificates": len(tlsConfig.Certificates),
 		"negotiated_protocol": state.NegotiatedProtocol,
 	}).Info("TLS connection established")
+
+	// Validate server certificate if ARN-based mode is enabled
+	if c.serverARN != "" && len(state.PeerCertificates) > 0 {
+		serverCert := state.PeerCertificates[0]
+		
+		// Validate CN matches expected server ARN
+		if serverCert.Subject.CommonName != c.serverARN {
+			c.logger.Error("Server certificate CN does not match expected ARN",
+				fmt.Errorf("certificate validation failed"),
+				"expected_arn", c.serverARN,
+				"actual_cn", serverCert.Subject.CommonName)
+			c.mu.Unlock()
+			conn.Close()
+			return fmt.Errorf("server certificate CN validation failed: expected %s, got %s", 
+				c.serverARN, serverCert.Subject.CommonName)
+		}
+		
+		// Validate server IP is in certificate SAN
+		serverHost, _, err := net.SplitHostPort(c.serverAddr)
+		if err != nil {
+			serverHost = c.serverAddr
+		}
+		
+		ipValid := false
+		for _, ip := range serverCert.IPAddresses {
+			if ip.String() == serverHost || ip.String() == c.serverPublicIP {
+				ipValid = true
+				break
+			}
+		}
+		
+		if !ipValid {
+			c.logger.Error("Server certificate SAN does not contain expected IP",
+				fmt.Errorf("certificate validation failed"),
+				"expected_ip", serverHost,
+				"server_public_ip", c.serverPublicIP,
+				"cert_ips", serverCert.IPAddresses)
+			c.mu.Unlock()
+			conn.Close()
+			return fmt.Errorf("server certificate IP validation failed: expected %s in SAN", serverHost)
+		}
+		
+		c.logger.Info("ARN-based server certificate validation successful",
+			"server_arn", c.serverARN,
+			"server_ip", serverHost)
+	}
 
 	c.conn = conn
 	c.connected = true

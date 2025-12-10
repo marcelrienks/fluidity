@@ -228,8 +228,22 @@ func runServer(cmd *cobra.Command, args []string) error {
 		"key_file", keyFileUsed,
 		"ca_file", cfg.CACertFile)
 
-	// Create tunnel server
-	tunnelServer, err := server.NewServer(tlsConfig, cfg.GetListenAddress(), cfg.MaxConnections, cfg.LogLevel)
+	// Create tunnel server with cert manager if available
+	var tunnelServer *server.Server
+	if cfg.CertManager != nil {
+		logger.Info("Creating server with lazy certificate generation")
+		tunnelServer, err = server.NewServerWithCertManager(
+			tlsConfig,
+			cfg.GetListenAddress(),
+			cfg.MaxConnections,
+			cfg.LogLevel,
+			cfg.CertManager,
+			cfg.CACertFile,
+		)
+	} else {
+		tunnelServer, err = server.NewServer(tlsConfig, cfg.GetListenAddress(), cfg.MaxConnections, cfg.LogLevel)
+	}
+	
 	if err != nil {
 		return fmt.Errorf("failed to create tunnel server: %w", err)
 	}

@@ -259,6 +259,14 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	// Create tunnel client
 	tunnelClient := agent.NewClient(tlsConfig, cfg.GetServerAddress(), cfg.LogLevel)
 
+	// Set server ARN for certificate validation if available
+	if cfg.ServerARN != "" {
+		tunnelClient.SetServerARN(cfg.ServerARN, cfg.ServerPublicIP)
+		logger.Info("Configured ARN-based certificate validation",
+			"server_arn", cfg.ServerARN,
+			"server_public_ip", cfg.ServerPublicIP)
+	}
+
 	// Create proxy server
 	proxyServer := agent.NewServer(cfg.LocalProxyPort, tunnelClient, cfg.LogLevel)
 

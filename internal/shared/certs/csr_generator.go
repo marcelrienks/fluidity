@@ -17,8 +17,8 @@ const (
 )
 
 var (
-	// arnRegex validates AWS ARN format
-	arnRegex = regexp.MustCompile(`^arn:aws:[a-z0-9\-]+:[a-z0-9\-]*:[0-9]{12}:.+`)
+	// arnRegex validates AWS ARN format (supports aws, aws-cn, aws-us-gov partitions)
+	arnRegex = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):[a-z0-9\-]+:[a-z0-9\-]*:[0-9]{12}:.+`)
 	// ipv4Regex validates IPv4 address format
 	ipv4Regex = regexp.MustCompile(`^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$`)
 )

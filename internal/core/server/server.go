@@ -42,12 +42,25 @@ type Server struct {
 	wsConns        map[string]*websocket.Conn
 	wsMutex        sync.RWMutex
 	startTime      time.Time
-	testMode       bool // Skip IAM authentication for testing
+	testMode       bool        // Skip IAM authentication for testing
+	certManager    *CertManager // For lazy certificate generation
+	caCertFile     string       // CA cert for TLS config
 }
 
 // NewServer creates a new tunnel server
 func NewServer(tlsConfig *tls.Config, addr string, maxConns int, logLevel string) (*Server, error) {
 	return NewServerWithTestMode(tlsConfig, addr, maxConns, logLevel, false)
+}
+
+// NewServerWithCertManager creates a new tunnel server with certificate manager for lazy generation
+func NewServerWithCertManager(tlsConfig *tls.Config, addr string, maxConns int, logLevel string, certManager *CertManager, caCertFile string) (*Server, error) {
+	srv, err := NewServerWithTestMode(tlsConfig, addr, maxConns, logLevel, false)
+	if err != nil {
+		return nil, err
+	}
+	srv.certManager = certManager
+	srv.caCertFile = caCertFile
+	return srv, nil
 }
 
 // NewServerWithTestMode creates a new tunnel server with test mode option
@@ -262,6 +275,33 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 		return
 	}
 
+	// Extract agent IP from connection for lazy cert generation
+	agentAddr := conn.RemoteAddr().String()
+	agentIP, _, err := net.SplitHostPort(agentAddr)
+	if err != nil {
+		s.logger.Warn("Failed to parse agent address", "remote_addr", agentAddr, "error", err.Error())
+		agentIP = agentAddr // Use full address as fallback
+	}
+
+	// Lazy certificate generation: ensure server cert includes this agent IP
+	if s.certManager != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+		certPath, keyPath, err := s.certManager.EnsureCertificateForConnection(ctx, agentIP)
+		cancel()
+		
+		if err != nil {
+			s.logger.Error("Failed to ensure certificate for connection", err, "agent_ip", agentIP)
+			return
+		}
+		
+		// Reload TLS config with updated certificate if it changed
+		// Note: The connection is already established, but log for monitoring
+		s.logger.Debug("Certificate ensured for agent connection", 
+			"agent_ip", agentIP,
+			"cert_path", certPath,
+			"key_path", keyPath)
+	}
+
 	// Verify client certificate (after handshake)
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
@@ -270,6 +310,43 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 	}
 
 	clientCert := state.PeerCertificates[0]
+	
+	// Validate client certificate if certManager is configured (ARN-based mode)
+	if s.certManager != nil {
+		serverARN := s.certManager.GetServerARN()
+		if serverARN != "" {
+			// Validate CN matches server ARN
+			if clientCert.Subject.CommonName != serverARN {
+				s.logger.Warn("Client certificate CN does not match server ARN",
+					"expected_arn", serverARN,
+					"actual_cn", clientCert.Subject.CommonName,
+					"remote_addr", conn.RemoteAddr())
+				return
+			}
+			
+			// Validate connection source IP is in client cert SAN
+			ipValid := false
+			for _, ip := range clientCert.IPAddresses {
+				if ip.String() == agentIP {
+					ipValid = true
+					break
+				}
+			}
+			
+			if !ipValid {
+				s.logger.Warn("Client certificate SAN does not contain source IP",
+					"source_ip", agentIP,
+					"cert_ips", clientCert.IPAddresses,
+					"remote_addr", conn.RemoteAddr())
+				return
+			}
+			
+			s.logger.Info("ARN-based certificate validation successful",
+				"server_arn", serverARN,
+				"agent_ip", agentIP,
+				"remote_addr", conn.RemoteAddr())
+		}
+	}
 	clientInfo := tlsutil.GetCertificateInfo(clientCert)
 	s.logger.Info("Agent connected",
 		"client", clientCert.Subject.CommonName,
