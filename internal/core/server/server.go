@@ -45,6 +45,7 @@ type Server struct {
 	testMode       bool        // Skip IAM authentication for testing
 	certManager    *CertManager // For lazy certificate generation
 	caCertFile     string       // CA cert for TLS config
+	tlsConfig      *tls.Config  // TLS configuration for wrapping TCP connections
 }
 
 // NewServer creates a new tunnel server
@@ -54,17 +55,77 @@ func NewServer(tlsConfig *tls.Config, addr string, maxConns int, logLevel string
 
 // NewServerWithCertManager creates a new tunnel server with certificate manager for lazy generation
 func NewServerWithCertManager(tlsConfig *tls.Config, addr string, maxConns int, logLevel string, certManager *CertManager, caCertFile string) (*Server, error) {
-	srv, err := NewServerWithTestMode(tlsConfig, addr, maxConns, logLevel, false)
+	// For lazy generation, use a TCP listener so we can wrap in TLS after ensuring the cert
+	tcpListener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create TCP listener: %w", err)
 	}
-	srv.certManager = certManager
-	srv.caCertFile = caCertFile
+
+	// HTTP client for making requests to target websites
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	logger := logging.NewLogger("tunnel-server")
+	logger.SetLevel(logLevel)
+
+	// Initialize circuit breaker for external requests
+	cbConfig := circuitbreaker.DefaultConfig()
+	cb := circuitbreaker.New(cbConfig)
+
+	// Initialize retry configuration
+	retryConfig := retry.Config{
+		MaxAttempts:  3,
+		InitialDelay: 500 * time.Millisecond,
+		MaxDelay:     5 * time.Second,
+		Multiplier:   2.0,
+	}
+
+	// Initialize metrics emitter (optional - gracefully disabled if not configured)
+	metricsConfig, err := metrics.LoadConfig()
+	if err != nil {
+		logger.Warn("Failed to load metrics configuration", "error", err.Error())
+		metricsConfig = &metrics.Config{Enabled: false}
+	}
+
+	metricsEmitter, err := metrics.NewEmitter(metricsConfig, logger)
+	if err != nil {
+		logger.Warn("Failed to create metrics emitter", "error", err.Error())
+	}
+
+	srv := &Server{
+		listener:       tcpListener,
+		httpClient:     httpClient,
+		circuitBreaker: cb,
+		retryConfig:    retryConfig,
+		metricsEmitter: metricsEmitter,
+		logger:         logger,
+		ctx:            ctx,
+		cancel:         cancel,
+		maxConns:       maxConns,
+		tcpConns:       make(map[string]net.Conn),
+		wsConns:        make(map[string]*websocket.Conn),
+		startTime:      time.Now(),
+		testMode:       false,
+		certManager:    certManager,
+		caCertFile:     caCertFile,
+		tlsConfig:      tlsConfig,
+	}
+	
 	return srv, nil
 }
 
 // NewServerWithTestMode creates a new tunnel server with test mode option
 func NewServerWithTestMode(tlsConfig *tls.Config, addr string, maxConns int, logLevel string, testMode bool) (*Server, error) {
+	// Use TLS listener for legacy mode; will be switched to TCP for lazy cert generation
 	listener, err := tls.Listen("tcp", addr, tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create listener: %w", err)
@@ -124,6 +185,7 @@ func NewServerWithTestMode(tlsConfig *tls.Config, addr string, maxConns int, log
 		wsConns:        make(map[string]*websocket.Conn),
 		startTime:      time.Now(),
 		testMode:       testMode,
+		tlsConfig:      tlsConfig,
 	}, nil
 }
 
@@ -157,17 +219,6 @@ func (s *Server) Start() error {
 
 		s.logger.Debug("New connection accepted", "remote_addr", conn.RemoteAddr(), "local_addr", conn.LocalAddr())
 		
-		// Log TLS connection details
-		if tlsConn, ok := conn.(*tls.Conn); ok {
-			state := tlsConn.ConnectionState()
-			s.logger.Debug("TLS connection accepted",
-				"remote_addr", conn.RemoteAddr(),
-				"version", state.Version,
-				"cipher_suite", state.CipherSuite,
-				"peer_certificates", len(state.PeerCertificates),
-				"negotiated_protocol", state.NegotiatedProtocol)
-		}
-
 		// Check connection limit
 		s.connMutex.RLock()
 		if int(s.activeConns) >= s.maxConns {
@@ -178,9 +229,62 @@ func (s *Server) Start() error {
 		}
 		s.connMutex.RUnlock()
 
-		// Handle each connection in a goroutine
-		s.wg.Add(1)
-		go s.handleConnection(conn.(*tls.Conn))
+		// For lazy certificate generation, ensure cert before TLS handshake
+		if s.certManager != nil {
+			agentAddr := conn.RemoteAddr().String()
+			agentIP, _, err := net.SplitHostPort(agentAddr)
+			if err != nil {
+				s.logger.Warn("Failed to parse agent address", "remote_addr", agentAddr, "error", err.Error())
+				agentIP = agentAddr // Use full address as fallback
+			}
+
+			// Ensure certificate includes this agent IP
+			ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+			certPath, keyPath, err := s.certManager.EnsureCertificateForConnection(ctx, agentIP)
+			cancel()
+			
+			if err != nil {
+				s.logger.Error("Failed to ensure certificate for connection", err, "agent_ip", agentIP)
+				conn.Close()
+				continue
+			}
+			
+			// Reload TLS config with the updated certificate
+			updatedTLSConfig, err := tlsutil.LoadServerTLSConfig(certPath, keyPath, s.caCertFile)
+			if err != nil {
+				s.logger.Error("Failed to load updated TLS config", err, "agent_ip", agentIP)
+				conn.Close()
+				continue
+			}
+			
+			// Wrap TCP connection with TLS
+			tlsConn := tls.Server(conn, updatedTLSConfig)
+			
+			s.logger.Debug("TLS connection wrapped", "remote_addr", conn.RemoteAddr(), "agent_ip", agentIP)
+			
+			// Handle each connection in a goroutine
+			s.wg.Add(1)
+			go s.handleConnection(tlsConn)
+		} else {
+			// Legacy mode: connection is already TLS-wrapped
+			if tlsConn, ok := conn.(*tls.Conn); ok {
+				// Log TLS connection details
+				state := tlsConn.ConnectionState()
+				s.logger.Debug("TLS connection accepted",
+					"remote_addr", conn.RemoteAddr(),
+					"version", state.Version,
+					"cipher_suite", state.CipherSuite,
+					"peer_certificates", len(state.PeerCertificates),
+					"negotiated_protocol", state.NegotiatedProtocol)
+				
+				// Handle each connection in a goroutine
+				s.wg.Add(1)
+				go s.handleConnection(tlsConn)
+			} else {
+				s.logger.Error("Expected TLS connection in legacy mode, closing", nil, "remote_addr", conn.RemoteAddr())
+				conn.Close()
+			}
+		}
 	}
 }
 
