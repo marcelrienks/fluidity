@@ -181,7 +181,18 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			"ca_url", cfg.CAServiceURL,
 			"cache_dir", cfg.CertCacheDir)
 
-		certMgr := agent.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
+		var certMgr *agent.CertManager
+		// Use ARN-based certificate manager if ARN fields are available from Wake Lambda
+		if cfg.ServerARN != "" && cfg.AgentPublicIP != "" {
+			logger.Info("Using ARN-based certificate generation",
+				"server_arn", cfg.ServerARN,
+				"agent_public_ip", cfg.AgentPublicIP)
+			certMgr = agent.NewCertManagerWithARN(cfg.CertCacheDir, cfg.CAServiceURL, cfg.ServerARN, cfg.AgentPublicIP, logger)
+		} else {
+			logger.Info("Using legacy certificate generation (ARN not available)")
+			certMgr = agent.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
+		}
+		
 		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		var certErr error
 		certFile, keyFile, certErr = certMgr.EnsureCertificate(certCtx)

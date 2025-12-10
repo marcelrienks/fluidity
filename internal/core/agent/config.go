@@ -21,6 +21,10 @@ type Config struct {
 	CAServiceURL        string `mapstructure:"ca_service_url" yaml:"ca_service_url"`
 	CertCacheDir        string `mapstructure:"cert_cache_dir" yaml:"cert_cache_dir"`
 	UseDynamicCerts     bool   `mapstructure:"use_dynamic_certs" yaml:"use_dynamic_certs"`
+	// ARN-based certificate fields (populated by Wake/Query Lambdas)
+	ServerARN      string `mapstructure:"server_arn" yaml:"server_arn"`
+	ServerPublicIP string `mapstructure:"server_public_ip" yaml:"server_public_ip"`
+	AgentPublicIP  string `mapstructure:"agent_public_ip" yaml:"agent_public_ip"`
 }
 
 // GetServerAddress returns the full server address

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"fluidity/internal/core/server"
+	"fluidity/internal/shared/certs"
 	"fluidity/internal/shared/config"
 	"fluidity/internal/shared/logging"
 	"fluidity/internal/shared/secretsmanager"
@@ -126,19 +127,68 @@ func runServer(cmd *cobra.Command, args []string) error {
 			"ca_url", cfg.CAServiceURL,
 			"cache_dir", cfg.CertCacheDir)
 
-		certMgr := server.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
-		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		var certErr error
-		certFileUsed, keyFileUsed, certErr = certMgr.EnsureCertificate(certCtx)
-		certCancel()
-		if certErr != nil {
-			return fmt.Errorf("failed to ensure certificate: %w", certErr)
+		var certMgr *server.CertManager
+		
+		// Try to discover server ARN and public IP for ARN-based certificates
+		serverARN, arnErr := certs.DiscoverServerARN()
+		if arnErr != nil {
+			logger.Warn("Failed to discover server ARN, using legacy mode", "error", arnErr.Error())
 		}
+		
+		serverPublicIP, ipErr := certs.DiscoverPublicIP()
+		if ipErr != nil {
+			logger.Warn("Failed to discover server public IP, using legacy mode", "error", ipErr.Error())
+		}
+		
+		// Use lazy generation if ARN and public IP are available
+		if serverARN != "" && serverPublicIP != "" {
+			logger.Info("Using lazy ARN-based certificate generation",
+				"server_arn", serverARN,
+				"server_public_ip", serverPublicIP)
+			certMgr = server.NewCertManagerWithLazyGen(cfg.CertCacheDir, cfg.CAServiceURL, serverARN, serverPublicIP, logger)
+			
+			// Initialize the private key at startup
+			if keyErr := certMgr.InitializeKey(); keyErr != nil {
+				return fmt.Errorf("failed to initialize private key: %w", keyErr)
+			}
+			
+			// Store cert manager in config for use during connections
+			cfg.CertManager = certMgr
+			
+			// Don't generate certificate yet - wait for first connection
+			logger.Info("Server started with lazy certificate generation - cert will be generated on first agent connection")
+			
+			// For now, create a minimal TLS config that will be updated on connection
+			// We'll use the GetCertificate callback to handle lazy generation
+			var tlsErr error
+			tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
+			if tlsErr != nil {
+				// If no cert exists yet, that's okay for lazy generation
+				// We'll create a basic TLS config
+				logger.Info("No existing certificate for lazy mode (expected), will generate on first connection")
+				tlsConfig = &tls.Config{
+					ClientAuth: tls.RequireAndVerifyClientCert,
+					MinVersion: tls.VersionTLS12,
+				}
+			}
+		} else {
+			// Fall back to legacy mode
+			logger.Info("Using legacy certificate generation (ARN/IP not available)")
+			certMgr = server.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
+			
+			certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			var certErr error
+			certFileUsed, keyFileUsed, certErr = certMgr.EnsureCertificate(certCtx)
+			certCancel()
+			if certErr != nil {
+				return fmt.Errorf("failed to ensure certificate: %w", certErr)
+			}
 
-		var tlsErr error
-		tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
+			var tlsErr error
+			tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
+			if tlsErr != nil {
+				return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
+			}
 		}
 	} else if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
 		logger.Info("Using AWS Secrets Manager for TLS certificates",

@@ -39,13 +39,16 @@ type WakeRequest struct {
 
 // WakeResponse represents the direct JSON response from Wake Lambda
 type WakeResponse struct {
-	Status             string `json:"status"`
-	InstanceID         string `json:"instance_id,omitempty"`
-	DesiredCount       int32  `json:"desiredCount"`
-	RunningCount       int32  `json:"runningCount"`
-	PendingCount       int32  `json:"pendingCount"`
-	EstimatedStartTime string `json:"estimatedStartTime,omitempty"`
-	Message            string `json:"message"`
+	Status              string `json:"status"`
+	InstanceID          string `json:"instance_id,omitempty"`
+	DesiredCount        int32  `json:"desiredCount"`
+	RunningCount        int32  `json:"runningCount"`
+	PendingCount        int32  `json:"pendingCount"`
+	EstimatedStartTime  string `json:"estimatedStartTime,omitempty"`
+	Message             string `json:"message"`
+	ServerARN           string `json:"server_arn,omitempty"`
+	ServerPublicIP      string `json:"server_public_ip,omitempty"`
+	AgentPublicIPAsSeen string `json:"agent_public_ip_as_seen,omitempty"`
 }
 
 // QueryRequest represents the request to Query Lambda
@@ -55,9 +58,10 @@ type QueryRequest struct {
 
 // QueryResponse represents the direct JSON response from Query Lambda
 type QueryResponse struct {
-	Status   string `json:"status"` // "negative", "pending", "ready"
-	PublicIP string `json:"public_ip,omitempty"`
-	Message  string `json:"message"`
+	Status    string `json:"status"` // "negative", "pending", "ready"
+	PublicIP  string `json:"public_ip,omitempty"`
+	Message   string `json:"message"`
+	ServerARN string `json:"server_arn,omitempty"`
 }
 
 // KillRequest represents the request to Kill Lambda
@@ -360,6 +364,22 @@ func (c *Client) WakeAndGetIP(ctx context.Context, agentConfig interface{}) erro
 		return fmt.Errorf("wake failed: %w", err)
 	}
 
+	// Store ARN-related fields in agent config for ARN-based certificate generation
+	if cfg, ok := agentConfig.(*agent.Config); ok {
+		if wakeResp.ServerARN != "" {
+			cfg.ServerARN = wakeResp.ServerARN
+			c.logger.Info("Server ARN discovered from Wake Lambda", "server_arn", wakeResp.ServerARN)
+		}
+		if wakeResp.ServerPublicIP != "" {
+			cfg.ServerPublicIP = wakeResp.ServerPublicIP
+			c.logger.Info("Server public IP discovered from Wake Lambda", "server_public_ip", wakeResp.ServerPublicIP)
+		}
+		if wakeResp.AgentPublicIPAsSeen != "" {
+			cfg.AgentPublicIP = wakeResp.AgentPublicIPAsSeen
+			c.logger.Info("Agent public IP discovered from Wake Lambda", "agent_public_ip", wakeResp.AgentPublicIPAsSeen)
+		}
+	}
+
 	// Wait a bit for the service to start
 	time.Sleep(5 * time.Second)
 
@@ -388,6 +408,11 @@ func (c *Client) WakeAndGetIP(ctx context.Context, agentConfig interface{}) erro
 			if cfg, ok := agentConfig.(*agent.Config); ok {
 				cfg.ServerIP = queryResp.PublicIP
 				c.logger.Info("Server IP discovered and config updated", "server_ip", queryResp.PublicIP)
+				// Also update ServerARN if provided by Query Lambda
+				if queryResp.ServerARN != "" && cfg.ServerARN == "" {
+					cfg.ServerARN = queryResp.ServerARN
+					c.logger.Info("Server ARN discovered from Query Lambda", "server_arn", queryResp.ServerARN)
+				}
 			}
 			return nil
 		}
