@@ -4,3 +4,4 @@ log_level: "debug"
 max_connections: 10
 ca_service_url: "http://localhost:3000/sign"
 cert_cache_dir: "/tmp/fluidity-certs"
+ca_cert_file: "./certs/ca.crt"

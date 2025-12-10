@@ -90,6 +90,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 	if cfg.CertCacheDir == "" {
 		return fmt.Errorf("cert_cache_dir is required - dynamic lazy certificate generation is mandatory")
 	}
+	if cfg.CACertFile == "" {
+		return fmt.Errorf("ca_cert_file is required for client certificate verification in dynamic cert mode")
+	}
 
 	logger.Info("Using mandatory dynamic lazy certificate generation",
 		"ca_url", cfg.CAServiceURL,
@@ -146,7 +149,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		cfg.MaxConnections,
 		cfg.LogLevel,
 		cfg.CertManager,
-		"", // caCertFile not needed since we generate on-the-fly
+		cfg.CACertFile, // Pass CA cert file for client verification
 	)
 	
 	if err != nil {
