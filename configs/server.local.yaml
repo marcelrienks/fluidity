@@ -1,7 +1,6 @@
 listen_addr: "127.0.0.1"
 listen_port: 8443
-cert_file: "./certs/server.crt"
-key_file: "./certs/server.key"
-ca_cert_file: "./certs/ca.crt"
 log_level: "debug"
 max_connections: 10
+ca_service_url: "http://localhost:3000/sign"
+cert_cache_dir: "/tmp/fluidity-certs"

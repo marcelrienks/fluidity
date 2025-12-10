@@ -17,19 +17,14 @@ import (
 	"fluidity/internal/shared/certs"
 	"fluidity/internal/shared/config"
 	"fluidity/internal/shared/logging"
-	"fluidity/internal/shared/secretsmanager"
-	tlsutil "fluidity/internal/shared/tls"
 )
 
 var (
-	configFile     string
-	listenAddr     string
-	listenPort     int
+	configFile string
+	listenAddr string
+	listenPort int
 	maxConnections int
-	logLevel       string
-	certFile       string
-	keyFile        string
-	caCertFile     string
+	logLevel   string
 )
 
 func main() {
@@ -48,9 +43,6 @@ func main() {
 	rootCmd.Flags().IntVar(&listenPort, "listen-port", 0, "Port to listen on")
 	rootCmd.Flags().IntVar(&maxConnections, "max-connections", 0, "Maximum number of concurrent connections")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level (debug, info, warn, error)")
-	rootCmd.Flags().StringVar(&certFile, "cert", "", "Server certificate file")
-	rootCmd.Flags().StringVar(&keyFile, "key", "", "Server private key file")
-	rootCmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -76,15 +68,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 	if logLevel != "" {
 		overrides["log_level"] = logLevel
 	}
-	if certFile != "" {
-		overrides["cert_file"] = certFile
-	}
-	if keyFile != "" {
-		overrides["key_file"] = keyFile
-	}
-	if caCertFile != "" {
-		overrides["ca_cert_file"] = caCertFile
-	}
 
 	// Load configuration
 	cfg, err := config.LoadConfig[server.Config](configFile, overrides)
@@ -100,158 +83,71 @@ func runServer(cmd *cobra.Command, args []string) error {
 		"max_connections", cfg.MaxConnections,
 		"log_level", cfg.LogLevel)
 
-	// Load TLS configuration (with dynamic certificate support)
-	var tlsConfig *tls.Config
-	var certFileUsed, keyFileUsed string
-
-	// First, check if certificates are provided via environment variables (from ECS Secrets)
-	certPEM := os.Getenv("CERT_PEM")
-	keyPEM := os.Getenv("KEY_PEM")
-	caPEM := os.Getenv("CA_PEM")
-
-	if certPEM != "" && keyPEM != "" && caPEM != "" {
-		logger.Info("Using TLS certificates from environment variables (ECS Secrets)")
-		var tlsErr error
-		tlsConfig, tlsErr = tlsutil.LoadServerTLSConfigFromPEM(
-			[]byte(certPEM),
-			[]byte(keyPEM),
-			[]byte(caPEM),
-		)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to load TLS configuration from environment variables: %w", tlsErr)
-		}
-		certFileUsed = "environment variable (CERT_PEM)"
-		keyFileUsed = "environment variable (KEY_PEM)"
-	} else if cfg.UseDynamicCerts && cfg.CAServiceURL != "" {
-		logger.Info("Using dynamic certificate generation",
-			"ca_url", cfg.CAServiceURL,
-			"cache_dir", cfg.CertCacheDir)
-
-		var certMgr *server.CertManager
-		
-		// Try to discover server ARN and public IP for ARN-based certificates
-		serverARN, arnErr := certs.DiscoverServerARN()
-		if arnErr != nil {
-			logger.Warn("Failed to discover server ARN, using legacy mode", "error", arnErr.Error())
-		}
-		
-		// For public IP, prefer explicit configuration over discovery
-		// (metadata discovery fails in NAT/CloudFront scenarios)
-		serverPublicIP := os.Getenv("SERVER_PUBLIC_IP")
-		if serverPublicIP == "" {
-			// Fallback to discovery if not explicitly configured
-			var ipErr error
-			serverPublicIP, ipErr = certs.DiscoverPublicIP()
-			if ipErr != nil {
-				logger.Warn("Failed to discover server public IP and SERVER_PUBLIC_IP env not set", "error", ipErr.Error())
-			}
-		} else {
-			logger.Info("Using explicit SERVER_PUBLIC_IP from environment", "server_public_ip", serverPublicIP)
-		}
-		
-		// Use lazy generation if ARN and public IP are available
-		if serverARN != "" && serverPublicIP != "" {
-			logger.Info("Using lazy ARN-based certificate generation",
-				"server_arn", serverARN,
-				"server_public_ip", serverPublicIP)
-			certMgr = server.NewCertManagerWithLazyGen(cfg.CertCacheDir, cfg.CAServiceURL, serverARN, serverPublicIP, logger)
-			
-			// Initialize the private key at startup
-			if keyErr := certMgr.InitializeKey(); keyErr != nil {
-				return fmt.Errorf("failed to initialize private key: %w", keyErr)
-			}
-			
-			// Store cert manager in config for use during connections
-			cfg.CertManager = certMgr
-			
-			// Don't generate certificate yet - wait for first connection
-			logger.Info("Server started with lazy certificate generation - cert will be generated on first agent connection")
-			
-			// For now, create a minimal TLS config that will be updated on connection
-			// We'll use the GetCertificate callback to handle lazy generation
-			var tlsErr error
-			tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
-			if tlsErr != nil {
-				// If no cert exists yet, that's okay for lazy generation
-				// We'll create a basic TLS config
-				logger.Info("No existing certificate for lazy mode (expected), will generate on first connection")
-				tlsConfig = &tls.Config{
-					ClientAuth: tls.RequireAndVerifyClientCert,
-					MinVersion: tls.VersionTLS12,
-				}
-			}
-		} else {
-			// Fall back to legacy mode
-			logger.Info("Using legacy certificate generation (ARN/IP not available)")
-			certMgr = server.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
-			
-			certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			var certErr error
-			certFileUsed, keyFileUsed, certErr = certMgr.EnsureCertificate(certCtx)
-			certCancel()
-			if certErr != nil {
-				return fmt.Errorf("failed to ensure certificate: %w", certErr)
-			}
-
-			var tlsErr error
-			tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
-			if tlsErr != nil {
-				return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
-			}
-		}
-	} else if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
-		logger.Info("Using AWS Secrets Manager for TLS certificates",
-			"secret_name", cfg.SecretsManagerName)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		var tlsErr error
-		tlsConfig, tlsErr = secretsmanager.LoadTLSConfigFromSecretsOrFallback(
-			ctx,
-			cfg.SecretsManagerName,
-			cfg.CertFile,
-			cfg.KeyFile,
-			cfg.CACertFile,
-			true, // isServer
-			func() (*tls.Config, error) {
-				return tlsutil.LoadServerTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CACertFile)
-			},
-		)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
-		}
-		certFileUsed = cfg.CertFile
-		keyFileUsed = cfg.KeyFile
-	} else {
-		logger.Info("Using local files for TLS certificates")
-		var tlsErr error
-		tlsConfig, tlsErr = tlsutil.LoadServerTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CACertFile)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
-		}
-		certFileUsed = cfg.CertFile
-		keyFileUsed = cfg.KeyFile
+	// Dynamic lazy certificate generation is the ONLY supported mode
+	if cfg.CAServiceURL == "" {
+		return fmt.Errorf("ca_service_url is required - dynamic lazy certificate generation is mandatory")
+	}
+	if cfg.CertCacheDir == "" {
+		return fmt.Errorf("cert_cache_dir is required - dynamic lazy certificate generation is mandatory")
 	}
 
-	logger.Info("Loaded TLS configuration",
-		"cert_file", certFileUsed,
-		"key_file", keyFileUsed,
-		"ca_file", cfg.CACertFile)
+	logger.Info("Using mandatory dynamic lazy certificate generation",
+		"ca_url", cfg.CAServiceURL,
+		"cache_dir", cfg.CertCacheDir)
 
-	// Create tunnel server with cert manager if available
-	var tunnelServer *server.Server
-	if cfg.CertManager != nil {
-		logger.Info("Creating server with lazy certificate generation")
-		tunnelServer, err = server.NewServerWithCertManager(
-			tlsConfig,
-			cfg.GetListenAddress(),
-			cfg.MaxConnections,
-			cfg.LogLevel,
-			cfg.CertManager,
-			cfg.CACertFile,
-		)
-	} else {
-		tunnelServer, err = server.NewServer(tlsConfig, cfg.GetListenAddress(), cfg.MaxConnections, cfg.LogLevel)
+	// Discover server ARN (required for ARN-based certificates)
+	serverARN, arnErr := certs.DiscoverServerARN()
+	if arnErr != nil {
+		return fmt.Errorf("failed to discover server ARN (required for dynamic cert generation): %w", arnErr)
 	}
+	logger.Info("Server ARN discovered", "arn", serverARN)
+
+	// Discover or use explicit SERVER_PUBLIC_IP (required for certificate validation)
+	serverPublicIP := os.Getenv("SERVER_PUBLIC_IP")
+	if serverPublicIP == "" {
+		var ipErr error
+		serverPublicIP, ipErr = certs.DiscoverPublicIP()
+		if ipErr != nil {
+			return fmt.Errorf("failed to discover server public IP and SERVER_PUBLIC_IP env var not set: %w", ipErr)
+		}
+		logger.Info("Server public IP discovered from metadata", "ip", serverPublicIP)
+	} else {
+		logger.Info("Using explicit SERVER_PUBLIC_IP from environment", "server_public_ip", serverPublicIP)
+	}
+
+	// Initialize certificate manager for lazy generation
+	certMgr := server.NewCertManagerWithLazyGen(cfg.CertCacheDir, cfg.CAServiceURL, serverARN, serverPublicIP, logger)
+	
+	// Initialize the private key at startup
+	if keyErr := certMgr.InitializeKey(); keyErr != nil {
+		return fmt.Errorf("failed to initialize private key: %w", keyErr)
+	}
+	logger.Info("Server private key initialized")
+
+	// Store cert manager in config for use during connections
+	cfg.CertManager = certMgr
+
+	logger.Info("Server ready for lazy certificate generation on first agent connection",
+		"server_arn", serverARN,
+		"server_public_ip", serverPublicIP)
+
+	// Create minimal TLS config for wrapping TCP connections
+	// Actual certificates will be generated per-connection during TLS handshake
+	tlsConfig := &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		MinVersion: tls.VersionTLS13,
+	}
+
+	// Create tunnel server with cert manager
+	logger.Info("Creating server with lazy certificate generation")
+	tunnelServer, err := server.NewServerWithCertManager(
+		tlsConfig,
+		cfg.GetListenAddress(),
+		cfg.MaxConnections,
+		cfg.LogLevel,
+		cfg.CertManager,
+		"", // caCertFile not needed since we generate on-the-fly
+	)
 	
 	if err != nil {
 		return fmt.Errorf("failed to create tunnel server: %w", err)

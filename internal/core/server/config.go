@@ -3,19 +3,15 @@ package server
 import "fmt"
 
 // Config holds server configuration
+// NOTE: Only lazy dynamic certificate generation is supported.
+// Static certs, secrets manager, and env var certs are not used.
 type Config struct {
-	ListenAddr         string `mapstructure:"listen_addr" yaml:"listen_addr"`
-	ListenPort         int    `mapstructure:"listen_port" yaml:"listen_port"`
-	CertFile           string `mapstructure:"cert_file" yaml:"cert_file"`
-	KeyFile            string `mapstructure:"key_file" yaml:"key_file"`
-	CACertFile         string `mapstructure:"ca_cert_file" yaml:"ca_cert_file"`
-	LogLevel           string `mapstructure:"log_level" yaml:"log_level"`
-	MaxConnections     int    `mapstructure:"max_connections" yaml:"max_connections"`
-	SecretsManagerName string `mapstructure:"secrets_manager_name" yaml:"secrets_manager_name"`
-	UseSecretsManager  bool   `mapstructure:"use_secrets_manager" yaml:"use_secrets_manager"`
-	CAServiceURL       string `mapstructure:"ca_service_url" yaml:"ca_service_url"`
-	CertCacheDir       string `mapstructure:"cert_cache_dir" yaml:"cert_cache_dir"`
-	UseDynamicCerts    bool   `mapstructure:"use_dynamic_certs" yaml:"use_dynamic_certs"`
+	ListenAddr   string `mapstructure:"listen_addr" yaml:"listen_addr"`
+	ListenPort   int    `mapstructure:"listen_port" yaml:"listen_port"`
+	LogLevel     string `mapstructure:"log_level" yaml:"log_level"`
+	MaxConnections int    `mapstructure:"max_connections" yaml:"max_connections"`
+	CAServiceURL   string `mapstructure:"ca_service_url" yaml:"ca_service_url"`
+	CertCacheDir   string `mapstructure:"cert_cache_dir" yaml:"cert_cache_dir"`
 	// CertManager for lazy certificate generation (not serialized)
 	CertManager *CertManager `mapstructure:"-" yaml:"-"`
 }

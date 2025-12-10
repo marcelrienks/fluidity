@@ -1,7 +1,6 @@
 listen_addr: "0.0.0.0"
 listen_port: 8443
-cert_file: "./certs/server.crt"
-key_file: "./certs/server.key"
-ca_cert_file: "./certs/ca.crt"
 log_level: "info"
 max_connections: 100
+ca_service_url: "${CA_SERVICE_URL}"
+cert_cache_dir: "${CERT_CACHE_DIR:-/tmp/fluidity-certs}"
