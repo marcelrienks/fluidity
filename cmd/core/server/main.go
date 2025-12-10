@@ -135,9 +135,18 @@ func runServer(cmd *cobra.Command, args []string) error {
 			logger.Warn("Failed to discover server ARN, using legacy mode", "error", arnErr.Error())
 		}
 		
-		serverPublicIP, ipErr := certs.DiscoverPublicIP()
-		if ipErr != nil {
-			logger.Warn("Failed to discover server public IP, using legacy mode", "error", ipErr.Error())
+		// For public IP, prefer explicit configuration over discovery
+		// (metadata discovery fails in NAT/CloudFront scenarios)
+		serverPublicIP := os.Getenv("SERVER_PUBLIC_IP")
+		if serverPublicIP == "" {
+			// Fallback to discovery if not explicitly configured
+			var ipErr error
+			serverPublicIP, ipErr = certs.DiscoverPublicIP()
+			if ipErr != nil {
+				logger.Warn("Failed to discover server public IP and SERVER_PUBLIC_IP env not set", "error", ipErr.Error())
+			}
+		} else {
+			logger.Info("Using explicit SERVER_PUBLIC_IP from environment", "server_public_ip", serverPublicIP)
 		}
 		
 		// Use lazy generation if ARN and public IP are available

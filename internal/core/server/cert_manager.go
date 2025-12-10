@@ -134,21 +134,8 @@ func (cm *CertManager) EnsureCertificateForConnection(ctx context.Context, agent
 		// Add agent IP to the list
 		cm.agentIPs = certs.AppendIPsToSAN(cm.agentIPs, agentIP)
 
-		// Generate certificate with IPs
-		// Prefer agent IPs over server IP since agent IPs are what clients connect to
-		// (server IP from metadata might be private/internal in NAT/CloudFront scenarios)
-		var ipList []string
-		
-		// If server public IP is available and different from private ranges, include it
-		if cm.serverPublicIP != "" {
-			ipList = append(ipList, cm.serverPublicIP)
-		}
-		
-		// Always include agent IPs (these are the actual connection sources)
-		ipList = append(ipList, cm.agentIPs...)
-		
-		// Deduplicate
-		ipList = certs.AppendIPsToSAN([]string{}, ipList...)
+		// Generate certificate with server IP and all agent IPs
+		ipList := append([]string{cm.serverPublicIP}, cm.agentIPs...)
 
 		cm.log.Info("Generating certificate with ARN and IPs", 
 			"server_arn", cm.serverARN,

@@ -176,42 +176,34 @@ func (c *Client) Connect() error {
 				c.serverARN, serverCert.Subject.CommonName)
 		}
 		
-		// Validate that certificate has at least some IPs (indicates a valid server cert, not generic)
-		if len(serverCert.IPAddresses) == 0 {
-			c.logger.Warn("Server certificate has no IP addresses in SAN (expected for NAT/CloudFront scenarios)",
-				"server_arn", c.serverARN)
-		} else {
-			// Try to validate connection IP or serverPublicIP is in the SAN
-			serverHost, _, err := net.SplitHostPort(c.serverAddr)
-			if err != nil {
-				serverHost = c.serverAddr
-			}
-			
-			ipValid := false
-			for _, ip := range serverCert.IPAddresses {
-				if ip.String() == serverHost || ip.String() == c.serverPublicIP {
-					ipValid = true
-					break
-				}
-			}
-			
-			if !ipValid {
-				// In NAT/CloudFront scenarios, the connection IP might not match
-				// Log a warning but allow connection if CN/ARN validation passed
-				c.logger.Warn("Server certificate SAN does not contain connection IP (may be NAT/CloudFront)",
-					"connection_ip", serverHost,
-					"server_public_ip", c.serverPublicIP,
-					"cert_ips", serverCert.IPAddresses,
-					"server_arn", c.serverARN)
-			} else {
-				c.logger.Info("Server IP in certificate SAN validated",
-					"server_host", serverHost,
-					"server_public_ip", c.serverPublicIP)
+		// Validate server IP is in certificate SAN
+		serverHost, _, err := net.SplitHostPort(c.serverAddr)
+		if err != nil {
+			serverHost = c.serverAddr
+		}
+		
+		ipValid := false
+		for _, ip := range serverCert.IPAddresses {
+			if ip.String() == serverHost || ip.String() == c.serverPublicIP {
+				ipValid = true
+				break
 			}
 		}
 		
+		if !ipValid {
+			c.logger.Error("Server certificate SAN does not contain expected IP",
+				fmt.Errorf("certificate validation failed"),
+				"expected_ip", serverHost,
+				"server_public_ip", c.serverPublicIP,
+				"cert_ips", serverCert.IPAddresses)
+			c.mu.Unlock()
+			conn.Close()
+			return fmt.Errorf("server certificate IP validation failed: expected %s in SAN", serverHost)
+		}
+		
 		c.logger.Info("ARN-based server certificate validation successful",
-			"server_arn", c.serverARN)
+			"server_arn", c.serverARN,
+			"server_ip", serverHost)
 	}
 
 	c.conn = conn
