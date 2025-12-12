@@ -33,15 +33,15 @@ Validation functions exist but need integration into actual connection handlers.
 - [x] Remove CertificatesSecretArn from Fargate CloudFormation template (not in codebase)
 - [x] Remove Secrets section from Fargate task container definition (not in codebase)
 
-### 3. CloudFormation - Integrate CA Lambda Into Main Lambda Stack
+### 3. CloudFormation - Integrate CA Lambda Into Main Lambda Stack ✅ COMPLETE
 **Rationale**: Simplify deployment by making CA Lambda part of the control plane stack, not separate
 
-- [ ] Move CA Lambda function into lambda.yaml CloudFormation template
-- [ ] Add CA Lambda function resource to lambda.yaml
-- [ ] Add CA Lambda environment variables (CA_SECRET_NAME)
-- [ ] Add CA Lambda IAM role and permissions to lambda.yaml
-- [ ] Add CA API Gateway endpoint to lambda.yaml
-- [ ] Add CA Lambda outputs (CAAPIEndpoint) to lambda.yaml
+- [x] Move CA Lambda function into lambda.yaml CloudFormation template
+- [x] Add CA Lambda function resource to lambda.yaml
+- [x] Add CA Lambda environment variables (CA_SECRET_NAME)
+- [x] Add CA Lambda IAM role and permissions to lambda.yaml
+- [x] Add CA API Gateway endpoint to lambda.yaml
+- [x] Add CA Lambda outputs (CAAPIEndpoint) to lambda.yaml
 - [ ] Remove separate ca-lambda.yaml CloudFormation template from deployments/cloudformation/
 - [ ] Update deploy-server.sh to remove CA_STACK_NAME and CA_TEMPLATE references
 - [ ] Update deploy-server.sh to retrieve CAAPIEndpoint from LAMBDA_STACK_NAME (not separate CA stack)
