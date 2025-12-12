@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,6 +13,7 @@ import (
 
 	"fluidity/internal/shared/logging"
 	"fluidity/internal/shared/protocol"
+	tlsutil "fluidity/internal/shared/tls"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -19,26 +21,26 @@ import (
 	"github.com/sirupsen/logrus"
 ) // Client manages the tunnel connection to server
 type Client struct {
-	config              *tls.Config
-	serverAddr          string
-	conn                *tls.Conn
-	mu                  sync.RWMutex
-	requests            map[string]chan *protocol.Response
-	connectCh           map[string]chan *protocol.ConnectData
-	connectAcks         map[string]chan *protocol.ConnectAck
-	wsCh                map[string]chan *protocol.WebSocketMessage
-	wsAcks              map[string]chan *protocol.WebSocketAck
-	iamAuthResponseCh   chan *protocol.IAMAuthResponse
-	iamAuthRequestID    string
-	logger              *logging.Logger
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	connected           bool
-	reconnectCh         chan bool
-	awsConfig           aws.Config
-	signer              *v4.Signer
-	serverARN           string // Expected server ARN for certificate validation
-	serverPublicIP      string // Expected server public IP for validation
+	config            *tls.Config
+	serverAddr        string
+	conn              *tls.Conn
+	mu                sync.RWMutex
+	requests          map[string]chan *protocol.Response
+	connectCh         map[string]chan *protocol.ConnectData
+	connectAcks       map[string]chan *protocol.ConnectAck
+	wsCh              map[string]chan *protocol.WebSocketMessage
+	wsAcks            map[string]chan *protocol.WebSocketAck
+	iamAuthResponseCh chan *protocol.IAMAuthResponse
+	iamAuthRequestID  string
+	logger            *logging.Logger
+	ctx               context.Context
+	cancel            context.CancelFunc
+	connected         bool
+	reconnectCh       chan bool
+	awsConfig         aws.Config
+	signer            *v4.Signer
+	serverARN         string // Expected server ARN for certificate validation
+	serverPublicIP    string // Expected server public IP for validation
 }
 
 // NewClient creates a new tunnel client
@@ -122,24 +124,63 @@ func (c *Client) Connect() error {
 
 	c.logger.Info("Connecting to tunnel server", "addr", c.serverAddr)
 
-	// Extract hostname for ServerName
+	// Extract hostname/IP for connection target
 	host := c.extractHost(c.serverAddr)
 
-	// Create TLS config with client certificate
-	// Certificate includes wildcard IP SANs (172.31.x.x for AWS VPC)
-	// Hostname verification ENABLED - validates server certificate against actual IP
-	tlsConfig := &tls.Config{
-		Certificates: c.config.Certificates,
-		RootCAs:      c.config.RootCAs,
-		MinVersion:   c.config.MinVersion,
-		ServerName:   host, // CRITICAL: Set ServerName for proper mTLS handshake and hostname verification
+	// Prepare TLS configuration with ARN-based validation if available
+	var tlsConfig *tls.Config
+
+	if c.serverARN != "" {
+		c.logger.Info("Creating ARN-validating client config",
+			"server_arn", c.serverARN,
+			"target_ip", host)
+
+		baseConfig := &tls.Config{
+			Certificates: c.config.Certificates,
+			RootCAs:      c.config.RootCAs,
+			MinVersion:   c.config.MinVersion,
+			ServerName:   host,
+		}
+
+		// Add custom verification with ARN and IP validation
+		baseConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			if len(verifiedChains) == 0 || len(verifiedChains[0]) == 0 {
+				return fmt.Errorf("no verified certificate chains")
+			}
+
+			serverCert := verifiedChains[0][0]
+
+			// Validate server ARN (CN must match)
+			if err := tlsutil.ValidateServerCertificateARN(serverCert, c.serverARN); err != nil {
+				return fmt.Errorf("server ARN validation failed: %w", err)
+			}
+
+			// Validate target IP in SAN
+			if err := tlsutil.ValidateServerCertificateIP(serverCert, host); err != nil {
+				return fmt.Errorf("server IP validation failed: %w", err)
+			}
+
+			c.logger.Info("Server certificate validation passed (ARN + IP)")
+			return nil
+		}
+
+		tlsConfig = baseConfig
+	} else {
+		// Standard TLS config without ARN validation
+		tlsConfig = &tls.Config{
+			Certificates: c.config.Certificates,
+			RootCAs:      c.config.RootCAs,
+			MinVersion:   c.config.MinVersion,
+			ServerName:   host,
+		}
 	}
 
 	c.logger.WithFields(logrus.Fields{
 		"num_certificates": len(tlsConfig.Certificates),
 		"has_root_cas":     tlsConfig.RootCAs != nil,
 		"server_name":      tlsConfig.ServerName,
-	}).Info("TLS config for dial (hostname verification enabled)")
+		"arn_validation":   c.serverARN != "",
+	}).Info("TLS config ready for connection")
 
 	c.logger.Debug("Starting TCP dial", "addr", c.serverAddr)
 	conn, err := tls.Dial("tcp", c.serverAddr, tlsConfig)
@@ -153,58 +194,12 @@ func (c *Client) Connect() error {
 	// Log the connection state
 	state := conn.ConnectionState()
 	c.logger.WithFields(logrus.Fields{
-		"version":            state.Version,
-		"cipher_suite":       state.CipherSuite,
-		"peer_certificates":  len(state.PeerCertificates),
-		"local_certificates": len(tlsConfig.Certificates),
+		"version":             state.Version,
+		"cipher_suite":        state.CipherSuite,
+		"peer_certificates":   len(state.PeerCertificates),
+		"local_certificates":  len(tlsConfig.Certificates),
 		"negotiated_protocol": state.NegotiatedProtocol,
 	}).Info("TLS connection established")
-
-	// Validate server certificate if ARN-based mode is enabled
-	if c.serverARN != "" && len(state.PeerCertificates) > 0 {
-		serverCert := state.PeerCertificates[0]
-		
-		// Validate CN matches expected server ARN
-		if serverCert.Subject.CommonName != c.serverARN {
-			c.logger.Error("Server certificate CN does not match expected ARN",
-				fmt.Errorf("certificate validation failed"),
-				"expected_arn", c.serverARN,
-				"actual_cn", serverCert.Subject.CommonName)
-			c.mu.Unlock()
-			conn.Close()
-			return fmt.Errorf("server certificate CN validation failed: expected %s, got %s", 
-				c.serverARN, serverCert.Subject.CommonName)
-		}
-		
-		// Validate server IP is in certificate SAN
-		serverHost, _, err := net.SplitHostPort(c.serverAddr)
-		if err != nil {
-			serverHost = c.serverAddr
-		}
-		
-		ipValid := false
-		for _, ip := range serverCert.IPAddresses {
-			if ip.String() == serverHost || ip.String() == c.serverPublicIP {
-				ipValid = true
-				break
-			}
-		}
-		
-		if !ipValid {
-			c.logger.Error("Server certificate SAN does not contain expected IP",
-				fmt.Errorf("certificate validation failed"),
-				"expected_ip", serverHost,
-				"server_public_ip", c.serverPublicIP,
-				"cert_ips", serverCert.IPAddresses)
-			c.mu.Unlock()
-			conn.Close()
-			return fmt.Errorf("server certificate IP validation failed: expected %s in SAN", serverHost)
-		}
-		
-		c.logger.Info("ARN-based server certificate validation successful",
-			"server_arn", c.serverARN,
-			"server_ip", serverHost)
-	}
 
 	c.conn = conn
 	c.connected = true
@@ -765,8 +760,8 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	// Extract signature components
 	authReq.Signature = dummyReq.Header.Get("Authorization")
 	authReq.SignedHeaders = dummyReq.Header.Get("X-Amz-SignedHeaders")
-	
-	c.logger.Debug("IAM auth request signed successfully", 
+
+	c.logger.Debug("IAM auth request signed successfully",
 		"signature_prefix", authReq.Signature[:len(authReq.Signature)-20]+"...",
 		"signed_headers", authReq.SignedHeaders)
 
@@ -774,7 +769,7 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 
 	// Create channel for IAM auth response (outside of lock to avoid deadlock)
 	respChan := make(chan *protocol.IAMAuthResponse, 1)
-	
+
 	// Prepare envelope before acquiring lock
 	envelope := protocol.Envelope{
 		Type:    "iam_auth_request",
@@ -794,9 +789,9 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 	isConnected := c.connected
 	conn := c.conn
 	c.mu.RUnlock()
-	
+
 	c.logger.Debug("Connection state check", "connected", isConnected, "conn_not_nil", conn != nil)
-	
+
 	if !isConnected || conn == nil {
 		c.logger.Error("Failed to send IAM auth request", fmt.Errorf("not connected to server"))
 		return fmt.Errorf("not connected to server")
@@ -807,7 +802,7 @@ func (c *Client) authenticateWithIAM(ctx context.Context) error {
 		c.logger.Error("Failed to encode and send IAM auth request", err)
 		return fmt.Errorf("failed to send IAM auth request: %w", err)
 	}
-	
+
 	c.logger.Debug("IAM auth request envelope sent successfully, waiting for response", "id", authReqID, "timeout_seconds", 30)
 
 	// Wait for IAM auth response with timeout

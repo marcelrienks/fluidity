@@ -42,7 +42,7 @@ type Server struct {
 	wsConns        map[string]*websocket.Conn
 	wsMutex        sync.RWMutex
 	startTime      time.Time
-	testMode       bool        // Skip IAM authentication for testing
+	testMode       bool         // Skip IAM authentication for testing
 	certManager    *CertManager // For lazy certificate generation
 	caCertFile     string       // CA cert for TLS config
 	tlsConfig      *tls.Config  // TLS configuration for wrapping TCP connections
@@ -119,7 +119,7 @@ func NewServerWithCertManager(tlsConfig *tls.Config, addr string, maxConns int, 
 		caCertFile:     caCertFile,
 		tlsConfig:      tlsConfig,
 	}
-	
+
 	return srv, nil
 }
 
@@ -218,7 +218,7 @@ func (s *Server) Start() error {
 		}
 
 		s.logger.Debug("New connection accepted", "remote_addr", conn.RemoteAddr(), "local_addr", conn.LocalAddr())
-		
+
 		// Check connection limit
 		s.connMutex.RLock()
 		if int(s.activeConns) >= s.maxConns {
@@ -242,13 +242,13 @@ func (s *Server) Start() error {
 			ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 			certPath, keyPath, err := s.certManager.EnsureCertificateForConnection(ctx, agentIP)
 			cancel()
-			
+
 			if err != nil {
 				s.logger.Error("Failed to ensure certificate for connection", err, "agent_ip", agentIP)
 				conn.Close()
 				continue
 			}
-			
+
 			// Reload TLS config with the updated certificate
 			updatedTLSConfig, err := tlsutil.LoadServerTLSConfig(certPath, keyPath, s.caCertFile)
 			if err != nil {
@@ -256,12 +256,12 @@ func (s *Server) Start() error {
 				conn.Close()
 				continue
 			}
-			
+
 			// Wrap TCP connection with TLS
 			tlsConn := tls.Server(conn, updatedTLSConfig)
-			
+
 			s.logger.Debug("TLS connection wrapped", "remote_addr", conn.RemoteAddr(), "agent_ip", agentIP)
-			
+
 			// Handle each connection in a goroutine
 			s.wg.Add(1)
 			go s.handleConnection(tlsConn)
@@ -276,7 +276,7 @@ func (s *Server) Start() error {
 					"cipher_suite", state.CipherSuite,
 					"peer_certificates", len(state.PeerCertificates),
 					"negotiated_protocol", state.NegotiatedProtocol)
-				
+
 				// Handle each connection in a goroutine
 				s.wg.Add(1)
 				go s.handleConnection(tlsConn)
@@ -392,15 +392,15 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 		certPath, keyPath, err := s.certManager.EnsureCertificateForConnection(ctx, agentIP)
 		cancel()
-		
+
 		if err != nil {
 			s.logger.Error("Failed to ensure certificate for connection", err, "agent_ip", agentIP)
 			return
 		}
-		
+
 		// Reload TLS config with updated certificate if it changed
 		// Note: The connection is already established, but log for monitoring
-		s.logger.Debug("Certificate ensured for agent connection", 
+		s.logger.Debug("Certificate ensured for agent connection",
 			"agent_ip", agentIP,
 			"cert_path", certPath,
 			"key_path", keyPath)
@@ -414,37 +414,30 @@ func (s *Server) handleConnection(conn *tls.Conn) {
 	}
 
 	clientCert := state.PeerCertificates[0]
-	
+
 	// Validate client certificate if certManager is configured (ARN-based mode)
 	if s.certManager != nil {
 		serverARN := s.certManager.GetServerARN()
 		if serverARN != "" {
+			// Use tls utility functions for validation
+
 			// Validate CN matches server ARN
-			if clientCert.Subject.CommonName != serverARN {
-				s.logger.Warn("Client certificate CN does not match server ARN",
-					"expected_arn", serverARN,
-					"actual_cn", clientCert.Subject.CommonName,
+			if err := tlsutil.ValidateClientCertificateARN(clientCert, serverARN); err != nil {
+				s.logger.Warn("Client certificate ARN validation failed",
+					"error", err.Error(),
 					"remote_addr", conn.RemoteAddr())
 				return
 			}
-			
+
 			// Validate connection source IP is in client cert SAN
-			ipValid := false
-			for _, ip := range clientCert.IPAddresses {
-				if ip.String() == agentIP {
-					ipValid = true
-					break
-				}
-			}
-			
-			if !ipValid {
-				s.logger.Warn("Client certificate SAN does not contain source IP",
+			if err := tlsutil.ValidateClientIPOnConnection(clientCert, agentIP); err != nil {
+				s.logger.Warn("Client certificate IP validation failed",
+					"error", err.Error(),
 					"source_ip", agentIP,
-					"cert_ips", clientCert.IPAddresses,
 					"remote_addr", conn.RemoteAddr())
 				return
 			}
-			
+
 			s.logger.Info("ARN-based certificate validation successful",
 				"server_arn", serverARN,
 				"agent_ip", agentIP,
@@ -1069,7 +1062,7 @@ func (s *Server) performIAMAuthentication(decoder *json.Decoder, encoder *json.E
 		Type:    "iam_auth_response",
 		Payload: authResp,
 	}
-	
+
 	if err := encoder.Encode(respEnv); err != nil {
 		s.logger.Error("Failed to send IAM auth response", err)
 		return fmt.Errorf("failed to send IAM auth response: %w", err)
