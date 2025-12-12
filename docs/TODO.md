@@ -90,21 +90,21 @@ log_level: "info"
 - [ ] Remove unused configuration collection code
 - [ ] Simplify deployment to core steps: Build Lambdas → Upload S3 → Deploy Fargate → Deploy Lambda (with CA)
 
-### 6. Deployment Script Simplification - Agent
+### 6. Deployment Script Simplification - Agent ✅ COMPLETE
 **Rationale**: Remove options that don't align with runtime cert generation architecture
 
-- [ ] Remove --cert-path, --key-path, --ca-cert-path options from deploy-agent.sh
-- [ ] Remove --iam-role-arn, --access-key-id, --secret-access-key options from deploy-agent.sh
-- [ ] Keep only required options:
-  - [ ] --wake-endpoint (required)
-  - [ ] --query-endpoint (required)
-  - [ ] --kill-endpoint (required)
-  - [ ] --ca-service-url (auto-filled from deployment)
-  - [ ] --server-port (optional, default 8443)
-  - [ ] --local-proxy-port (optional, default 8080)
-  - [ ] --log-level (optional, default info)
-- [ ] Remove aws_profile, iam_role_arn from agent.yaml generation
-- [ ] Remove IAM credential setup from deploy-agent.sh
+- [x] Remove --cert-path, --key-path, --ca-cert-path options from deploy-agent.sh
+- [x] Remove --iam-role-arn, --access-key-id, --secret-access-key options from deploy-agent.sh
+- [x] Keep only required options:
+  - [x] --wake-endpoint (required)
+  - [x] --query-endpoint (required)
+  - [x] --kill-endpoint (required)
+  - [x] --ca-service-url (auto-filled from deployment)
+  - [x] --server-port (optional, default 8443)
+  - [x] --local-proxy-port (optional, default 8080)
+  - [x] --log-level (optional, default info)
+- [x] Remove aws_profile, iam_role_arn from agent.yaml generation
+- [x] Remove setup_aws_credentials function call from deploy-agent.sh
 
 ### 7. Deployment Script Simplification - Fluidity Master
 **Rationale**: Simplify main deployment flow

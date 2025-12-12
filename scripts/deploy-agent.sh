@@ -351,17 +351,7 @@ EOF
     log_success "Configuration file created: $CONFIG_FILE"
 }
 
-# Setup AWS credentials for IAM authentication
-setup_aws_credentials() {
-    log_substep "Setting up AWS Credentials"
 
-    # AWS SDK uses default credential chain
-    # Credentials are resolved from environment variables, IAM roles, or ~/.aws/credentials
-    log_info "AWS credentials will be resolved using SDK default credential chain"
-    log_info "Ensure credentials are available via ~/.aws/credentials, environment variables, or IAM roles"
-
-    log_success "AWS credential chain configured"
-}
 
 update_config_file() {
     log_substep "Updating Configuration File"
@@ -975,10 +965,8 @@ main() {
             install_agent
             setup_configuration
             
-            # Only validate/setup AWS credentials if not preserving config
+            # Validate configuration if not preserving config
             if [[ "$PRESERVE_CONFIG" != "true" ]]; then
-                setup_aws_credentials
-
                 if ! validate_config; then
                     exit 1
                 fi
