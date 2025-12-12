@@ -36,16 +36,8 @@
 #   --public-subnets <subnets>     Comma-separated subnet IDs (auto-detect)
 #   --allowed-cidr <cidr>          Allowed ingress CIDR (auto-detect your IP)
 #   --local-proxy-port <port>      Agent listening port (default: 8080 on Windows, 8080 on Linux/macOS)
-#   --cert-path <path>             Path to client certificate (optional)
-#   --key-path <path>              Path to client key (optional)
-#   --ca-cert-path <path>          Path to CA certificate (optional)
 #   --install-path <path>          Custom agent installation path (optional)
 #   --log-level <level>            Log level for server and agent (debug|info|warn|error)
-#   --wake-endpoint <url>          Override wake function endpoint
-#   --kill-endpoint <url>          Override kill function endpoint
-#   --iam-role-arn <arn>           IAM role ARN for agent authentication
-#   --access-key-id <id>           AWS access key ID for agent
-#   --secret-access-key <key>      AWS secret access key for agent
 #   --skip-build                   Skip building agent, use existing binary
 #   --debug                        Enable debug logging
 #   --force                        Delete and recreate resources (server only)
@@ -79,12 +71,8 @@ PUBLIC_SUBNETS=""
 ALLOWED_CIDR=""
 
 # Agent Configuration
-SERVER_IP=""
 SERVER_PORT="8443"  # Allow override though server binary listens 8443
 LOCAL_PROXY_PORT=""
-CERT_PATH=""
-KEY_PATH=""
-CA_CERT_PATH=""
 INSTALL_PATH=""
 LOG_LEVEL=""
 
@@ -194,19 +182,7 @@ parse_arguments() {
                 LOCAL_PROXY_PORT="$2"
                 shift 2
                 ;;
-            --cert-path)
-                CERT_PATH="$2"
-                shift 2
-                ;;
-            --key-path)
-                KEY_PATH="$2"
-                shift 2
-                ;;
-            --ca-cert-path)
-                CA_CERT_PATH="$2"
-                shift 2
-                ;;
-            --install-path)
+                        --install-path)
                 INSTALL_PATH="$2"
                 shift 2
                 ;;
@@ -224,26 +200,6 @@ parse_arguments() {
                 ;;
             --query-endpoint)
                 QUERY_ENDPOINT="$2"
-                shift 2
-                ;;
-            --iam-role-arn)
-                AGENT_IAM_ROLE_ARN="$2"
-                shift 2
-                ;;
-            --access-key-id)
-                AGENT_ACCESS_KEY_ID="$2"
-                shift 2
-                ;;
-            --secret-access-key)
-                AGENT_SECRET_ACCESS_KEY="$2"
-                shift 2
-                ;;
-            --install-path)
-                INSTALL_PATH="$2"
-                shift 2
-                ;;
-            --log-level)
-                LOG_LEVEL="$2"
                 shift 2
                 ;;
             --skip-build)
@@ -339,19 +295,6 @@ deploy_server() {
             QUERY_ENDPOINT=$(grep "^export QUERY_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             CA_SERVICE_URL=$(grep "^export CA_SERVICE_URL=" "$temp_exports" | cut -d"'" -f2)
             SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
-            AGENT_IAM_ROLE_ARN=$(grep "^export AGENT_IAM_ROLE_ARN=" "$temp_exports" | cut -d"'" -f2)
-            AGENT_ACCESS_KEY_ID=$(grep "^export AGENT_ACCESS_KEY_ID=" "$temp_exports" | cut -d"'" -f2)
-            AGENT_SECRET_ACCESS_KEY=$(grep "^export AGENT_SECRET_ACCESS_KEY=" "$temp_exports" | cut -d"'" -f2)
-
-            # Set certificate paths to local certs directory (generated during server deployment)
-            if [[ -f "./certs/client.crt" && -f "./certs/client.key" && -f "./certs/ca.crt" ]]; then
-                CERT_PATH="./certs/client.crt"
-                KEY_PATH="./certs/client.key"
-                CA_CERT_PATH="./certs/ca.crt"
-                log_debug "Certificate paths set to local certs directory"
-            else
-                log_warn "Certificate files not found in ./certs/ directory"
-            fi
 
             # For SERVER_IP_COMMAND, extract everything between the quotes (handling the complex command)
             SERVER_IP_COMMAND=$(sed -n 's/^export SERVER_IP_COMMAND="\(.*\)"$/\1/p' "$temp_exports")
@@ -362,9 +305,6 @@ deploy_server() {
             log_debug "Extracted QUERY_ENDPOINT: $QUERY_ENDPOINT"
             log_debug "Extracted CA_SERVICE_URL: $CA_SERVICE_URL"
             log_debug "Extracted SERVER_PORT: $SERVER_PORT"
-            log_debug "Extracted AGENT_IAM_ROLE_ARN: $AGENT_IAM_ROLE_ARN"
-            log_debug "Extracted AGENT_ACCESS_KEY_ID: [REDACTED]"
-            log_debug "Extracted AGENT_SECRET_ACCESS_KEY: [REDACTED]"
             log_debug "Extracted SERVER_IP_COMMAND length: ${#SERVER_IP_COMMAND}"
             
             rm -f "$temp_exports"
@@ -425,16 +365,6 @@ deploy_agent() {
     if [[ -n "$LOG_LEVEL" ]]; then
         args+=(--log-level "$LOG_LEVEL")
     fi
-    
-    # Pass certificate paths if provided
-    [[ -n "$CERT_PATH" ]] && args+=(--cert-path "$CERT_PATH")
-    [[ -n "$KEY_PATH" ]] && args+=(--key-path "$KEY_PATH")
-    [[ -n "$CA_CERT_PATH" ]] && args+=(--ca-cert-path "$CA_CERT_PATH")
-
-    # Pass IAM credentials for Lambda authentication
-    [[ -n "$AGENT_IAM_ROLE_ARN" ]] && args+=(--iam-role-arn "$AGENT_IAM_ROLE_ARN")
-    [[ -n "$AGENT_ACCESS_KEY_ID" ]] && args+=(--access-key-id "$AGENT_ACCESS_KEY_ID")
-    [[ -n "$AGENT_SECRET_ACCESS_KEY" ]] && args+=(--secret-access-key "$AGENT_SECRET_ACCESS_KEY")
 
     # Pass installation path if specified
     [[ -n "$INSTALL_PATH" && "$INSTALL_PATH" != "$DEFAULT_INSTALL_PATH" ]] && args+=(--install-path "$INSTALL_PATH")

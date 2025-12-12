@@ -106,13 +106,13 @@ log_level: "info"
 - [x] Remove aws_profile, iam_role_arn from agent.yaml generation
 - [x] Remove setup_aws_credentials function call from deploy-agent.sh
 
-### 7. Deployment Script Simplification - Fluidity Master
+### 7. Deployment Script Simplification - Fluidity Master ✅ COMPLETE
 **Rationale**: Simplify main deployment flow
 
-- [ ] Remove certificate path collection from deploy-fluidity.sh
-- [ ] Remove IAM credential handling from deploy-fluidity.sh
-- [ ] Remove cert-path, key-path, ca-cert-path argument passing
-- [ ] Simplify to: Deploy server → Deploy agent (with auto-filled ca_service_url)
+- [x] Remove certificate path collection from deploy-fluidity.sh
+- [x] Remove IAM credential handling from deploy-fluidity.sh
+- [x] Remove cert-path, key-path, ca-cert-path argument passing
+- [x] Simplify to: Deploy server → Deploy agent (with auto-filled ca_service_url)
 
 ## Phase 2: Code Quality & Cleanup
 
