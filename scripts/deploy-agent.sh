@@ -34,9 +34,10 @@
 #   --wake-endpoint <url>      Wake Lambda Function URL
 #   --query-endpoint <url>     Query Lambda Function URL
 #   --kill-endpoint <url>      Kill Lambda Function URL
-#   --cert-path <path>         Path to client certificate
-#   --key-path <path>          Path to client private key
-#   --ca-cert-path <path>      Path to CA certificate
+#   --ca-service-url <url>     CA Lambda Service URL (enables dynamic certificates)
+#   --cert-path <path>         Path to client certificate (optional if --ca-service-url provided)
+#   --key-path <path>          Path to client private key (optional if --ca-service-url provided)
+#   --ca-cert-path <path>      Path to CA certificate (optional if --ca-service-url provided)
 #   --iam-role-arn <arn>       IAM role ARN for authentication
 #   --access-key-id <id>       AWS access key ID
 #   --secret-access-key <key>  AWS secret access key
@@ -49,7 +50,7 @@
 #
 # EXAMPLES:
 #   ./deploy-agent.sh deploy --server-port 8443 --local-proxy-port 8080
-#   ./deploy-agent.sh deploy --wake-endpoint <url> --kill-endpoint <url>
+#   ./deploy-agent.sh deploy --wake-endpoint <url> --kill-endpoint <url> --ca-service-url <url>
 #   ./deploy-agent.sh deploy --preserve-config --skip-build  # Redeploy binary only (config preserved)
 #   ./deploy-agent.sh status
 #   ./deploy-agent.sh uninstall
@@ -78,6 +79,7 @@ LOCAL_PROXY_PORT="8080"
 WAKE_ENDPOINT=""
 QUERY_ENDPOINT=""
 KILL_ENDPOINT=""
+CA_SERVICE_URL=""
 CERT_PATH=""
 KEY_PATH=""
 CA_CERT_PATH=""
@@ -211,6 +213,10 @@ parse_arguments() {
                  ;;
              --kill-endpoint)
                  KILL_ENDPOINT="$2"
+                 shift 2
+                 ;;
+             --ca-service-url)
+                 CA_SERVICE_URL="$2"
                  shift 2
                  ;;
             --cert-path)
@@ -359,6 +365,10 @@ create_config_file() {
     # It will be obtained from wake function when agent starts
     # Or can be manually added to config later
     
+    # Determine if dynamic certs should be enabled
+    local use_dynamic_certs_value="false"
+    [[ -n "$CA_SERVICE_URL" ]] && use_dynamic_certs_value="true"
+    
     # Create or overwrite configuration file
     cat > "$CONFIG_FILE" << EOF
 # Fluidity Agent Configuration
@@ -387,6 +397,11 @@ aws_profile: "fluidity"
 cert_file: "$CERT_PATH"
 key_file: "$KEY_PATH"
 ca_cert_file: "$CA_CERT_PATH"
+
+# Dynamic certificate generation
+ca_service_url: "$CA_SERVICE_URL"
+use_dynamic_certs: $use_dynamic_certs_value
+cert_cache_dir: "$INSTALL_PATH/certs"
 
 # Logging
 log_level: "$LOG_LEVEL"
@@ -900,6 +915,10 @@ setup_configuration() {
     # Copy certificates to installation directory if provided
     copy_certificates_to_installation
 
+    # Determine if dynamic certs should be enabled
+    local use_dynamic_certs_value="false"
+    [[ -n "${CA_SERVICE_URL}" ]] && use_dynamic_certs_value="true"
+
     # Always write a fresh config reflecting current CLI overrides + existing values
     mkdir -p "$INSTALL_PATH"
     cat > "$CONFIG_FILE" << EOF
@@ -924,6 +943,11 @@ aws_profile: "fluidity"
 cert_file: "${CERT_PATH}"
 key_file: "${KEY_PATH}"
 ca_cert_file: "${CA_CERT_PATH}"
+
+# Dynamic certificate generation
+ca_service_url: "${CA_SERVICE_URL}"
+use_dynamic_certs: ${use_dynamic_certs_value}
+cert_cache_dir: "${INSTALL_PATH}/certs"
 
 log_level: "${LOG_LEVEL}"
 EOF

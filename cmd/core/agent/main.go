@@ -70,6 +70,19 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	// Create logger
 	logger := logging.NewLogger("agent")
 
+	// If no config file specified, auto-discover it in the binary's directory
+	if configFile == "" {
+		exePath, err := os.Executable()
+		if err == nil {
+			exeDir := filepath.Dir(exePath)
+			defaultConfig := filepath.Join(exeDir, "agent.yaml")
+			if _, err := os.Stat(defaultConfig); err == nil {
+				configFile = defaultConfig
+				logger.Debug("Using default config file from binary directory", "path", configFile)
+			}
+		}
+	}
+
 	// Build configuration overrides from CLI flags
 	overrides := make(map[string]interface{})
 	if serverPort != 0 {

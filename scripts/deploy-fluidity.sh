@@ -97,6 +97,7 @@ SKIP_BUILD=false
 WAKE_ENDPOINT=""
 KILL_ENDPOINT=""
 QUERY_ENDPOINT=""
+CA_SERVICE_URL=""
 SERVER_REGION=""
 SERVER_PORT="8443"
 SERVER_IP_COMMAND=""
@@ -336,6 +337,7 @@ deploy_server() {
             WAKE_ENDPOINT=$(grep "^export WAKE_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             KILL_ENDPOINT=$(grep "^export KILL_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
             QUERY_ENDPOINT=$(grep "^export QUERY_ENDPOINT=" "$temp_exports" | cut -d"'" -f2)
+            CA_SERVICE_URL=$(grep "^export CA_SERVICE_URL=" "$temp_exports" | cut -d"'" -f2)
             SERVER_PORT=$(grep "^export SERVER_PORT=" "$temp_exports" | cut -d"'" -f2)
             AGENT_IAM_ROLE_ARN=$(grep "^export AGENT_IAM_ROLE_ARN=" "$temp_exports" | cut -d"'" -f2)
             AGENT_ACCESS_KEY_ID=$(grep "^export AGENT_ACCESS_KEY_ID=" "$temp_exports" | cut -d"'" -f2)
@@ -358,6 +360,7 @@ deploy_server() {
             log_debug "Extracted WAKE_ENDPOINT: $WAKE_ENDPOINT"
             log_debug "Extracted KILL_ENDPOINT: $KILL_ENDPOINT"
             log_debug "Extracted QUERY_ENDPOINT: $QUERY_ENDPOINT"
+            log_debug "Extracted CA_SERVICE_URL: $CA_SERVICE_URL"
             log_debug "Extracted SERVER_PORT: $SERVER_PORT"
             log_debug "Extracted AGENT_IAM_ROLE_ARN: $AGENT_IAM_ROLE_ARN"
             log_debug "Extracted AGENT_ACCESS_KEY_ID: [REDACTED]"
@@ -412,6 +415,10 @@ deploy_agent() {
 
     if [[ -n "$QUERY_ENDPOINT" ]]; then
         args+=(--query-endpoint "$QUERY_ENDPOINT")
+    fi
+
+    if [[ -n "$CA_SERVICE_URL" ]]; then
+        args+=(--ca-service-url "$CA_SERVICE_URL")
     fi
 
     # Pass log level if provided

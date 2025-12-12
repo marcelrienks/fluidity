@@ -74,10 +74,12 @@ BUILD_VERSION=""
 STACK_NAME="fluidity"
 FARGATE_STACK_NAME="${STACK_NAME}-fargate"
 LAMBDA_STACK_NAME="${STACK_NAME}-lambda"
+CA_STACK_NAME="${STACK_NAME}-ca"
 
 # Paths
 FARGATE_TEMPLATE="$CLOUDFORMATION_DIR/fargate.yaml"
 LAMBDA_TEMPLATE="$CLOUDFORMATION_DIR/lambda.yaml"
+CA_TEMPLATE="$CLOUDFORMATION_DIR/ca-lambda.yaml"
 TEMP_PARAMS_DIR="/tmp/fluidity-deploy-server-$$"
 
 # Storage for error logs
@@ -801,6 +803,9 @@ collect_endpoints() {
     KILL_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "KillAPIEndpoint")
     QUERY_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "QueryAPIEndpoint")
     SLEEP_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "SleepScheduleRuleName")
+    
+    # Get CA Lambda endpoint (if CA stack exists)
+    CA_SERVICE_URL=$(get_stack_output "$CA_STACK_NAME" "CAAPIEndpoint" 2>/dev/null || echo "")
 
     # Get IAM resources
     AGENT_IAM_ROLE_ARN=$(get_stack_output "$LAMBDA_STACK_NAME" "AgentIAMRoleArn")
@@ -846,6 +851,7 @@ export_endpoints() {
     echo "export WAKE_ENDPOINT='$WAKE_ENDPOINT'"
     echo "export KILL_ENDPOINT='$KILL_ENDPOINT'"
     echo "export QUERY_ENDPOINT='$QUERY_ENDPOINT'"
+    echo "export CA_SERVICE_URL='$CA_SERVICE_URL'"
     echo "export SERVER_PORT='8443'"
     echo "export AGENT_IAM_ROLE_ARN='$AGENT_IAM_ROLE_ARN'"
     echo "export AGENT_ACCESS_KEY_ID='$AGENT_ACCESS_KEY_ID'"
