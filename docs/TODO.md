@@ -42,10 +42,10 @@ Validation functions exist but need integration into actual connection handlers.
 - [x] Add CA Lambda IAM role and permissions to lambda.yaml
 - [x] Add CA API Gateway endpoint to lambda.yaml
 - [x] Add CA Lambda outputs (CAAPIEndpoint) to lambda.yaml
-- [ ] Remove separate ca-lambda.yaml CloudFormation template from deployments/cloudformation/
-- [ ] Update deploy-server.sh to remove CA_STACK_NAME and CA_TEMPLATE references
-- [ ] Update deploy-server.sh to retrieve CAAPIEndpoint from LAMBDA_STACK_NAME (not separate CA stack)
-- [ ] Update deploy-fluidity.sh to get CA_SERVICE_URL from lambda_params exports instead of CA stack
+- [x] Remove separate ca-lambda.yaml CloudFormation template from deployments/cloudformation/
+- [x] Update deploy-server.sh to remove CA_STACK_NAME and CA_TEMPLATE references
+- [x] Update deploy-server.sh to retrieve CAAPIEndpoint from LAMBDA_STACK_NAME (not separate CA stack)
+- [x] No deploy-fluidity.sh changes needed (didn't reference CA stack)
 
 ### 4. Agent Configuration - Minimal Design
 **Rationale**: Configuration should only include required runtime settings
