@@ -3,23 +3,23 @@
 
 ## Phase 1: Core Implementation
 
-### 1. Runtime Integration Verification
+### 1. Runtime Integration Verification ✅
 
 Validation functions exist but need integration into actual connection handlers.
 
 **Agent Connection** (`internal/core/agent/`):
 
-- [?] Call `CreateARNValidatingClientConfig()` when establishing TLS connection
+- [x] Call `CreateARNValidatingClientConfig()` when establishing TLS connection
   - Pass: serverARN (from cert manager), targetIP (connection target)
-- [?] Verify TLS handshake uses validating config with `VerifyPeerCertificate` callback
+- [x] Verify TLS handshake uses validating config with `VerifyPeerCertificate` callback
 
 **Server Connection** (`internal/core/server/`):
 
-- [?] Call `CreateARNValidatingServerConfig()` or add manual validation
+- [x] Call `CreateARNValidatingServerConfig()` or add manual validation
   - Pass: serverARN (from cert manager)
-- [ ] Extract source IP from incoming connection (for lazy cert generation)
+- [x] Extract source IP from incoming connection (for lazy cert generation)
   - Used as agentIP parameter in `EnsureCertificateForConnection()`
-- [ ] Validate client IP after TLS handshake with `ValidateClientIPOnConnection()`
+- [x] Validate client IP after TLS handshake with `ValidateClientIPOnConnection()`
 
 ### 2. Dynamic Certificate Generation - Make It Default/Only Mode
 **Rationale**: Remove configuration complexity by making dynamic cert generation the only supported mode
