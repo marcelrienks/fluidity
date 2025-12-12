@@ -3,24 +3,26 @@ package agent
 import "fmt"
 
 // Config holds agent configuration
+// Dynamic certificate generation is the only supported mode
 type Config struct {
-	ServerIP            string `mapstructure:"server_ip" yaml:"server_ip"`
-	ServerPort          int    `mapstructure:"server_port" yaml:"server_port"`
-	LocalProxyPort      int    `mapstructure:"local_proxy_port" yaml:"local_proxy_port"`
-	CertFile            string `mapstructure:"cert_file" yaml:"cert_file"`
-	KeyFile             string `mapstructure:"key_file" yaml:"key_file"`
-	CACertFile          string `mapstructure:"ca_cert_file" yaml:"ca_cert_file"`
-	LogLevel            string `mapstructure:"log_level" yaml:"log_level"`
-	SecretsManagerName  string `mapstructure:"secrets_manager_name" yaml:"secrets_manager_name"`
-	UseSecretsManager   bool   `mapstructure:"use_secrets_manager" yaml:"use_secrets_manager"`
-	WakeEndpoint        string `mapstructure:"wake_endpoint" yaml:"wake_endpoint"`
-	QueryEndpoint       string `mapstructure:"query_endpoint" yaml:"query_endpoint"`
-	KillEndpoint        string `mapstructure:"kill_endpoint" yaml:"kill_endpoint"`
-	IAMRoleARN          string `mapstructure:"iam_role_arn" yaml:"iam_role_arn"`
-	AWSRegion           string `mapstructure:"aws_region" yaml:"aws_region"`
-	CAServiceURL        string `mapstructure:"ca_service_url" yaml:"ca_service_url"`
-	CertCacheDir        string `mapstructure:"cert_cache_dir" yaml:"cert_cache_dir"`
-	UseDynamicCerts     bool   `mapstructure:"use_dynamic_certs" yaml:"use_dynamic_certs"`
+	// Server discovery endpoints (required)
+	WakeEndpoint  string `mapstructure:"wake_endpoint" yaml:"wake_endpoint"`
+	QueryEndpoint string `mapstructure:"query_endpoint" yaml:"query_endpoint"`
+	KillEndpoint  string `mapstructure:"kill_endpoint" yaml:"kill_endpoint"`
+
+	// Dynamic certificate generation (required)
+	CAServiceURL string `mapstructure:"ca_service_url" yaml:"ca_service_url"`
+	CertCacheDir string `mapstructure:"cert_cache_dir" yaml:"cert_cache_dir"`
+	CACertFile   string `mapstructure:"ca_cert_file" yaml:"ca_cert_file"`
+
+	// Tunnel settings
+	ServerIP       string `mapstructure:"server_ip" yaml:"server_ip"`
+	ServerPort     int    `mapstructure:"server_port" yaml:"server_port"`
+	LocalProxyPort int    `mapstructure:"local_proxy_port" yaml:"local_proxy_port"`
+
+	// Logging
+	LogLevel string `mapstructure:"log_level" yaml:"log_level"`
+
 	// ARN-based certificate fields (populated by Wake/Query Lambdas)
 	ServerARN      string `mapstructure:"server_arn" yaml:"server_arn"`
 	ServerPublicIP string `mapstructure:"server_public_ip" yaml:"server_public_ip"`

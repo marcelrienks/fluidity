@@ -16,8 +16,6 @@ import (
 	"fluidity/internal/core/agent/lifecycle"
 	"fluidity/internal/shared/config"
 	"fluidity/internal/shared/logging"
-	"fluidity/internal/shared/secretsmanager"
-	tlsutil "fluidity/internal/shared/tls"
 )
 
 var (
@@ -25,18 +23,7 @@ var (
 	serverPort int
 	proxyPort  int
 	logLevel   string
-	certFile   string
-	keyFile    string
-	caCertFile string
 )
-
-// getConfigValue returns the first non-empty value
-func getConfigValue(envValue, configValue string) string {
-	if envValue != "" {
-		return envValue
-	}
-	return configValue
-}
 
 func main() {
 	// Note: GODEBUG must be set BEFORE the Go runtime initializes
@@ -56,9 +43,6 @@ func main() {
 	rootCmd.Flags().IntVar(&serverPort, "server-port", 0, "Tunnel server port")
 	rootCmd.Flags().IntVar(&proxyPort, "proxy-port", 0, "Local proxy port")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "", "Log level (debug, info, warn, error)")
-	rootCmd.Flags().StringVar(&certFile, "cert", "", "Client certificate file")
-	rootCmd.Flags().StringVar(&keyFile, "key", "", "Client private key file")
-	rootCmd.Flags().StringVar(&caCertFile, "ca", "", "CA certificate file")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -94,15 +78,6 @@ func runAgent(cmd *cobra.Command, args []string) error {
 	if logLevel != "" {
 		overrides["log_level"] = logLevel
 	}
-	if certFile != "" {
-		overrides["cert_file"] = certFile
-	}
-	if keyFile != "" {
-		overrides["key_file"] = keyFile
-	}
-	if caCertFile != "" {
-		overrides["ca_cert_file"] = caCertFile
-	}
 
 	// Load configuration from deployment location
 	// The deployment script ensures agent.yaml is in the same directory as the binary
@@ -128,8 +103,6 @@ func runAgent(cmd *cobra.Command, args []string) error {
 			WakeEndpoint:            cfg.WakeEndpoint,
 			QueryEndpoint:           cfg.QueryEndpoint,
 			KillEndpoint:            cfg.KillEndpoint,
-			IAMRoleARN:              cfg.IAMRoleARN,
-			AWSRegion:               cfg.AWSRegion,
 			ClusterName:             "", // Not used in current implementation
 			ServiceName:             "", // Not used in current implementation
 			ConnectionTimeout:       30 * time.Second,
@@ -184,72 +157,38 @@ func runAgent(cmd *cobra.Command, args []string) error {
 		"proxy_port", cfg.LocalProxyPort,
 		"log_level", cfg.LogLevel)
 
-	// Load TLS configuration (with dynamic certificate support)
+	// Use dynamic certificate generation (only supported mode)
+	logger.Info("Using dynamic certificate generation",
+		"ca_url", cfg.CAServiceURL,
+		"cache_dir", cfg.CertCacheDir)
+
+	var certMgr *agent.CertManager
 	var tlsConfig *tls.Config
 	var certFile, keyFile string
 
-	// Check if dynamic certificates are enabled
-	if cfg.UseDynamicCerts && cfg.CAServiceURL != "" {
-		logger.Info("Using dynamic certificate generation",
-			"ca_url", cfg.CAServiceURL,
-			"cache_dir", cfg.CertCacheDir)
-
-		var certMgr *agent.CertManager
-		// Use ARN-based certificate manager if ARN fields are available from Wake Lambda
-		if cfg.ServerARN != "" && cfg.AgentPublicIP != "" {
-			logger.Info("Using ARN-based certificate generation",
-				"server_arn", cfg.ServerARN,
-				"agent_public_ip", cfg.AgentPublicIP)
-			certMgr = agent.NewCertManagerWithARN(cfg.CertCacheDir, cfg.CAServiceURL, cfg.ServerARN, cfg.AgentPublicIP, logger)
-		} else {
-			logger.Info("Using legacy certificate generation (ARN not available)")
-			certMgr = agent.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
-		}
-		
-		certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		var certErr error
-		certFile, keyFile, certErr = certMgr.EnsureCertificate(certCtx)
-		certCancel()
-		if certErr != nil {
-			return fmt.Errorf("failed to ensure certificate: %w", certErr)
-		}
-
-		var tlsErr error
-		tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
-		}
-	} else if cfg.UseSecretsManager && cfg.SecretsManagerName != "" {
-		logger.Info("Using AWS Secrets Manager for TLS certificates",
-			"secret_name", cfg.SecretsManagerName)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		var tlsErr error
-		tlsConfig, tlsErr = secretsmanager.LoadTLSConfigFromSecretsOrFallback(
-			ctx,
-			cfg.SecretsManagerName,
-			cfg.CertFile,
-			cfg.KeyFile,
-			cfg.CACertFile,
-			false, // isServer
-			func() (*tls.Config, error) {
-				return tlsutil.LoadClientTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CACertFile)
-			},
-		)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
-		}
-		certFile = cfg.CertFile
-		keyFile = cfg.KeyFile
+	// Use ARN-based certificate manager if ARN fields are available from Wake Lambda
+	if cfg.ServerARN != "" && cfg.AgentPublicIP != "" {
+		logger.Info("Using ARN-based certificate generation",
+			"server_arn", cfg.ServerARN,
+			"agent_public_ip", cfg.AgentPublicIP)
+		certMgr = agent.NewCertManagerWithARN(cfg.CertCacheDir, cfg.CAServiceURL, cfg.ServerARN, cfg.AgentPublicIP, logger)
 	} else {
-		logger.Info("Using local files for TLS certificates")
-		var tlsErr error
-		tlsConfig, tlsErr = tlsutil.LoadClientTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CACertFile)
-		if tlsErr != nil {
-			return fmt.Errorf("failed to load TLS configuration: %w", tlsErr)
-		}
-		certFile = cfg.CertFile
-		keyFile = cfg.KeyFile
+		logger.Info("Using legacy certificate generation (ARN not available)")
+		certMgr = agent.NewCertManager(cfg.CertCacheDir, cfg.CAServiceURL, logger)
+	}
+
+	certCtx, certCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	var certErr error
+	certFile, keyFile, certErr = certMgr.EnsureCertificate(certCtx)
+	certCancel()
+	if certErr != nil {
+		return fmt.Errorf("failed to ensure certificate: %w", certErr)
+	}
+
+	var tlsErr error
+	tlsConfig, tlsErr = certMgr.GetTLSConfig(cfg.CACertFile)
+	if tlsErr != nil {
+		return fmt.Errorf("failed to create TLS config from dynamic certificate: %w", tlsErr)
 	}
 
 	logger.Info("Loaded TLS configuration",
