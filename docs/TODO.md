@@ -21,7 +21,7 @@ Validation functions exist but need integration into actual connection handlers.
   - Used as agentIP parameter in `EnsureCertificateForConnection()`
 - [x] Validate client IP after TLS handshake with `ValidateClientIPOnConnection()`
 
-### 2. Dynamic Certificate Generation - Make It Default/Only Mode ✅
+### 2. Dynamic Certificate Generation - Make It Default/Only Mode ✅ COMPLETE
 **Rationale**: Remove configuration complexity by making dynamic cert generation the only supported mode
 
 - [x] Remove `use_secrets_manager` configuration option from agent config
@@ -29,9 +29,9 @@ Validation functions exist but need integration into actual connection handlers.
 - [x] Remove certificate file path options from agent config (cert_file, key_file - but kept ca_cert_file for CA validation)
 - [x] Update agent config struct to remove unused certificate file fields
 - [x] Update agent main.go to remove multi-mode certificate loading logic
-- [ ] Update deploy-agent.sh to remove --cert-path, --key-path, --ca-cert-path CLI options
-- [ ] Remove CertificatesSecretArn from Fargate CloudFormation template
-- [ ] Remove Secrets section from Fargate task container definition
+- [x] Update deploy-agent.sh to remove --cert-path, --key-path, --ca-cert-path CLI options
+- [x] Remove CertificatesSecretArn from Fargate CloudFormation template (not in codebase)
+- [x] Remove Secrets section from Fargate task container definition (not in codebase)
 
 ### 3. CloudFormation - Integrate CA Lambda Into Main Lambda Stack
 **Rationale**: Simplify deployment by making CA Lambda part of the control plane stack, not separate
