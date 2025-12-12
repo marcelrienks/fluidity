@@ -74,12 +74,10 @@ BUILD_VERSION=""
 STACK_NAME="fluidity"
 FARGATE_STACK_NAME="${STACK_NAME}-fargate"
 LAMBDA_STACK_NAME="${STACK_NAME}-lambda"
-CA_STACK_NAME="${STACK_NAME}-ca"
 
 # Paths
 FARGATE_TEMPLATE="$CLOUDFORMATION_DIR/fargate.yaml"
 LAMBDA_TEMPLATE="$CLOUDFORMATION_DIR/lambda.yaml"
-CA_TEMPLATE="$CLOUDFORMATION_DIR/ca-lambda.yaml"
 TEMP_PARAMS_DIR="/tmp/fluidity-deploy-server-$$"
 
 # Storage for error logs
@@ -798,14 +796,12 @@ collect_endpoints() {
     # Get server public IP command (need to extract when task is running)
     SERVER_IP_COMMAND=$(get_stack_output "$FARGATE_STACK_NAME" "GetPublicIPCommand")
     
-    # Get Lambda endpoints
+    # Get Lambda endpoints (including CA Lambda)
     WAKE_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "WakeAPIEndpoint")
     KILL_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "KillAPIEndpoint")
     QUERY_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "QueryAPIEndpoint")
+    CA_SERVICE_URL=$(get_stack_output "$LAMBDA_STACK_NAME" "CAAPIEndpoint")
     SLEEP_ENDPOINT=$(get_stack_output "$LAMBDA_STACK_NAME" "SleepScheduleRuleName")
-    
-    # Get CA Lambda endpoint (if CA stack exists)
-    CA_SERVICE_URL=$(get_stack_output "$CA_STACK_NAME" "CAAPIEndpoint" 2>/dev/null || echo "")
 
     # Get IAM resources
     AGENT_IAM_ROLE_ARN=$(get_stack_output "$LAMBDA_STACK_NAME" "AgentIAMRoleArn")
