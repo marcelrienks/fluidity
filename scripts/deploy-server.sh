@@ -322,103 +322,10 @@ auto_detect_parameters() {
 # ============================================================================
 # CERTIFICATE MANAGEMENT
 # ============================================================================
-
-ensure_certificates() {
-    if [[ ! -f "$CERTS_DIR/server.crt" ]] || [[ ! -f "$CERTS_DIR/server.key" ]] || [[ ! -f "$CERTS_DIR/ca.crt" ]]; then
-        log_info "Certificates not found, generating..."
-        if bash "$SCRIPT_DIR/generate-certs.sh"; then
-            log_success "Certificates generated"
-        else
-            log_error_start
-            echo "Failed to generate certificates"
-            echo "Run manually: ./scripts/generate-certs.sh"
-            log_error_end
-            exit 1
-        fi
-    else
-        log_success "Certificates found"
-    fi
-    log_debug "Certificates location: $CERTS_DIR"
-}
-
-store_certificates_in_secrets_manager() {
-    local secret_name="fluidity-certificates"
-
-    log_info "Storing certificates in AWS Secrets Manager..."
-
-    local secret_status
-    if secret_status=$(aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" --query 'DeletedDate' --output text 2>/dev/null); then
-        if [[ "$secret_status" != "None" && -n "$secret_status" ]]; then
-            log_info "Secret is marked for deletion, waiting for removal (max 30s)..."
-            local retry_count=0
-            while [ $retry_count -lt 15 ]; do
-                if ! aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" &>/dev/null 2>&1; then
-                    log_debug "Secret deletion complete"
-                    break
-                fi
-                sleep 2
-                retry_count=$((retry_count + 1))
-            done
-        fi
-    fi
-
-    local secret_json
-    secret_json=$(jq -n \
-        --arg cert "$(cat "$CERTS_DIR/server.crt")" \
-        --arg key "$(cat "$CERTS_DIR/server.key")" \
-        --arg ca "$(cat "$CERTS_DIR/ca.crt")" \
-        '{cert_pem: $cert, key_pem: $key, ca_pem: $ca}')
-    
-    if [[ -z "$secret_json" ]]; then
-        log_error_start
-        echo "Failed to build secret JSON from certificates"
-        log_error_end
-        return 1
-    fi
-    log_debug "Secret JSON created successfully"
-
-    if aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" &>/dev/null 2>&1; then
-        log_debug "Updating existing secret: $secret_name"
-        if ! aws secretsmanager put-secret-value \
-            --secret-id "$secret_name" \
-            --secret-string "$secret_json" \
-            --region "$REGION" >/dev/null 2>&1; then
-            log_error_start
-            echo "Failed to update Secrets Manager secret"
-            log_error_end
-            return 1
-        fi
-        log_success "Secret updated: $secret_name"
-    else
-        log_debug "Creating new secret: $secret_name"
-        if ! aws secretsmanager create-secret \
-            --name "$secret_name" \
-            --description "TLS certificates for Fluidity server" \
-            --secret-string "$secret_json" \
-            --region "$REGION" \
-            --tags Key=Application,Value=Fluidity Key=ManagedBy,Value=DeployScript >/dev/null 2>&1; then
-            log_error_start
-            echo "Failed to create Secrets Manager secret"
-            log_error_end
-            return 1
-        fi
-        log_success "Secret created: $secret_name"
-    fi
-
-    local secret_arn
-    secret_arn=$(aws secretsmanager describe-secret --secret-id "$secret_name" --region "$REGION" --query 'ARN' --output text 2>&1)
-    if [[ $? -ne 0 || -z "$secret_arn" ]]; then
-        log_error_start
-        echo "Failed to retrieve Secrets Manager secret ARN"
-        log_error_end
-        return 1
-    fi
-    
-    log_success "Certificates stored in Secrets Manager"
-    log_debug "Secret ARN: $secret_arn"
-
-    echo "$secret_arn"
-}
+# NOTE: Certificates are generated at runtime by server and agent using CA Lambda.
+# No pre-deployment certificate generation is needed.
+# The CA certificate and signing key are stored in AWS Secrets Manager
+# and accessed by the CA Lambda function during certificate signing.
 
 # ============================================================================
 # BUILD & DEPLOYMENT
@@ -988,15 +895,7 @@ action_deploy() {
     fi
     docker_image=$(echo "$DOCKER_IMAGE_URI" | tail -1)
 
-    log_minor "Step 4: Prepare Certificates and Store in Secrets Manager"
-    log_substep "Ensuring Certificates Exist"
-    ensure_certificates
-    
-    log_substep "Storing Certificates in Secrets Manager"
-    secret_arn=$(store_certificates_in_secrets_manager) || return 1
-    secret_arn=$(echo "$secret_arn" | tail -1)
-
-    log_minor "Step 5: Deploy Fargate Server Stack"
+    log_minor "Step 4: Deploy Fargate Server Stack"
     local fargate_params="$TEMP_PARAMS_DIR/fargate-params.json"
     cat > "$fargate_params" << EOF
 [
@@ -1012,8 +911,7 @@ action_deploy() {
   {"ParameterKey": "AllowedIngressCidr", "ParameterValue": "$ALLOWED_CIDR"},
   {"ParameterKey": "AssignPublicIp", "ParameterValue": "ENABLED"},
   {"ParameterKey": "LogGroupName", "ParameterValue": "/ecs/fluidity/server"},
-  {"ParameterKey": "LogRetentionDays", "ParameterValue": "7"},
-  {"ParameterKey": "CertificatesSecretArn", "ParameterValue": "$secret_arn"}
+  {"ParameterKey": "LogRetentionDays", "ParameterValue": "7"}
 ]
 EOF
     deploy_cloudformation_stack "$FARGATE_STACK_NAME" "$FARGATE_TEMPLATE" "$fargate_params" || return 1

@@ -4,125 +4,143 @@
 
 Fluidity uses AWS Resource Names (ARNs) as certificate identity with lazy generation for optimal performance.
 
-### Architecture
+### How It Works
 
-```
-1. AGENT STARTUP
-   Agent ──> Wake Lambda ──> Returns: server_arn, server_ip, agent_ip
-         └──> Generate cert: CN=server_arn, SAN=[agent_ip]
-              └──> CA Lambda signs ✓
+**Certificate Structure:**
+- **Agent Cert**: CN = server ARN, SAN = [agent public IP]
+- **Server Cert**: CN = server ARN, SAN = [server IP, agent IPs...]
 
-2. SERVER STARTUP (Lazy)
-   Server ──> Discover ARN & IP
-          └──> Generate RSA key (NO CERT YET)
-
-3. FIRST CONNECTION
-   Agent ──> Server
-             └──> Extract agent source IP
-             └──> Generate cert: CN=server_arn, SAN=[server_ip, agent_ip]
-             └──> CA Lambda signs ✓
-
-   TLS Handshake:
-   • Agent validates: Server CN == ARN ✓ + IP in SAN ✓
-   • Server validates: Client CN == ARN ✓ + IP in SAN ✓
-
-4. SUBSEQUENT CONNECTIONS
-   - Known agent: Use cached cert (fast)
-   - New agent: Regenerate cert with updated SAN
-```
+**Flow:**
+1. Agent calls Wake Lambda → receives server ARN, server IP, agent IP
+2. Agent generates certificate with server ARN as CN
+3. Server discovers ARN/IP at startup, generates key only (lazy)
+4. On first connection: Server extracts agent IP, generates cert with agent IP in SAN
+5. Both validate: CN matches ARN ✓ + source IP in SAN ✓
+6. Subsequent connections: Use cached cert (fast)
 
 ### Components
 
 **Discovery** (`internal/shared/certs`):
-- `DiscoverServerARN()`: ECS metadata → CloudFormation → EC2
-- `DiscoverPublicIP()`: ECS metadata → EC2
+- `DiscoverServerARN()`: Tries ECS → CloudFormation → EC2 metadata
+- `DiscoverPublicIP()`: Tries ECS → EC2 metadata
 
-**CSR Generation** (`internal/shared/certs`):
-- Legacy: `GenerateCSR(cn, ip, key)` - Single IP
-- ARN: `GenerateCSRWithARNAndMultipleSANs(key, arn, ips)` - Multi-IP
+**Certificate Generation** (`internal/shared/certs`):
+- `GenerateCSRWithARNAndMultipleSANs(key, arn, ips)`: Create CSR with ARN as CN
+- Supports multiple IP addresses in SAN for multi-agent scenarios
+
+**Managers** (`internal/core`):
+- **Agent**: `NewCertManagerWithARN()` - Generates cert at startup
+- **Server**: `NewCertManagerWithLazyGen()` - Generates cert on first connection
+  - `InitializeKey()`: Generate key at startup
+  - `EnsureCertificateForConnection(ctx, agentIP)`: Generate cert on demand
 
 **CA Lambda** (`cmd/lambdas/ca`):
-- Accepts: Legacy CN (`fluidity-client/server`) or ARN format
-- Validates: ARN format, IPv4 addresses, multiple IPs in SAN
-
-**Wake/Query Lambdas**:
-- Wake: Returns `server_arn`, `server_ip`, `agent_ip_as_seen`
-- Query: Returns `server_arn` in all responses
-
-**Agent Cert Manager** (`internal/core/agent`):
-- ARN mode: `NewCertManagerWithARN(dir, url, serverARN, agentIP, log)`
-- Stores server ARN for connection validation
-
-**Server Cert Manager** (`internal/core/server`):
-- Lazy mode: `NewCertManagerWithLazyGen(dir, url, serverARN, serverIP, log)`
-- `InitializeKey()`: Generate key at startup
-- `EnsureCertificateForConnection(ctx, agentIP)`: Generate cert on first connection
+- Validates ARN format and IPv4 addresses
+- Signs CSR with CA private key
+- Caches signatures
 
 **Validation** (`internal/shared/tls`):
-- `ValidateServerCertificateARN(cert, expectedARN)`: Agent validates server
-- `ValidateServerCertificateIP(cert, targetIP)`: Agent validates IP
-- `ValidateClientCertificateARN(cert, serverARN)`: Server validates client
-- `ValidateClientCertificateIP(cert, sourceIP)`: Server validates IP
+- Agent validates: Server CN == expected ARN ✓ + target IP in SAN ✓
+- Server validates: Client CN == server ARN ✓ + source IP in SAN ✓
 
-### Performance
+### Performance & Security
 
-- Agent startup: +2-3s (Wake + cert gen)
-- Server startup: +1s (discover + key gen)
-- First connection: +500ms (cert gen)
-- Known agents: ~0ms (cached)
-- New agents: +500ms (cert regen)
+**Performance:**
+- Agent startup: +2-3s (Wake Lambda + cert generation)
+- Server startup: +1s (discovery + key generation)
+- First connection: +500ms (certificate generation)
+- Subsequent connections: ~0ms (cached)
 
-### Security
-
+**Security:**
 - Identity: ARN (unforgeable AWS resource)
-- Authorization: IP whitelist in SAN
+- Authorization: IP whitelist in SAN (prevents IP spoofing)
 - Validation: Bidirectional ARN + IP checks
-- Certificate pinning: Agent validates exact server ARN
+- Multi-agent: Each agent IP added to server SAN list
+
+### Configuration
+
+**Agent:**
+```yaml
+server_port: 443
+use_dynamic_certs: true
+ca_service_url: "https://ca-lambda-url.execute-api.region.amazonaws.com/"
+cert_cache_dir: "/var/lib/fluidity/certs"
+wake_endpoint: "https://wake-lambda-url.lambda-url.region.on.aws/"
+# server_arn, server_public_ip, agent_public_ip populated by Wake Lambda
+```
+
+**Server:**
+```yaml
+listen_port: 443
+use_dynamic_certs: true
+ca_service_url: "https://ca-lambda-url.execute-api.region.amazonaws.com/"
+cert_cache_dir: "/var/lib/fluidity/certs"
+# ARN and IP auto-discovered from ECS_TASK_ARN env var or EC2 metadata
+```
+
+### Deployment
+
+1. Deploy CA Lambda with CA cert/key in AWS Secrets Manager
+2. Deploy server (discovers ARN/IP automatically)
+3. Deploy agent (receives ARN from Wake Lambda)
+
+### Troubleshooting
+
+**ARN discovery fails:**
+- Check `ECS_TASK_ARN` environment variable in Fargate
+- Set `SERVER_ARN` in CloudFormation if needed
+- Falls back to legacy mode if unavailable
+
+**Public IP discovery fails:**
+- Verify ECS task has public IP enabled
+- Check EC2 instance has public IP
+- Verify security groups allow metadata service
+
+**Certificate validation fails:**
+- Verify Wake Lambda returned correct server ARN
+- Check agent config has `server_arn` field
+- Regenerate certificates if ARN/IP mismatch
 
 ---
 
-## Legacy Certificate Generation (Deprecated)
+## Legacy Certificate Generation
 
-Generate mTLS certificates for local development or AWS deployment.
+Generate static mTLS certificates for local development.
 
-## Generate
+### Generate
 
-Local files:
 ```bash
 ./scripts/generate-certs.sh
 # Output: ./certs/{ca,server,client}.{crt,key}
-```
 
-AWS Secrets Manager:
-```bash
 ./scripts/generate-certs.sh --save-to-secrets
 # Output: fluidity/certificates secret
 ```
 
-Options:
+### Options
+
+- `--save-to-secrets`: Push to AWS Secrets Manager
+- `--secret-name NAME`: Override secret name (default: fluidity/certificates)
+- `--certs-dir DIR`: Override cert directory (default: ./certs)
+
+### Configuration
+
+**Local files:**
+```yaml
+cert_file: "./certs/server.crt"
+key_file: "./certs/server.key"
+ca_cert_file: "./certs/ca.crt"
 ```
---save-to-secrets       Push to AWS Secrets Manager
---secret-name NAME      Secret name (default: fluidity/certificates)
---certs-dir DIR         Certificate directory (default: ./certs)
-```
 
-## Output
-
-Local files: `./certs/ca.{crt,key}`, `server.{crt,key}`, `client.{crt,key}`
-
-AWS Secrets Manager: Secret contains cert_pem, key_pem, ca_pem (base64-encoded)
-
-## Configuration
-
-Enable Secrets Manager:
+**AWS Secrets Manager:**
 ```yaml
 use_secrets_manager: true
 secrets_manager_name: "fluidity/certificates"
 ```
 
-## IAM Permissions
+### IAM Permissions
 
-Read:
+**Read:**
 ```json
 {
   "Effect": "Allow",
@@ -131,7 +149,7 @@ Read:
 }
 ```
 
-Create/update:
+**Create/Update:**
 ```json
 {
   "Effect": "Allow",
@@ -140,29 +158,14 @@ Create/update:
 }
 ```
 
-## Rotation
-
-Regenerate and update:
-```bash
-./scripts/generate-certs.sh --save-to-secrets
-```
-
-## Security
+### Security
 
 - Self-signed (development only)
 - Never commit `*.key` files
-- Use AWS KMS encryption in production
+- Use AWS KMS encryption in Secrets Manager
 - Rotate regularly (default: 2 year validity)
-- Production: Use trusted CA
-
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| OpenSSL not found | Linux/macOS: package manager; Windows: WSL |
-| AWS credentials missing | Run `aws configure` |
-| Certs already exist | Delete with `rm ./certs/*` |
+- Regenerate with: `./scripts/generate-certs.sh --save-to-secrets`
 
 ---
 
-See [Deployment](deployment.md) for using certificates
+See [Deployment](deployment.md) for integration details.

@@ -7,37 +7,50 @@
 - OpenSSL (certificate generation)
 - AWS CLI v2 (cloud deployment)
 - AWS credentials configured
+- jq (JSON parsing, for CA secret creation)
 
 **Platform Setup:**
 - Windows: Use WSL for bash scripts
 - Linux (Ubuntu/Debian): `bash scripts/setup-prereq-ubuntu.sh`
 - macOS: `bash scripts/setup-prereq-mac.sh`
 
-## Certificate Generation
+## CA Certificate Setup (AWS Deployment Only)
 
-Required for all deployments:
+Before deploying to AWS, generate and store the CA certificate:
 
 ```bash
-./scripts/generate-certs.sh              # Local files in ./certs/
-./scripts/generate-certs.sh --save-to-secrets  # Push to AWS Secrets Manager
+# Generate CA certificate and upload to AWS Secrets Manager
+./scripts/generate-ca-certs.sh --save-to-secrets
+
+# Or just generate locally (for backup)
+./scripts/generate-ca-certs.sh
+# Then manually upload: aws secretsmanager create-secret --name fluidity/ca-certificate --secret-string '...'
 ```
 
-Output:
-- `ca.crt`, `ca.key` - Certificate Authority
-- `server.crt`, `server.key` - Server certificate
-- `client.crt`, `client.key` - Client certificate
+This CA certificate is used by the CA Lambda to sign all agent and server certificates at runtime. It should be generated **once per AWS account** before deploying the server.
+
+## Certificates
+
+Certificates are generated automatically at runtime by the server and agent using the CA Lambda:
+
+- **Server**: Generates RSA key at startup, certificate on first agent connection (lazy generation)
+- **Agent**: Generates certificate at startup using server ARN from Wake Lambda
+- **CA Lambda**: Must be deployed first with CA certificate and key in AWS Secrets Manager (`fluidity/ca-certificate`)
+
+No pre-deployment certificate generation is needed for agent/server certificates.
 
 ## Local Development
 
 Build and run on your machine:
 
 ```bash
-./scripts/generate-certs.sh
 ./scripts/build-core.sh
 ./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
 ./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
 curl -x http://127.0.0.1:8080 http://example.com
 ```
+
+Certificates are generated automatically at runtime by the applications.
 
 ## Docker
 
@@ -54,14 +67,12 @@ Run:
 ```bash
 # Server
 docker run --rm \
-  -v "$(pwd)/certs:/root/certs:ro" \
   -v "$(pwd)/configs/server.docker.yaml:/root/config/server.yaml:ro" \
   -p 8443:8443 \
   fluidity-server
 
 # Agent (separate terminal)
 docker run --rm \
-  -v "$(pwd)/certs:/root/certs:ro" \
   -v "$(pwd)/configs/agent.docker.yaml:/root/config/agent.yaml:ro" \
   -p 8080:8080 \
   fluidity-agent
@@ -69,16 +80,22 @@ docker run --rm \
 
 Test: `curl -x http://127.0.0.1:8080 http://example.com`
 
+Certificates are generated automatically at runtime.
+
 ## AWS Deployment
 
 Deploy server to ECS Fargate + Lambda control plane + agent locally:
 
 ```bash
+# Step 1: Generate CA certificate (one-time setup per AWS account)
+./scripts/generate-ca-certs.sh --save-to-secrets
+
+# Step 2: Deploy everything (server, Lambda, agent)
 ./scripts/deploy-fluidity.sh deploy
 ```
 
 This deploys:
-1. Generates certificates (if not present)
+1. Validates CA certificate exists in AWS Secrets Manager
 2. Builds server/agent binaries
 3. Creates ECR repository and pushes server image
 4. Deploys CloudFormation stacks (Fargate + Lambda)
