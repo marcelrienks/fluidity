@@ -1,7 +1,19 @@
-server_ip: "fluidity-server"
+# Fluidity Agent Configuration - Docker Development
+# Uses docker-compose service names and development settings
+
+# Server discovery endpoints (docker-compose)
+wake_endpoint: ""      # Not used in docker dev - manually set server_ip in Agent
+query_endpoint: ""
+kill_endpoint: ""
+
+# Dynamic certificate generation
+ca_service_url: ""     # Set to CA Lambda endpoint if available
+cert_cache_dir: "./certs"
+
+# Tunnel settings
+server_ip: "fluidity-server"  # Override for docker-compose (normally discovered via Wake)
 server_port: 8443
 local_proxy_port: 8080
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_cert_file: "./certs/ca.crt"
+
+# Logging
 log_level: "debug"

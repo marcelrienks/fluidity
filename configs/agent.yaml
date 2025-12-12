@@ -1,7 +1,18 @@
-server_ip: ""  # Set this to your tunnel server IP
+# Fluidity Agent Configuration - Minimal Design
+# Dynamic certificate generation is the only supported mode
+
+# Server discovery endpoints (required)
+wake_endpoint: ""      # Set to your Wake Lambda Function URL
+query_endpoint: ""     # Set to your Query Lambda Function URL
+kill_endpoint: ""      # Set to your Kill Lambda Function URL
+
+# Dynamic certificate generation (required)
+ca_service_url: ""     # Set to your CA Lambda endpoint
+cert_cache_dir: "./certs"
+
+# Tunnel settings
 server_port: 8443
 local_proxy_port: 8080
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_cert_file: "./certs/ca.crt"
+
+# Logging
 log_level: "info"

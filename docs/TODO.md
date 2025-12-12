@@ -47,19 +47,19 @@ Validation functions exist but need integration into actual connection handlers.
 - [x] Update deploy-server.sh to retrieve CAAPIEndpoint from LAMBDA_STACK_NAME (not separate CA stack)
 - [x] No deploy-fluidity.sh changes needed (didn't reference CA stack)
 
-### 4. Agent Configuration - Minimal Design
+### 4. Agent Configuration - Minimal Design ✅ COMPLETE
 **Rationale**: Configuration should only include required runtime settings
 
-Minimal agent.yaml should contain:
+Minimal agent.yaml now contains:
 ```yaml
-# Server discovery endpoints
-wake_endpoint: "<url>"
-query_endpoint: "<url>"
-kill_endpoint: "<url>"
+# Server discovery endpoints (required)
+wake_endpoint: ""
+query_endpoint: ""
+kill_endpoint: ""
 
-# Certificate generation (runtime)
-ca_service_url: "<url>"
-cert_cache_dir: "/path/to/certs"
+# Dynamic certificate generation (required)
+ca_service_url: ""
+cert_cache_dir: "./certs"
 
 # Tunnel settings
 server_port: 8443
@@ -69,13 +69,18 @@ local_proxy_port: 8080
 log_level: "info"
 ```
 
-- [ ] Remove iam_role_arn (use AWS SDK default credential chain)
-- [ ] Remove aws_profile (use AWS SDK default credential chain)
-- [ ] Remove aws_region (use AWS SDK default region)
-- [ ] Remove cert_file, key_file, ca_cert_file (never used in dynamic mode)
-- [ ] Remove use_dynamic_certs flag (always true)
-- [ ] Remove use_secrets_manager flag (not supported)
-- [ ] Remove server_ip from config (discovered at runtime via Wake/Query)
+- [x] Removed iam_role_arn (uses AWS SDK default credential chain)
+- [x] Removed aws_profile (uses AWS SDK default credential chain)
+- [x] Removed aws_region (uses AWS SDK default region)
+- [x] Removed cert_file, key_file (dynamic mode only)
+- [x] Kept ca_cert_file (needed for TLS root CA validation)
+- [x] Removed use_dynamic_certs flag (always true)
+- [x] Removed use_secrets_manager flag (not supported)
+- [x] Server_ip not required in config (discovered at runtime via Wake/Query)
+- [x] Updated agent.yaml with minimal config template
+- [x] Updated agent.local.yaml for local development
+- [x] Updated agent.docker.yaml for docker-compose
+- [x] Updated agent.windows-docker.yaml for Windows Docker
 
 ### 5. Deployment Script Simplification - Server
 **Rationale**: Simplify to essential deployment steps only
