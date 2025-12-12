@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Fluidity Lambda Control Plane - Wake/Sleep/Kill functions for ECS lifecycle management'
+Description: 'Fluidity Lambda Control Plane - Wake/Sleep/Kill functions + CA Lambda for dynamic certificate generation'
 
 Parameters:
   LambdaS3Bucket:
@@ -107,7 +107,25 @@ Parameters:
     Default: 5
     MinValue: 1
     MaxValue: 100
-  
+
+  CASecretName:
+    Type: String
+    Default: fluidity/ca-certificate
+    Description: Name of the secret in AWS Secrets Manager containing CA certificate and key
+
+  CALambdaTimeout:
+    Type: Number
+    Description: Timeout for CA Lambda in seconds
+    Default: 30
+    MinValue: 10
+    MaxValue: 900
+
+  CALambdaMemory:
+    Type: Number
+    Description: Memory allocated for CA Lambda in MB
+    Default: 256
+    MinValue: 128
+    MaxValue: 3008
 
 
 Resources:
@@ -264,6 +282,35 @@ Resources:
          - Key: Component
            Value: Lambda-Query
 
+  CALambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ca-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: GetCASecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${CASecretName}-*'
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Lambda-CA
+
   # ============================================================
   # Lambda Functions - Placeholder (will be updated with actual code)
   # ============================================================
@@ -380,6 +427,32 @@ Resources:
          - Key: Version
            Value: '1.0.0'
   
+  CALambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: CALambdaLogGroup
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-ca'
+      Description: 'CA Lambda - Certificate Authority for dynamic certificate generation'
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Role: !GetAtt CALambdaExecutionRole.Arn
+      Timeout: !Ref CALambdaTimeout
+      MemorySize: !Ref CALambdaMemory
+      Environment:
+        Variables:
+          CA_SECRET_NAME: !Ref CASecretName
+          LOG_LEVEL: info
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Sub '${LambdaS3KeyPrefix}ca-${BuildVersion}.zip'
+      Tags:
+        - Key: Application
+          Value: Fluidity
+        - Key: Component
+          Value: Lambda-CA
+        - Key: Version
+          Value: '1.0.0'
+
   # ============================================================
   # Lambda Versions and Aliases
   # ============================================================
@@ -439,6 +512,20 @@ Resources:
        FunctionVersion: !GetAtt QueryLambdaVersion.Version
        Name: PROD
        Description: 'Production alias for Query Lambda'
+
+  CALambdaVersion:
+    Type: AWS::Lambda::Version
+    Properties:
+      FunctionName: !Ref CALambdaFunction
+      Description: 'Version 1.0.0 - Initial release'
+
+  CALambdaProdAlias:
+     Type: AWS::Lambda::Alias
+     Properties:
+       FunctionName: !Ref CALambdaFunction
+       FunctionVersion: !GetAtt CALambdaVersion.Version
+       Name: PROD
+       Description: 'Production alias for CA Lambda'
   
   # ============================================================
   # EventBridge Rules for Automated Scheduling
@@ -521,6 +608,13 @@ Resources:
      Properties:
        LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-query'
        RetentionInDays: 7
+
+  CALambdaLogGroup:
+     Type: AWS::Logs::LogGroup
+     DeletionPolicy: Delete
+     Properties:
+       LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-ca'
+       RetentionInDays: 7
   
   # ============================================================
   # IAM Resources for Agent Authentication
@@ -574,6 +668,11 @@ Resources:
               - !GetAtt KillLambdaFunction.Arn
           - Effect: Allow
             Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt CALambdaFunction.Arn
+          - Effect: Allow
+            Action:
               - secretsmanager:GetSecretValue
               - secretsmanager:DescribeSecret
             Resource: !Sub arn:aws:secretsmanager:*:*:secret:fluidity-certificates-*
@@ -608,6 +707,54 @@ Resources:
      Properties:
        TargetFunctionArn: !GetAtt QueryLambdaFunction.Arn
        AuthType: AWS_IAM  # Changed from NONE to AWS_IAM
+
+  # ============================================================
+  # CA Lambda API Gateway Resources
+  # ============================================================
+
+  CALambdaAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${AWS::StackName}-ca-api'
+      Description: 'Fluidity CA Certificate Signing API'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  CSRResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref CALambdaAPI
+      ParentId: !GetAtt CALambdaAPI.RootResourceId
+      PathPart: sign
+
+  CSRMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref CALambdaAPI
+      ResourceId: !Ref CSRResource
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CALambdaFunction.Arn}/invocations'
+
+  CALambdaAPIPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CALambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${CALambdaAPI}/*'
+
+  CAAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - CSRMethod
+    Properties:
+      RestApiId: !Ref CALambdaAPI
+      StageName: prod
 
   # ========================================
   # Monitoring & Observability
@@ -674,6 +821,25 @@ Resources:
       Dimensions:
         - Name: FunctionName
           Value: !Ref KillLambdaFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      TreatMissingData: notBreaching
+
+  CALambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-ca-lambda-errors'
+      AlarmDescription: 'Alert when CA Lambda has execution errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CALambdaFunction
       AlarmActions:
         - !Ref AlarmNotificationTopic
       TreatMissingData: notBreaching
@@ -758,6 +924,12 @@ Outputs:
     Value: !GetAtt QueryLambdaFunctionUrl.FunctionUrl
     Export:
       Name: !Sub '${AWS::StackName}-query-api-endpoint'
+
+  CAAPIEndpoint:
+    Description: CA Lambda API endpoint URL for certificate signing
+    Value: !Sub 'https://${CALambdaAPI}.execute-api.${AWS::Region}.amazonaws.com/prod/sign'
+    Export:
+      Name: !Sub '${AWS::StackName}-ca-api-endpoint'
   
   AgentIAMUserAccessKey:
     Description: Access Key ID for agent user
