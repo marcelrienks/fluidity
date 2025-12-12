@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.21+ (local builds)
+- Go 1.23+ (local builds)
 - Docker Desktop (container builds)
 - OpenSSL (certificate generation)
 - AWS CLI v2 (cloud deployment)
@@ -29,34 +29,47 @@ Before deploying to AWS, generate and store the CA certificate:
 
 This CA certificate is used by the CA Lambda to sign all agent and server certificates at runtime. It should be generated **once per AWS account** before deploying the server.
 
-## Certificates
+## Certificates (Dynamic ARN-Based - In Development)
 
-Certificates are generated automatically at runtime by the server and agent using the CA Lambda:
+Fluidity uses dynamic certificate generation with ARN-based identity:
 
-- **Server**: Generates RSA key at startup, certificate on first agent connection (lazy generation)
-- **Agent**: Generates certificate at startup using server ARN from Wake Lambda
-- **CA Lambda**: Must be deployed first with CA certificate and key in AWS Secrets Manager (`fluidity/ca-certificate`)
+- **CA Certificate**: One-time setup - generate and upload to AWS Secrets Manager before deployment
+- **Server Certificate**: Generated lazily on first agent connection with agent IP in SAN
+- **Agent Certificate**: Generated at startup using server ARN from Wake Lambda
 
-No pre-deployment certificate generation is needed for agent/server certificates.
+**Status**: Dynamic certificate generation is the target architecture but is still under development. 
+See [Architecture](architecture.md) for the planned flow and [TODO.md](../TODO.md) Section 1 for integration status.
 
 ## Local Development
 
 Build and run on your machine:
 
 ```bash
+# Generate static CA certificate for local testing (required for local dev)
+./scripts/generate-certs.sh
+
+# Build binaries
 ./scripts/build-core.sh
+
+# Run in separate terminals
 ./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
 ./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
+
+# Test
 curl -x http://127.0.0.1:8080 http://example.com
 ```
 
-Certificates are generated automatically at runtime by the applications.
+For local development, static CA certificates are used. Production deployment uses dynamic ARN-based certificates.
 
 ## Docker
 
 Build containers locally:
 
 ```bash
+# Generate static CA certificate for local testing
+./scripts/generate-certs.sh
+
+# Build containers
 ./scripts/build-core.sh --linux
 docker build -f deployments/server/Dockerfile -t fluidity-server .
 docker build -f deployments/agent/Dockerfile -t fluidity-agent .
@@ -68,19 +81,19 @@ Run:
 # Server
 docker run --rm \
   -v "$(pwd)/configs/server.docker.yaml:/root/config/server.yaml:ro" \
+  -v "$(pwd)/certs:/root/certs:ro" \
   -p 8443:8443 \
   fluidity-server
 
 # Agent (separate terminal)
 docker run --rm \
   -v "$(pwd)/configs/agent.docker.yaml:/root/config/agent.yaml:ro" \
+  -v "$(pwd)/certs:/root/certs:ro" \
   -p 8080:8080 \
   fluidity-agent
 ```
 
 Test: `curl -x http://127.0.0.1:8080 http://example.com`
-
-Certificates are generated automatically at runtime.
 
 ## AWS Deployment
 
@@ -161,26 +174,38 @@ fluidity -c /path/to/config.yaml        # Use custom config file
 
 **Agent** (`agent.yaml`):
 ```yaml
-server_ip: "FARGATE_PUBLIC_IP"
+# Tunnel server (AWS deployment - auto-discovered)
+server_ip: "FARGATE_PUBLIC_IP"      # Auto-filled by deployment script
 server_port: 8443
 local_proxy_port: 8080
+
+# Dynamic certificate generation (in development)
+ca_service_url: "https://lambda-url/ca"  # CA Lambda endpoint
+cert_cache_dir: "/tmp/fluidity/certs"
+# server_arn, server_public_ip, agent_public_ip auto-populated by Wake Lambda
+
+# Fallback for local testing (static certificates)
 cert_file: "./certs/client.crt"
 key_file: "./certs/client.key"
 ca_cert_file: "./certs/ca.crt"
-wake_endpoint: "https://lambda-url/wake"
-kill_endpoint: "https://lambda-url/kill"
+
+# Logging
+log_level: "info"
 ```
 
 **Server** (`server.yaml`):
 ```yaml
 listen_addr: "0.0.0.0"
 listen_port: 8443
-cert_file: "/root/certs/server.crt"
-key_file: "/root/certs/server.key"
-ca_cert_file: "/root/certs/ca.crt"
+
+# Dynamic certificate generation (in development)
+ca_service_url: "https://lambda-url/ca"  # CA Lambda endpoint
+cert_cache_dir: "/tmp/fluidity/certs"
+ca_cert_file: "./certs/ca.crt"          # CA cert for client validation
+
+# Runtime settings
 max_connections: 100
-emit_metrics: true
-metrics_interval: "60s"
+log_level: "info"
 ```
 
 ## Cleanup

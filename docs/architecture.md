@@ -11,7 +11,7 @@ Cloud: Lambda (Wake/Query/CA) → ECS Fargate (Server)
 
 ## ARN-Based mTLS Flow
 
-```
+**Target Architecture** (Currently Under Development):
 1. AGENT STARTUP
    Agent ──> Wake Lambda ──> Returns: server_arn, server_ip, agent_ip
          └──> Generate cert: CN=server_arn, SAN=[agent_ip]
@@ -35,7 +35,7 @@ Cloud: Lambda (Wake/Query/CA) → ECS Fargate (Server)
    New agent: Regenerate cert + updated SAN
 ```
 
-## Components
+**Current Status**: Core functions exist but integration is incomplete. See [TODO.md](../TODO.md) Section 1 for integration tasks.
 
 ### Agent (Local)
 - HTTP proxy on port 8080

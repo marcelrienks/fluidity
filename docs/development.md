@@ -5,18 +5,27 @@
 Prerequisites:
 ```bash
 ./scripts/setup-prereq-<platform>.sh  # ubuntu, arch (Linux), or mac
-# Installs: Go 1.21+, Make, Docker, OpenSSL, Node.js, npm
+# Installs: Go 1.23+, Make, Docker, OpenSSL, Node.js, npm
 ```
 
 ## Quick Start
 
 ```bash
+# Generate static CA certificate for local development
 ./scripts/generate-certs.sh
+
+# Build binaries
 ./scripts/build-core.sh
+
+# Run in separate terminals
 ./build/fluidity-server -config configs/server.local.yaml  # Terminal 1
 ./build/fluidity-agent -config configs/agent.local.yaml    # Terminal 2
+
+# Test proxy
 curl -x http://127.0.0.1:8080 http://example.com
 ```
+
+**Note**: Local development uses static certificates. Production deployment will use dynamic ARN-based certificates from CA Lambda (currently under development).
 
 ## Running the Agent
 
@@ -73,7 +82,7 @@ Binaries: `build/fluidity-server`, `build/fluidity-agent`
 
 ## Configuration
 
-**Agent** (`configs/agent.local.yaml`):
+**Agent** (`configs/agent.local.yaml` - local development):
 ```yaml
 server_ip: "127.0.0.1"
 server_port: 8443
@@ -84,16 +93,18 @@ ca_cert_file: "./certs/ca.crt"
 log_level: "debug"
 ```
 
-**Server** (`configs/server.local.yaml`):
+**Server** (`configs/server.local.yaml` - local development):
 ```yaml
 listen_addr: "127.0.0.1"
 listen_port: 8443
-cert_file: "./certs/server.crt"
-key_file: "./certs/server.key"
 ca_cert_file: "./certs/ca.crt"
 max_connections: 100
+ca_service_url: "http://localhost:3000/sign"  # Local CA Lambda mock
+cert_cache_dir: "/tmp/fluidity-certs"
 log_level: "debug"
 ```
+
+**Note**: Local configs use static file-based certificates. Production will use dynamic ARN-based generation via CA Lambda.
 
 ## Testing
 
