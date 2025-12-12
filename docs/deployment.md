@@ -153,10 +153,20 @@ aws ecs describe-tasks \
   --output text
 ```
 
-**4. Configure Agent**
-Update `configs/agent.yaml` with server IP, then deploy:
+**4. Deploy Agent (Automated)**
+The `deploy-fluidity.sh` script automatically:
+- Builds the agent binary
+- Generates minimal agent configuration
+- Installs to system (user or root)
+- Passes Lambda endpoints from server deployment
+
+For manual agent deployment:
 ```bash
-./build/fluidity-agent -config configs/agent.yaml
+./scripts/deploy-agent.sh deploy \
+  --wake-endpoint "https://..." \
+  --query-endpoint "https://..." \
+  --kill-endpoint "https://..." \
+  --ca-service-url "https://..."
 ```
 
 ## Agent Usage
@@ -172,22 +182,20 @@ fluidity -c /path/to/config.yaml        # Use custom config file
 
 ## Configuration
 
-**Agent** (`agent.yaml`):
+**Agent** (`agent.yaml` - Minimal Design):
 ```yaml
-# Tunnel server (AWS deployment - auto-discovered)
-server_ip: "FARGATE_PUBLIC_IP"      # Auto-filled by deployment script
+# Server discovery endpoints (required - auto-filled by deploy-fluidity.sh)
+wake_endpoint: "https://lambda-url/wake"
+query_endpoint: "https://lambda-url/query"
+kill_endpoint: "https://lambda-url/kill"
+
+# Dynamic certificate generation (required)
+ca_service_url: "https://lambda-url/ca"     # CA Lambda endpoint
+cert_cache_dir: "/home/user/apps/fluidity/certs"
+
+# Tunnel settings
 server_port: 8443
 local_proxy_port: 8080
-
-# Dynamic certificate generation (in development)
-ca_service_url: "https://lambda-url/ca"  # CA Lambda endpoint
-cert_cache_dir: "/tmp/fluidity/certs"
-# server_arn, server_public_ip, agent_public_ip auto-populated by Wake Lambda
-
-# Fallback for local testing (static certificates)
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_cert_file: "./certs/ca.crt"
 
 # Logging
 log_level: "info"
@@ -198,10 +206,10 @@ log_level: "info"
 listen_addr: "0.0.0.0"
 listen_port: 8443
 
-# Dynamic certificate generation (in development)
-ca_service_url: "https://lambda-url/ca"  # CA Lambda endpoint
+# Dynamic certificate generation
+ca_service_url: "https://lambda-url/ca"     # CA Lambda endpoint
 cert_cache_dir: "/tmp/fluidity/certs"
-ca_cert_file: "./certs/ca.crt"          # CA cert for client validation
+ca_cert_file: "./certs/ca.crt"              # CA cert for client validation
 
 # Runtime settings
 max_connections: 100

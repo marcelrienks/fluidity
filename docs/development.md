@@ -84,12 +84,21 @@ Binaries: `build/fluidity-server`, `build/fluidity-agent`
 
 **Agent** (`configs/agent.local.yaml` - local development):
 ```yaml
-server_ip: "127.0.0.1"
+# Server discovery endpoints (local dev - leave empty, use server_ip override)
+wake_endpoint: ""
+query_endpoint: ""
+kill_endpoint: ""
+
+# Dynamic certificate generation
+ca_service_url: ""
+cert_cache_dir: "./certs"
+
+# Tunnel settings
+server_ip: "127.0.0.1"       # Override for local development
 server_port: 8443
 local_proxy_port: 8080
-cert_file: "./certs/client.crt"
-key_file: "./certs/client.key"
-ca_cert_file: "./certs/ca.crt"
+
+# Logging
 log_level: "debug"
 ```
 
