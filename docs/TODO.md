@@ -1,5 +1,7 @@
 # Outstanding Work - Fluidity ARN-Based Certificates
-## Outstanding Tasks
+## Outstanding Tasks - Optimized Execution Order
+
+## Phase 1: Core Implementation
 
 ### 1. Runtime Integration Verification
 
@@ -7,45 +9,19 @@ Validation functions exist but need integration into actual connection handlers.
 
 **Agent Connection** (`internal/core/agent/`):
 
-- [ ] Call `CreateARNValidatingClientConfig()` when establishing TLS connection
+- [?] Call `CreateARNValidatingClientConfig()` when establishing TLS connection
   - Pass: serverARN (from cert manager), targetIP (connection target)
-- [ ] Verify TLS handshake uses validating config with `VerifyPeerCertificate` callback
+- [?] Verify TLS handshake uses validating config with `VerifyPeerCertificate` callback
 
 **Server Connection** (`internal/core/server/`):
 
-- [ ] Call `CreateARNValidatingServerConfig()` or add manual validation
+- [?] Call `CreateARNValidatingServerConfig()` or add manual validation
   - Pass: serverARN (from cert manager)
 - [ ] Extract source IP from incoming connection (for lazy cert generation)
   - Used as agentIP parameter in `EnsureCertificateForConnection()`
 - [ ] Validate client IP after TLS handshake with `ValidateClientIPOnConnection()`
 
-### 2. Integration Tests
-
-- [ ] Wake Lambda extracts agent IP from HTTP source correctly
-- [ ] Wake Lambda returns: serverARN, serverPublicIP, agentPublicIP
-- [ ] Agent receives Wake response and generates cert with CN=serverARN, SAN=[agentIP]
-- [ ] Server discovers ARN/IP at startup
-- [ ] Server generates cert on first connection with both server and agent IPs
-- [ ] Agent validates server cert: CN == serverARN ✓
-- [ ] Agent validates server cert: connection IP in SAN ✓
-- [ ] Server validates agent cert: CN == serverARN ✓
-- [ ] Server validates agent cert: source IP in SAN ✓
-- [ ] Second agent connects: server cert SAN updated with new IP
-- [ ] Same agent reconnects: uses cached cert (no regeneration)
-- [ ] Multi-agent scenario: server cert accumulates IPs over time
-
-### 3. End-to-End Tests
-
-- [ ] Full flow: Wake Lambda → Server starts → Agent connects → Mutual validation ✓
-- [ ] First connection: ~500ms latency (cert generation)
-- [ ] Subsequent connections: fast (cached cert)
-- [ ] Error handling: ARN discovery failure (graceful degradation)
-- [ ] Error handling: IP discovery failure (graceful degradation)
-- [ ] Error handling: Wake Lambda unreachable (retry logic)
-- [ ] Certificate renewal: 30 days before expiration
-- [ ] All unit tests passing: `go test ./...`
-
-### 4. Dynamic Certificate Generation - Make It Default/Only Mode
+### 2. Dynamic Certificate Generation - Make It Default/Only Mode
 **Rationale**: Remove configuration complexity by making dynamic cert generation the only supported mode
 
 - [ ] Remove `use_secrets_manager` configuration option from agent config
@@ -57,7 +33,7 @@ Validation functions exist but need integration into actual connection handlers.
 - [ ] Remove CertificatesSecretArn from Fargate CloudFormation template
 - [ ] Remove Secrets section from Fargate task container definition
 
-### 5. CloudFormation - Integrate CA Lambda Into Main Lambda Stack
+### 3. CloudFormation - Integrate CA Lambda Into Main Lambda Stack
 **Rationale**: Simplify deployment by making CA Lambda part of the control plane stack, not separate
 
 - [ ] Move CA Lambda function into lambda.yaml CloudFormation template
@@ -71,39 +47,7 @@ Validation functions exist but need integration into actual connection handlers.
 - [ ] Update deploy-server.sh to retrieve CAAPIEndpoint from LAMBDA_STACK_NAME (not separate CA stack)
 - [ ] Update deploy-fluidity.sh to get CA_SERVICE_URL from lambda_params exports instead of CA stack
 
-### 6. Deployment Script Simplification - Agent
-**Rationale**: Remove options that don't align with runtime cert generation architecture
-
-- [ ] Remove --cert-path, --key-path, --ca-cert-path options from deploy-agent.sh
-- [ ] Remove --iam-role-arn, --access-key-id, --secret-access-key options from deploy-agent.sh
-- [ ] Keep only required options:
-  - [ ] --wake-endpoint (required)
-  - [ ] --query-endpoint (required)
-  - [ ] --kill-endpoint (required)
-  - [ ] --ca-service-url (auto-filled from deployment)
-  - [ ] --server-port (optional, default 8443)
-  - [ ] --local-proxy-port (optional, default 8080)
-  - [ ] --log-level (optional, default info)
-- [ ] Remove aws_profile, iam_role_arn from agent.yaml generation
-- [ ] Remove IAM credential setup from deploy-agent.sh
-
-### 7. Deployment Script Simplification - Server
-**Rationale**: Simplify to essential deployment steps only
-
-- [ ] Remove certificate handling code from deploy-server.sh
-- [ ] Remove pre-deployment cert parameters and validation
-- [ ] Remove unused configuration collection code
-- [ ] Simplify deployment to core steps: Build Lambdas → Upload S3 → Deploy Fargate → Deploy Lambda (with CA)
-
-### 8. Deployment Script Simplification - Fluidity Master
-**Rationale**: Simplify main deployment flow
-
-- [ ] Remove certificate path collection from deploy-fluidity.sh
-- [ ] Remove IAM credential handling from deploy-fluidity.sh
-- [ ] Remove cert-path, key-path, ca-cert-path argument passing
-- [ ] Simplify to: Deploy server → Deploy agent (with auto-filled ca_service_url)
-
-### 9. Agent Configuration - Minimal Design
+### 4. Agent Configuration - Minimal Design
 **Rationale**: Configuration should only include required runtime settings
 
 Minimal agent.yaml should contain:
@@ -133,7 +77,77 @@ log_level: "info"
 - [ ] Remove use_secrets_manager flag (not supported)
 - [ ] Remove server_ip from config (discovered at runtime via Wake/Query)
 
-### 10. Integration Tests
+### 5. Deployment Script Simplification - Server
+**Rationale**: Simplify to essential deployment steps only
+
+- [ ] Remove certificate handling code from deploy-server.sh
+- [ ] Remove pre-deployment cert parameters and validation
+- [ ] Remove unused configuration collection code
+- [ ] Simplify deployment to core steps: Build Lambdas → Upload S3 → Deploy Fargate → Deploy Lambda (with CA)
+
+### 6. Deployment Script Simplification - Agent
+**Rationale**: Remove options that don't align with runtime cert generation architecture
+
+- [ ] Remove --cert-path, --key-path, --ca-cert-path options from deploy-agent.sh
+- [ ] Remove --iam-role-arn, --access-key-id, --secret-access-key options from deploy-agent.sh
+- [ ] Keep only required options:
+  - [ ] --wake-endpoint (required)
+  - [ ] --query-endpoint (required)
+  - [ ] --kill-endpoint (required)
+  - [ ] --ca-service-url (auto-filled from deployment)
+  - [ ] --server-port (optional, default 8443)
+  - [ ] --local-proxy-port (optional, default 8080)
+  - [ ] --log-level (optional, default info)
+- [ ] Remove aws_profile, iam_role_arn from agent.yaml generation
+- [ ] Remove IAM credential setup from deploy-agent.sh
+
+### 7. Deployment Script Simplification - Fluidity Master
+**Rationale**: Simplify main deployment flow
+
+- [ ] Remove certificate path collection from deploy-fluidity.sh
+- [ ] Remove IAM credential handling from deploy-fluidity.sh
+- [ ] Remove cert-path, key-path, ca-cert-path argument passing
+- [ ] Simplify to: Deploy server → Deploy agent (with auto-filled ca_service_url)
+
+## Phase 2: Code Quality & Cleanup
+
+### 8. Unit Test Coverage
+**Status**: Not Started
+
+- [ ] ARN validation function tests
+- [ ] IP validation function tests
+- [ ] Certificate generation function tests
+- [ ] Certificate caching function tests
+- [ ] Wake Lambda response parsing tests
+- [ ] Query Lambda response parsing tests
+- [ ] Configuration loading tests (minimal config)
+- [ ] Error handling function tests
+
+### 9. Code Review Checklist
+**Status**: Not Started
+
+- [ ] All unused configuration options removed
+- [ ] No certificate file fallback code remaining
+- [ ] No Secrets Manager code paths remaining
+- [ ] Dynamic cert is only path taken
+- [ ] All validation functions properly called
+- [ ] Error messages clear and actionable
+- [ ] No commented-out legacy code
+- [ ] CA Lambda properly integrated into Lambda stack
+
+### 10. Build & Compilation
+**Status**: Not Started
+
+- [ ] No compilation warnings
+- [ ] No linting errors: `golangci-lint run ./...`
+- [ ] All imports used
+- [ ] No dead code detected
+- [ ] go fmt passes
+- [ ] go vet passes
+
+## Phase 3: Integration Testing
+
+### 11. Integration Tests
 **Status**: Not Started
 
 - [ ] Wake Lambda IP extraction from HTTP source
@@ -152,23 +166,7 @@ log_level: "info"
 - [ ] Certificate caching: Same agent doesn't regenerate
 - [ ] Certificate renewal: Expired certs are regenerated
 
-### 11. End-to-End Testing
-**Status**: Not Started
-
-- [ ] Full deployment flow: deploy-fluidity.sh deploy (no flags)
-- [ ] Agent starts without -c flag (auto-discovers config)
-- [ ] Agent calls Wake Lambda successfully
-- [ ] Agent certificate generation from CA Lambda
-- [ ] Server starts and discovers ARN
-- [ ] Server accepts first agent connection with dynamic cert
-- [ ] First connection latency approximately 500ms
-- [ ] Second connection reuses cached cert
-- [ ] Second connection latency <10ms
-- [ ] Multiple agents connect (SAN accumulation)
-- [ ] Network traffic flows through tunnel
-- [ ] HTTP requests properly proxied
-
-### 12. Error Scenarios
+### 12. Error Scenarios Testing
 **Status**: Not Started
 
 - [ ] Missing ca_service_url in agent config → clear error message
@@ -185,7 +183,23 @@ log_level: "info"
 - [ ] Server IP discovery timeout → retry with backoff
 - [ ] Agent IP discovery timeout → retry with backoff
 
-### 13. Performance Benchmarks
+### 13. End-to-End Testing
+**Status**: Not Started
+
+- [ ] Full deployment flow: deploy-fluidity.sh deploy (no flags)
+- [ ] Agent starts without -c flag (auto-discovers config)
+- [ ] Agent calls Wake Lambda successfully
+- [ ] Agent certificate generation from CA Lambda
+- [ ] Server starts and discovers ARN
+- [ ] Server accepts first agent connection with dynamic cert
+- [ ] First connection latency approximately 500ms
+- [ ] Second connection reuses cached cert
+- [ ] Second connection latency <10ms
+- [ ] Multiple agents connect (SAN accumulation)
+- [ ] Network traffic flows through tunnel
+- [ ] HTTP requests properly proxied
+
+### 14. Performance Benchmarks
 **Status**: Not Started
 
 - [ ] First connection certificate generation: target ~500ms
@@ -194,40 +208,6 @@ log_level: "info"
 - [ ] CA Lambda response time: measure and document
 - [ ] Certificate validation time: measure and document
 - [ ] Multi-agent SAN update time: measure with 10+ agents
-
-### 14. Unit Test Coverage
-**Status**: Not Started
-
-- [ ] ARN validation function tests
-- [ ] IP validation function tests
-- [ ] Certificate generation function tests
-- [ ] Certificate caching function tests
-- [ ] Wake Lambda response parsing tests
-- [ ] Query Lambda response parsing tests
-- [ ] Configuration loading tests (minimal config)
-- [ ] Error handling function tests
-
-### 15. Code Review Checklist
-**Status**: Not Started
-
-- [ ] All unused configuration options removed
-- [ ] No certificate file fallback code remaining
-- [ ] No Secrets Manager code paths remaining
-- [ ] Dynamic cert is only path taken
-- [ ] All validation functions properly called
-- [ ] Error messages clear and actionable
-- [ ] No commented-out legacy code
-- [ ] CA Lambda properly integrated into Lambda stack
-
-### 16. Build & Compilation
-**Status**: Not Started
-
-- [ ] No compilation warnings
-- [ ] No linting errors: `golangci-lint run ./...`
-- [ ] All imports used
-- [ ] No dead code detected
-- [ ] go fmt passes
-- [ ] go vet passes
 
 ## Definition of Done
 
@@ -239,6 +219,13 @@ When all items complete:
 - ✅ No pre-deployed certificates (except CA certificate)
 - ✅ No Secrets Manager certificate support
 - ✅ No legacy multi-mode configuration
+
+**Implementation**
+- ✅ ARN validation integrated into agent connection handlers
+- ✅ ARN validation integrated into server connection handlers
+- ✅ IP validation on all connections
+- ✅ Configuration simplified to minimal required fields
+- ✅ Deployment scripts simplified and streamlined
 
 **Deployment**
 - ✅ Single deployment command: ./deploy-fluidity.sh deploy
@@ -252,9 +239,11 @@ When all items complete:
 - ✅ No unused configuration options
 - ✅ Clear documentation for each field
 
-**Testing**
+**Quality**
+- ✅ All unit tests passing
 - ✅ All integration tests passing
 - ✅ All E2E tests passing
 - ✅ All error scenarios tested
 - ✅ Performance benchmarks documented
-
+- ✅ No linting or compilation errors
+- ✅ Code review checklist complete
