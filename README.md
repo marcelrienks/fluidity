@@ -2,9 +2,8 @@
 
 **Secure HTTP/HTTPS/WebSocket tunneling for restrictive firewall environments**
 
-![Static Badge](https://img.shields.io/badge/logic-Complete-blue?style=plastic)
-![Release Badge](https://img.shields.io/badge/release-Incomplete-red?style=plastic)
-![Features Badge](https://img.shields.io/badge/features-Pending-yellow?style=plastic)
+[![Status Badge](https://img.shields.io/badge/status-Testing-blue.svg)](https://github.com/marcelrienks/fluidity)
+![License Badge](https://img.shields.io/badge/license-MIT-blue)
 
 Fluidity is a secure tunneling solution using mTLS authentication to enable applications behind restrictive firewalls to access external services. Agent runs locally, server runs on-demand in AWS.
 
